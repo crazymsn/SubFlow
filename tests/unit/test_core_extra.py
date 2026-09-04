@@ -47,6 +47,8 @@ def test_burn_subtitles_builds_filter(tmp_path):
     args = m.call_args[0][0]
     assert "subtitles=" in args[args.index("-vf") + 1]
     assert "-c:a" in args and "copy" in args
+    assert "libx264" in args
+    assert "veryfast" in args
 
 
 def test_glossary_load_from_yaml(tmp_path):

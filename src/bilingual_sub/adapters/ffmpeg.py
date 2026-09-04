@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from bilingual_sub.adapters.procwin import hidden_run_kwargs
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +54,14 @@ def find_ffprobe() -> str:
 
 def run_cmd(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     logger.debug("run: %s", " ".join(args))
-    proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    proc = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        **hidden_run_kwargs(),
+    )
     if check and proc.returncode != 0:
         raise FfmpegError(proc.stderr.strip() or proc.stdout.strip() or "ffmpeg failed")
     return proc
@@ -65,8 +74,11 @@ def ffmpeg_version() -> str:
 
 
 def has_nvenc() -> bool:
-    proc = run_cmd([find_ffmpeg(), "-hide_banner", "-encoders"])
-    return "h264_nvenc" in proc.stdout
+    try:
+        proc = run_cmd([find_ffmpeg(), "-hide_banner", "-encoders"])
+    except Exception:
+        return False
+    return "h264_nvenc" in (proc.stdout or "")
 
 
 def probe_video(path: Path) -> dict[str, int | float | bool]:

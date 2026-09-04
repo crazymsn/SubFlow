@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import shutil
 import tempfile
 import time
@@ -79,8 +81,43 @@ def _save_state(work_dir: Path, stage: str, extra: dict | None = None) -> None:
     )
 
 
+def video_fingerprint(path: Path) -> dict:
+    resolved = path.resolve()
+    st = resolved.stat()
+    return {
+        "path": str(resolved),
+        "size": int(st.st_size),
+        "mtime_ns": int(st.st_mtime_ns),
+    }
+
+
+def artifact_key(config: JobConfig) -> str:
+    fp = video_fingerprint(config.input_video)
+    preview = config.preview_minutes or 0
+    raw = (
+        f"{fp['path']}|{fp['size']}|{fp['mtime_ns']}|"
+        f"{config.whisper_model}|{config.translate_model}|{preview}"
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _same_fingerprint(saved: dict | None, config: JobConfig) -> bool:
+    if not saved:
+        return False
+    cur = video_fingerprint(config.input_video)
+    return (
+        os.path.normcase(str(saved.get("path") or "")) == os.path.normcase(cur["path"])
+        and int(saved.get("size") or -1) == cur["size"]
+        and int(saved.get("mtime_ns") or -1) == cur["mtime_ns"]
+    )
+
+
+def _auto_work_dir(config: JobConfig) -> bool:
+    return str(config.work_dir) in ("", "auto")
+
+
 def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
-    explicit = str(config.work_dir) not in ("", "auto")
+    explicit = not _auto_work_dir(config)
     if explicit:
         wd = config.work_dir
     elif config.resume_from:
@@ -91,11 +128,185 @@ def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
             )
         wd = last
     elif settings.video.work_dir == "auto":
-        wd = Path(tempfile.gettempdir()) / "bilingual-sub" / uuid.uuid4().hex[:12]
+        wd = Path(tempfile.gettempdir()) / "bilingual-sub" / artifact_key(config)
     else:
         wd = Path(settings.video.work_dir)
     wd.mkdir(parents=True, exist_ok=True)
     return wd
+
+
+def _load_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _can_reexport(config: JobConfig, work: Path) -> bool:
+    if config.resume_from or not _auto_work_dir(config):
+        return False
+    cues_path = work / "cues.bilingual.json"
+    if not cues_path.is_file():
+        return False
+    state = _load_json(work / "job_state.json")
+    if state.get("stage") not in {"render", "burn", "done"}:
+        return False
+    report = _load_json(work / "report.json")
+    if not _same_fingerprint(report.get("input_fingerprint"), config):
+        return False
+    if str(report.get("whisper_model") or config.whisper_model) != config.whisper_model:
+        return False
+    if str(report.get("translate_model") or config.translate_model) != config.translate_model:
+        return False
+    return True
+
+
+def _export_subs(
+    config: JobConfig,
+    work: Path,
+    cues: list[Cue],
+    play_res: tuple[int, int],
+) -> Path:
+    preset = load_style_preset(config.style_preset)
+    ass_path = work / "subs.ass"
+    srt_out = config.output_srt
+    srt_out.parent.mkdir(parents=True, exist_ok=True)
+    ass_out = srt_out.with_suffix(".ass") if srt_out.suffix else Path(str(srt_out) + ".ass")
+    write_subtitles(cues, preset, ass_path, srt_out, play_res=play_res)
+    if ass_out != ass_path:
+        shutil.copy2(ass_path, ass_out)
+    return ass_out
+
+
+def _copy_or_burn(
+    config: JobConfig,
+    work: Path,
+    settings: AppSettings,
+    report: dict,
+) -> Path | None:
+    if not config.burn:
+        return None
+    dest = config.output_video or config.output_srt.with_suffix(".mp4")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    prev = Path(str(report["output_mp4"])) if report.get("output_mp4") else None
+    style_same = str(report.get("style_preset") or config.style_preset) == config.style_preset
+    if prev and prev.is_file() and style_same:
+        if prev.resolve() != dest.resolve():
+            shutil.copy2(prev, dest)
+        return dest
+    ass_path = work / "subs.ass"
+    source = work / "source.mp4"
+    if not source.is_file():
+        source = config.input_video
+    if not ass_path.is_file():
+        raise FileNotFoundError("previous subtitles missing; cannot export without re-running")
+    burn_subtitles(
+        source,
+        ass_path,
+        dest,
+        encoder=settings.burn.encoder,
+        cq=settings.burn.cq,
+        preset=settings.burn.preset,
+    )
+    return dest
+
+
+def _result_from_work(
+    *,
+    job_id: str,
+    config: JobConfig,
+    work: Path,
+    output_mp4: Path | None,
+    ass_out: Path,
+    cues: list[Cue],
+    report: dict,
+    stages: dict[str, float],
+    elapsed: float,
+    reused: bool,
+) -> JobResult:
+    missing = list(report.get("missing_en_samples") or [])
+    payload = {
+        "job_id": job_id,
+        "input": str(config.input_video),
+        "duration_sec": report.get("duration_sec") or 0,
+        "cue_count": len(cues),
+        "missing_en_count": int(report.get("missing_en_count") or len(missing)),
+        "missing_en_samples": missing[:20],
+        "translate_cache_hits": int(report.get("translate_cache_hits") or 0),
+        "translate_api_calls": int(report.get("translate_api_calls") or 0),
+        "elapsed_sec": round(elapsed, 2),
+        "stages": stages,
+        "work_dir": str(work),
+        "play_res": report.get("play_res") or [2560, 1600],
+        "output_mp4": str(output_mp4) if output_mp4 else None,
+        "output_srt": str(config.output_srt),
+        "input_fingerprint": video_fingerprint(config.input_video),
+        "whisper_model": config.whisper_model,
+        "translate_model": config.translate_model,
+        "style_preset": config.style_preset,
+        "reused": reused,
+    }
+    report_path = work / "report.json"
+    report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _save_state(work, "done", {"job_id": job_id})
+    save_last_job(work, job_id)
+    return JobResult(
+        job_id=job_id,
+        output_mp4=output_mp4,
+        output_srt=config.output_srt,
+        output_ass=ass_out,
+        cue_count=len(cues),
+        missing_en=missing,
+        duration_sec=float(payload["duration_sec"] or 0),
+        report_path=report_path,
+        elapsed_sec=elapsed,
+        translate_cache_hits=int(payload["translate_cache_hits"]),
+        translate_api_calls=int(payload["translate_api_calls"]),
+        stages=stages,
+        reused=reused,
+    )
+
+
+def _reexport_if_possible(
+    config: JobConfig,
+    settings: AppSettings,
+    work: Path,
+    on_progress: ProgressCb,
+    t0: float,
+) -> JobResult | None:
+    if not _can_reexport(config, work):
+        return None
+    report = _load_json(work / "report.json")
+    state = _load_json(work / "job_state.json")
+    job_id = str(state.get("job_id") or uuid.uuid4().hex[:12])
+    cues = load_cues_json(work / "cues.bilingual.json")
+    play = report.get("play_res") or [2560, 1600]
+    play_res = (int(play[0]), int(play[1]))
+
+    def prog(stage: str, pct: float) -> None:
+        if on_progress:
+            on_progress(stage, pct)
+
+    logger.info("reexport job %s work_dir=%s", job_id, work)
+    prog("export", 0.85)
+    ts = time.time()
+    ass_out = _export_subs(config, work, cues, play_res)
+    output_mp4 = _copy_or_burn(config, work, settings, report)
+    stages = {"export_sec": time.time() - ts}
+    prog("done", 1.0)
+    return _result_from_work(
+        job_id=job_id,
+        config=config,
+        work=work,
+        output_mp4=output_mp4,
+        ass_out=ass_out,
+        cues=cues,
+        report=report,
+        stages=stages,
+        elapsed=time.time() - t0,
+        reused=True,
+    )
 
 
 def run(
@@ -110,6 +321,9 @@ def run(
     stages: dict[str, float] = {}
 
     work = _work_dir(config, settings)
+    reused = _reexport_if_possible(config, settings, work, on_progress, t0)
+    if reused:
+        return reused
     state_path = work / "job_state.json"
     job_id = uuid.uuid4().hex[:12]
     if state_path.is_file():
@@ -190,6 +404,7 @@ def run(
             language=settings.asr.language,
             device=config.device or settings.asr.device,  # type: ignore[arg-type]
             out_json=transcript_path,
+            on_progress=prog,
         )
         stages["transcribe_sec"] = time.time() - ts
         _save_state(work, "transcribe", {"job_id": job_id})
@@ -276,6 +491,13 @@ def run(
         "stages": stages,
         "work_dir": str(work),
         "play_res": list(play_res),
+        "output_mp4": str(output_mp4) if output_mp4 else None,
+        "output_srt": str(srt_out),
+        "input_fingerprint": video_fingerprint(config.input_video),
+        "whisper_model": config.whisper_model,
+        "translate_model": config.translate_model,
+        "style_preset": config.style_preset,
+        "reused": False,
     }
     report_path = work / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -295,4 +517,5 @@ def run(
         translate_cache_hits=cache_hits,
         translate_api_calls=api_calls,
         stages=stages,
+        reused=False,
     )

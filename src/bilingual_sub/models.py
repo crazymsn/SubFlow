@@ -63,6 +63,7 @@ class JobResult:
     translate_cache_hits: int = 0
     translate_api_calls: int = 0
     stages: dict[str, float] = field(default_factory=dict)
+    reused: bool = False
 
 
 STAGES = (

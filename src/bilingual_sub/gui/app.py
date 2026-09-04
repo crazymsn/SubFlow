@@ -40,7 +40,9 @@ from bilingual_sub.brand import (
 from bilingual_sub.config import save_user_overrides
 from bilingual_sub.gui.assets import HEADER_MARK_PX, load_app_icon, load_pixmap
 from bilingual_sub.gui.model_choice import merge_model_list, preferred_model
-from bilingual_sub.gui.output_path import default_output_mp4, next_output_path, resolve_output_mp4
+from bilingual_sub.adapters.whisper_backend import default_whisper_model, has_nvidia_gpu
+from bilingual_sub.gui.output_path import next_output_path, relocate_output, resolve_output_mp4
+from bilingual_sub.gui.progress import should_log_stage, stage_text
 from bilingual_sub.gui.styles import app_qss
 from bilingual_sub.models import JobConfig, JobResult
 from bilingual_sub.secrets.store import get_api_key, set_api_key
@@ -144,6 +146,7 @@ class MainWindow(QMainWindow):
         self._worker: PipelineWorker | None = None
         self._models_worker: ModelsWorker | None = None
         self._last_output: Path | None = None
+        self._last_log_stage: str | None = None
         self._video: Path | None = None
 
         root = QWidget()
@@ -244,7 +247,14 @@ class MainWindow(QMainWindow):
         rec_lab.setObjectName("tagline")
         self.whisper_combo = QComboBox()
         self.whisper_combo.addItems(["tiny", "base", "small", "medium", "large"])
-        self.whisper_combo.setCurrentText("medium")
+        whisper_default = default_whisper_model()
+        self.whisper_combo.setCurrentText(whisper_default)
+        if has_nvidia_gpu():
+            self.whisper_combo.setToolTip("有独显时默认 medium。large 更准，但更慢、更吃显存。")
+        else:
+            self.whisper_combo.setToolTip(
+                "未检测到独显，默认 small 并走 CPU。medium/large 仍可选，但会明显更慢。"
+            )
         self.burn_check = QCheckBox("烧录到视频")
         self.burn_check.setChecked(True)
         rec_row.addWidget(rec_lab)
@@ -259,7 +269,7 @@ class MainWindow(QMainWindow):
         self.out_edit.setEnabled(True)
         self.out_edit.setClearButtonEnabled(True)
         self.out_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.out_edit.setPlaceholderText("可输入或点浏览选择保存位置")
+        self.out_edit.setPlaceholderText("可输入完整路径，或点浏览只换导出文件夹")
         self.browse_out_btn = QPushButton("浏览")
         self.browse_out_btn.setObjectName("ghost")
         self.browse_out_btn.setMinimumWidth(108)
@@ -316,16 +326,17 @@ class MainWindow(QMainWindow):
 
     def _browse_output(self) -> None:
         start = self.out_edit.text().strip()
-        if not start and self._video:
-            start = str(default_output_mp4(self._video))
-        elif not start:
+        if start:
+            start_path = Path(start).expanduser()
+            start = str(start_path if start_path.is_dir() else start_path.parent)
+        elif self._video:
+            start = str(self._video.parent)
+        else:
             start = str(Path.home())
-        path, _ = QFileDialog.getSaveFileName(self, "选择输出视频", start, "Video (*.mp4)")
-        if not path:
+        folder = QFileDialog.getExistingDirectory(self, "选择导出位置", start)
+        if not folder:
             return
-        chosen = Path(path)
-        if chosen.suffix.lower() != ".mp4":
-            chosen = chosen.with_suffix(".mp4")
+        chosen = relocate_output(self.out_edit.text(), Path(folder), self._video)
         self.out_edit.setText(str(chosen))
         self.out_edit.setFocus()
 
@@ -414,6 +425,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, PRODUCT_ZH, f"无法创建输出目录：{exc}")
             return
         self.out_edit.setText(str(out_mp4))
+        self._last_log_stage = None
         cfg = JobConfig(
             input_video=self._video,
             output_video=out_mp4 if self.burn_check.isChecked() else None,
@@ -434,21 +446,27 @@ class MainWindow(QMainWindow):
         self._worker.start()
 
     def _on_progress(self, stage: str, pct: float) -> None:
+        label = stage_text(stage)
         self.progress.setValue(int(pct * 100))
-        self.stage_label.setText(f"{stage}  ·  {pct * 100:.0f}%")
-        self.log.appendPlainText(f"{stage} ({pct * 100:.0f}%)")
+        self.stage_label.setText(f"{label}  ·  {pct * 100:.0f}%")
+        if should_log_stage(stage, self._last_log_stage):
+            self.log.appendPlainText(label)
+            self._last_log_stage = stage
 
     def _on_done(self, result: object) -> None:
         assert isinstance(result, JobResult)
         self.run_btn.setEnabled(True)
+        self.progress.setValue(100)
         self.stage_label.setText(f"完成  ·  {result.cue_count} 条字幕")
         folder = result.output_mp4 or result.output_srt
         self._last_output = folder
         self.open_btn.setEnabled(True)
-        extra = ""
+        if result.reused:
+            self.log.appendPlainText(f"已按新路径导出，{result.cue_count} 条字幕")
+        else:
+            self.log.appendPlainText(f"完成，{result.cue_count} 条字幕")
         if result.missing_en:
-            extra = f"\n英文缺失 {len(result.missing_en)} 条，见 report.json"
-        QMessageBox.information(self, PRODUCT_ZH, f"已生成 {result.cue_count} 条字幕{extra}")
+            self.log.appendPlainText(f"英文缺失 {len(result.missing_en)} 条")
 
     def _on_fail(self, msg: str) -> None:
         self.run_btn.setEnabled(True)
@@ -492,5 +510,5 @@ def main() -> None:
     win = MainWindow()
     if not icon.isNull():
         win.setWindowIcon(icon)
-    win.show()
+    win.showMaximized()
     sys.exit(app.exec())

@@ -12,6 +12,9 @@ if (ROOT / "fonts").is_dir():
     datas.append((str(ROOT / "fonts"), "bilingual_sub/_data/fonts"))
 if (ROOT / "assets" / "brand").is_dir():
     datas.append((str(ROOT / "assets" / "brand"), "bilingual_sub/_data/brand"))
+worker = SRC / "bilingual_sub" / "adapters" / "whisper_worker.py"
+if worker.is_file():
+    datas.append((str(worker), "bilingual_sub/adapters"))
 
 hidden = [
     "bilingual_sub",
@@ -19,8 +22,11 @@ hidden = [
     "bilingual_sub.gui.styles",
     "bilingual_sub.gui.brand_rc",
     "bilingual_sub.gui.output_path",
+    "bilingual_sub.gui.progress",
     "bilingual_sub.adapters.meding",
     "bilingual_sub.adapters.ffmpeg",
+    "bilingual_sub.adapters.procwin",
+    "bilingual_sub.adapters.whisper_backend",
     "bilingual_sub.brand",
     "bilingual_sub.config",
     "bilingual_sub.secrets.store",

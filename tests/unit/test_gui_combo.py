@@ -90,13 +90,14 @@ def test_output_path_is_editable_and_survives_new_video():
     win.out_edit.setText(str(custom))
     assert win.out_edit.text() == str(custom)
     win._set_video(Path(r"C:\media\two.mp4"))
-    assert win.out_edit.text() == str(Path(r"D:\exports\two-中英字幕.mp4"))
+    assert win.out_edit.text() == str(custom)
     win.close()
     _ = app
 
 
 def test_window_chrome():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QLabel
 
     from bilingual_sub.gui.app import MainWindow
@@ -110,5 +111,53 @@ def test_window_chrome():
     assert any(lbl.text() == "SubFlow 语幕" for lbl in labels)
     assert all(lbl.objectName() != "company" for lbl in labels)
     assert win.burn_check.text() == "烧录到视频"
+    assert win.whisper_combo.currentText() in {"tiny", "base", "small", "medium", "large"}
+    win.showMaximized()
+    assert bool(win.windowState() & Qt.WindowState.WindowMaximized)
+    win.close()
+    _ = app
+
+
+def test_progress_log_skips_transcribe_and_done_has_no_popup():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.models import JobResult
+
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    win._on_progress("extract", 0.05)
+    win._on_progress("extract", 0.05)
+    win._on_progress("transcribe", 0.20)
+    win._on_progress("transcribe", 0.21)
+    win._on_progress("transcribe", 0.22)
+    win._on_progress("burn", 0.90)
+    text = win.log.toPlainText()
+    assert "抽取音频" in text
+    assert "语音识别" not in text
+    assert "烧录视频" not in text
+    assert "transcribe" not in text
+    assert "(20%)" not in text
+    result = JobResult(
+        job_id="t",
+        output_mp4=Path(r"D:\out\a.mp4"),
+        output_srt=Path(r"D:\out\a.srt"),
+        output_ass=Path(r"D:\out\a.ass"),
+        cue_count=3,
+        missing_en=[],
+        duration_sec=1.0,
+        report_path=Path(r"D:\out\report.json"),
+        reused=False,
+    )
+    with patch.object(QMessageBox, "information") as info:
+        win._on_done(result)
+    assert info.call_count == 0
+    assert "完成，3 条字幕" in win.log.toPlainText()
     win.close()
     _ = app

@@ -26,6 +26,25 @@ def _strip_wrap(raw: str) -> str:
     return text
 
 
+def current_filename(raw: str, video: Path | None) -> str:
+    text = _strip_wrap(raw)
+    if text:
+        path = Path(text).expanduser()
+        if path.suffix.lower() in VIDEO_SUFFIXES:
+            return path.name
+        if path.suffix:
+            return path.with_suffix(".mp4").name
+        if path.name:
+            return path.name + ".mp4"
+    if video is not None:
+        return default_output_mp4(video).name
+    return f"output{DEFAULT_STEM_SUFFIX}.mp4"
+
+
+def relocate_output(raw: str, new_dir: Path, video: Path | None) -> Path:
+    return Path(new_dir).expanduser() / current_filename(raw, video)
+
+
 def resolve_output_mp4(raw: str, video: Path | None) -> Path:
     text = _strip_wrap(raw)
     if not text:
@@ -34,9 +53,8 @@ def resolve_output_mp4(raw: str, video: Path | None) -> Path:
         return default_output_mp4(video)
     path = Path(text).expanduser()
     if path.exists() and path.is_dir():
-        name = default_output_mp4(video).name if video else f"output{DEFAULT_STEM_SUFFIX}.mp4"
-        path = path / name
-    elif path.suffix.lower() not in VIDEO_SUFFIXES:
+        return path / current_filename("", video)
+    if path.suffix.lower() not in VIDEO_SUFFIXES:
         path = path.with_suffix(".mp4")
     return path
 
@@ -49,5 +67,4 @@ def next_output_path(current: str, previous_video: Path | None, new_video: Path)
     cur = Path(text).expanduser()
     if previous_video is not None and _same_path(cur, default_output_mp4(previous_video)):
         return auto_new
-    parent = cur.parent if cur.suffix else cur
-    return parent / auto_new.name
+    return cur

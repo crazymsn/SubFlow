@@ -62,7 +62,7 @@ def burn_subtitles(
             ]
         )
     else:
-        args.extend(["-c:v", "libx264", "-crf", str(max(18, cq))])
+        args.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", str(max(18, cq))])
 
     args.append(str(output))
     try:
@@ -86,6 +86,8 @@ def burn_subtitles(
             "yuv420p",
             "-c:v",
             "libx264",
+            "-preset",
+            "veryfast",
             "-crf",
             str(max(18, cq)),
             str(output),
