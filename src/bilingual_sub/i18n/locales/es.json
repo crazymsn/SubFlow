@@ -17,6 +17,8 @@
   "engine_whisper": "Whisper",
   "engine_whisperx": "WhisperX",
   "burn": "Quemar en el vídeo",
+  "zh_color": "Color del subtítulo chino",
+  "en_color": "Color del subtítulo inglés",
   "refine": "Pulido cinematográfico",
   "glossary": "Glosario",
   "glossary_gen": "Generar glosario del vídeo",

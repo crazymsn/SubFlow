@@ -4,13 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+
 python3 -m pip install -e ".[gui,packaging]"
 python3 -m PyInstaller --noconfirm --clean "$ROOT/packaging/subflow.spec"
 
 APP="$ROOT/dist/SubFlow.app"
+BUNDLE="$ROOT/dist/SubFlow"
+if [[ ! -d "$BUNDLE" ]]; then
+  echo "PyInstaller onedir missing: $BUNDLE" >&2
+  exit 1
+fi
+if [[ ! -x "$BUNDLE/SubFlow" && ! -f "$BUNDLE/SubFlow" ]]; then
+  echo "PyInstaller binary missing: $BUNDLE/SubFlow" >&2
+  exit 1
+fi
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp -R "$ROOT/dist/SubFlow/"* "$APP/Contents/MacOS/"
+cp -R "$BUNDLE/"* "$APP/Contents/MacOS/"
+chmod +x "$APP/Contents/MacOS/SubFlow" || true
 
 ICON_SRC="$ROOT/assets/brand/subflow.png"
 if [[ -f "$ICON_SRC" ]] && command -v sips >/dev/null && command -v iconutil >/dev/null; then
@@ -33,8 +46,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleName</key><string>SubFlow</string>
   <key>CFBundleDisplayName</key><string>SubFlow</string>
   <key>CFBundleIdentifier</key><string>tech.deepcloud.subflow</string>
-  <key>CFBundleVersion</key><string>1.0.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>SubFlow</string>
   <key>CFBundleIconFile</key><string>SubFlow</string>
@@ -47,10 +60,21 @@ EOF
 
 if command -v ffmpeg >/dev/null; then
   cp "$(command -v ffmpeg)" "$APP/Contents/MacOS/ffmpeg"
+  chmod +x "$APP/Contents/MacOS/ffmpeg"
   if command -v ffprobe >/dev/null; then
     cp "$(command -v ffprobe)" "$APP/Contents/MacOS/ffprobe"
+    chmod +x "$APP/Contents/MacOS/ffprobe"
   fi
 fi
 
-echo "macOS client: $APP"
+if command -v codesign >/dev/null; then
+  codesign --force --deep --sign - "$APP"
+fi
+
+if [[ ! -f "$APP/Contents/MacOS/SubFlow" ]]; then
+  echo "macOS bundle missing executable" >&2
+  exit 1
+fi
+
+echo "macOS client: $APP ($VERSION)"
 echo "ASR 需本机 Whisper，或使用 docker compose。"

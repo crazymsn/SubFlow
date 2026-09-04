@@ -241,6 +241,9 @@ def test_window_chrome():
     assert win.lbl_source_url.text() == "视频链接"
     assert win.lbl_out.text() == "输出路径"
     assert win.lbl_out.objectName() == "outLabel"
+    assert win.zh_color_btn.objectName() == "zhColorBtn"
+    assert win.en_color_btn.objectName() == "enColorBtn"
+    assert win.zh_color_btn.hex() == "#FFFFFF"
     assert win.save_btn.objectName() == win.clear_key_btn.objectName() == win.api_portal_btn.objectName() == "brandGhost"
     assert win.url_edit.objectName() or True
     assert win.start_btn is win.run_btn
@@ -346,6 +349,25 @@ def test_pause_resume_stop_state_machine():
     assert win.run_btn.isEnabled() is True
     assert win.pause_btn.isEnabled() is False
     assert win.stop_btn.isEnabled() is False
+    win.close()
+    _ = app
+
+
+def test_fetch_models_does_not_announce_count():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    win._on_models(["gpt-4o-mini", "deepseek-v3"])
+    assert "已加载" not in win.key_status.text()
+    assert "模型" not in win.key_status.text() or win.key_status.text() == ""
+    assert win.key_status.isHidden() or not win.key_status.text()
+    assert win.model_combo.count() == 2
     win.close()
     _ = app
 

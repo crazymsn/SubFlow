@@ -89,6 +89,8 @@ class JobConfig:
     work_dir: Path
     glossary_path: Path | None = None
     style_preset: str = "no-plate-large"
+    subtitle_zh_color: str = "#FFFFFF"
+    subtitle_en_color: str = "#F2F2F2"
     whisper_model: str = "medium"
     device: Literal["auto", "cuda", "cpu"] = "auto"
     burn: bool = True

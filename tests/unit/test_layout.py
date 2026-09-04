@@ -1,5 +1,5 @@
 from bilingual_sub.config import load_style_preset
-from bilingual_sub.core.render import render_ass_srt, resolve_play_layout
+from bilingual_sub.core.render import apply_subtitle_colors, normalize_hex, render_ass_srt, resolve_play_layout
 from bilingual_sub.models import Cue
 
 
@@ -28,3 +28,12 @@ def test_ass_positions_on_screen_for_vertical():
     ass, _ = render_ass_srt(cues, preset, play_res=(1080, 1920))
     assert "PlayResY: 1920" in ass
     assert "\\pos(540," in ass
+
+
+def test_custom_subtitle_colors_land_in_ass():
+    assert normalize_hex("ff0033") == "#FF0033"
+    preset = apply_subtitle_colors(load_style_preset("no-plate-large"), "#FF0033", "#00FFAA")
+    cues = [Cue(1.0, 2.0, "红字", "green")]
+    ass, _ = render_ass_srt(cues, preset, play_res=(1920, 1080))
+    assert "&H003300FF" in ass
+    assert "&H00AAFF00" in ass

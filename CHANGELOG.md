@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 — 2026-09-04
+
+- 视频下载：游客失败后读取本机已安装浏览器登录 Cookie（Firefox / Edge / Safari / Chrome）
+- 获取模型时屏蔽 BAAI / 智源相关条目
+- 自定义字幕中英颜色；只改颜色时重渲 ASS 并重烧，不重跑识别
+- GitHub Actions 按源码同时构建 Windows zip 与 macOS `.app` zip
+
 ## 1.1.0 — 2026-09-04
 
 - 对外文案定为：SubFlow 语幕，新一代 AI 视频语音识别、自动翻译、字幕生成工具

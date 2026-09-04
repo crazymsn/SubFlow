@@ -16,3 +16,7 @@ def test_parse_dict_and_list():
     assert parse_model_ids({"data": [{"id": "a"}, {"name": "b"}]}) == ["a", "b"]
     assert parse_model_ids(["x", "y", "x"]) == ["x", "y"]
     assert parse_model_ids(None) == []
+    assert parse_model_ids(["gpt-4o-mini", "BAAI/bge-m3", "baai-embed", "deepseek-v3"]) == [
+        "gpt-4o-mini",
+        "deepseek-v3",
+    ]

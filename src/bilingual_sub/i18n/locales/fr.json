@@ -17,6 +17,8 @@
   "engine_whisper": "Whisper",
   "engine_whisperx": "WhisperX",
   "burn": "Graver dans la vidéo",
+  "zh_color": "Couleur des sous-titres chinois",
+  "en_color": "Couleur des sous-titres anglais",
   "refine": "Polish cinéma",
   "glossary": "Glossaire",
   "glossary_gen": "Générer le glossaire",

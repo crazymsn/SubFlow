@@ -17,6 +17,8 @@ REQUIRED = (
     "engine",
     "engine_whisperx",
     "burn",
+    "zh_color",
+    "en_color",
     "refine",
     "glossary",
     "glossary_gen",

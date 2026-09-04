@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 MEDING_BASE_URL = "https://api.meding.site"
 
 
+def is_public_model(mid: str) -> bool:
+    """Drop vendor rows the UI must not offer (BAAI / 智源)."""
+    compact = mid.strip().lower().replace(" ", "").replace("_", "-")
+    if not compact:
+        return False
+    return "baai" not in compact
+
+
 class MedingError(RuntimeError):
     pass
 
@@ -71,7 +79,7 @@ def parse_model_ids(payload: Any) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for mid in ids:
-        if mid and mid not in seen:
+        if mid and mid not in seen and is_public_model(mid):
             seen.add(mid)
             out.append(mid)
     return out

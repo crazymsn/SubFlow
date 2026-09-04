@@ -17,6 +17,8 @@
   "engine_whisper": "Whisper",
   "engine_whisperx": "WhisperX",
   "burn": "Вжечь в видео",
+  "zh_color": "Цвет китайских субтитров",
+  "en_color": "Цвет английских субтитров",
   "refine": "Кинематографическая правка",
   "glossary": "Глоссарий",
   "glossary_gen": "Сгенерировать глоссарий",

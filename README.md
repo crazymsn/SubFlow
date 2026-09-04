@@ -16,19 +16,20 @@
 | 字幕规范 | 中英双语或单行 Netflix 风格；可选电影级润色与术语表 |
 | 成片导出 | 烧录 MP4，同时写出 SRT / ASS；输出路径可改而不必重跑 |
 | 配音 | OpenAI 云端多语种，或本机 GPT-SoVITS 克隆音色 |
-| 三种入口 | Windows 桌面客户端、Python CLI、Docker Compose |
+| 三种入口 | Windows / macOS 桌面客户端、Python CLI、Docker Compose |
 
 界面提供简体中文、繁体中文、English、日本語、Español、Русский、Français。
 
 ![更多选项与深色主题](docs/images/desktop-more.png)
 
-## 五分钟上手（Windows 客户端）
+## 五分钟上手
 
-1. 打开 [Releases](https://github.com/crazymsn/SubFlow/releases/latest)，下载 `SubFlow-Windows-1.1.0.zip`。
-2. **整夹解压**，进入 `SubFlow` 目录，双击 `SubFlow.exe`。不要只拷贝 exe。
-3. 到 [API 分发站](https://api.meding.site) 领取令牌，在客户端保存，再点「获取模型」。
-4. 拖入视频，或粘贴链接后下载。
-5. 选好源语言、目标语言、识别引擎与翻译模型，点击「开始处理」。
+1. 打开 [Releases](https://github.com/crazymsn/SubFlow/releases/latest)，下载 `SubFlow-Windows-1.2.0.zip` 或 `SubFlow-macOS-1.2.0.zip`。
+2. Windows：**整夹解压**，进入 `SubFlow` 目录，双击 `SubFlow.exe`。不要只拷贝 exe。
+3. macOS：解压后把 `SubFlow.app` 拖到「应用程序」；若提示未验证开发者，按住 Control 点击后选择打开。
+4. 到 [API 分发站](https://api.meding.site) 领取令牌，在客户端保存，再点「获取模型」。
+5. 拖入视频，或粘贴链接后下载。游客下载失败时会自动读取本机浏览器登录 Cookie。
+6. 选好源语言、目标语言、识别引擎与翻译模型，点击「开始处理」。
 
 首次识别会按所选 Whisper 模型下载权重，需要本机磁盘与网络。详细步骤见 [桌面客户端](docs/desktop.md)。
 
@@ -89,7 +90,7 @@ docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp
 
 ## 系统要求
 
-- Windows 10/11 x64 客户端，或 Python 3.11+ / Docker
+- Windows 10/11 x64 或 macOS 12+ 客户端，或 Python 3.11+ / Docker
 - FFmpeg 6+（官方 Windows 包已内置 `ffmpeg.exe` / `ffprobe.exe`）
 - 识别建议 8 GB 以上内存；`medium` / `large` 更吃内存
 - 可选 NVIDIA GPU（`cuda` 额外依赖，不打进官方客户端）

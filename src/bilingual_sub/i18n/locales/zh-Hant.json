@@ -17,6 +17,8 @@
   "engine_whisper": "Whisper",
   "engine_whisperx": "WhisperX",
   "burn": "燒錄到影片",
+  "zh_color": "中文字幕顏色",
+  "en_color": "英文字幕顏色",
   "refine": "電影級潤色",
   "glossary": "術語",
   "glossary_gen": "從影片產生術語",

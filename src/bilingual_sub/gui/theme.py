@@ -458,6 +458,20 @@ QPushButton#primary:focus, QFrame#urlCompose QPushButton#composeGo:focus {
     background: transparent;
     border: none;
 }
+QPushButton#colorChip, QPushButton#zhColorBtn, QPushButton#enColorBtn {
+    background: $sheet;
+    color: $ink;
+    border: 1px solid $line;
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0 12px 0 8px;
+    font-weight: 500;
+    text-align: left;
+}
+QPushButton#colorChip:hover, QPushButton#zhColorBtn:hover, QPushButton#enColorBtn:hover {
+    border-color: $filament;
+    background: $filamentWash;
+}
 QPushButton#brandGhost {
     background: transparent;
     color: $ink;

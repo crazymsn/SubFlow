@@ -42,6 +42,7 @@ hidden = [
     "bilingual_sub.gui.widgets.action_bar",
     "bilingual_sub.gui.widgets.filament_btn",
     "bilingual_sub.gui.widgets.brand_check",
+    "bilingual_sub.gui.widgets.color_chip",
     "bilingual_sub.gui.widgets.stage",
     "bilingual_sub.adapters.meding",
     "bilingual_sub.adapters.ffmpeg",

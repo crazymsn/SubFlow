@@ -1,6 +1,6 @@
 # 桌面客户端 — SubFlow 语幕
 
-当前发布包：[`SubFlow-Windows-1.1.0.zip`](https://github.com/crazymsn/SubFlow/releases/latest)
+当前发布包：[`SubFlow-Windows-1.2.0.zip`](https://github.com/crazymsn/SubFlow/releases/latest) · [`SubFlow-macOS-1.2.0.zip`](https://github.com/crazymsn/SubFlow/releases/latest)
 
 窗口标题为 **深度云创科技**，界面品牌为 **SubFlow 语幕**。
 
@@ -12,7 +12,9 @@
 
 客户端是 PyInstaller onedir 包，exe 只是入口。只拷 exe 会找不到 Qt 与运行库。
 
-macOS 可从源码构建：
+macOS 发布包是 GitHub Actions 按同一套源码打出的 `SubFlow.app`。解压 zip 后拖到「应用程序」。首次打开若被拦截，按住 Control 点击图标再选打开。
+
+本机从源码构建：
 
 ```bash
 bash scripts/build-macos.sh
@@ -54,6 +56,7 @@ Windows 从源码重打：
 
 | 选项 | 作用 |
 | --- | --- |
+| 中文字幕颜色 / 英文字幕颜色 | 点色块自选，写入 ASS 并烧录；只改颜色会重渲字幕，不重跑识别 |
 | 电影级润色 | 翻译后走 reflect / adapt，措辞更稳，更耗配额 |
 | 从视频生成术语 | 先抽术语再翻译，专有名词更稳 |
 | 术语 | 本机 JSON / YAML 术语表（可选） |

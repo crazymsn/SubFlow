@@ -7,6 +7,7 @@ def test_keeps_saved_model_when_in_list():
 
 def test_keeps_typed_model_when_not_in_list():
     assert preferred_model(["gpt-4o-mini"], "my-custom") == "my-custom"
+    assert preferred_model(["gpt-4o-mini"], "BAAI/bge-m3") == ""
 
 
 def test_stays_empty_when_user_has_not_chosen():
@@ -18,3 +19,6 @@ def test_merge_prepends_unknown_current():
     assert merge_model_list(["a", "b"], "custom") == ["custom", "a", "b"]
     assert merge_model_list(["a", "b"], "b") == ["a", "b"]
     assert merge_model_list(["a", "a", ""], "  ") == ["a"]
+    assert merge_model_list(["gpt-4o-mini", "BAAI/bge-large", "baai-reranker"], "BAAI/bge-large") == [
+        "gpt-4o-mini"
+    ]

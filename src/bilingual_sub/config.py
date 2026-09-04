@@ -95,10 +95,25 @@ def _bundled_config_dir() -> Path:
     return _package_root().parent / "config"
 
 
-def _user_config_path() -> Path:
+def user_config_dir() -> Path:
     if os.name == "nt":
-        return Path(os.environ.get("APPDATA", Path.home())) / "SubFlow" / "config.yaml"
-    return Path.home() / ".config" / "subflow" / "config.yaml"
+        return Path(os.environ.get("APPDATA", Path.home())) / "SubFlow"
+    return Path.home() / ".config" / "subflow"
+
+
+def _user_config_path() -> Path:
+    return user_config_dir() / "config.yaml"
+
+
+def load_subtitle_colors() -> tuple[str, str]:
+    from bilingual_sub.core.render import DEFAULT_EN_COLOR, DEFAULT_ZH_COLOR, normalize_hex
+
+    data = _load_yaml(_user_config_path())
+    style = data.get("style") if isinstance(data.get("style"), dict) else {}
+    return (
+        normalize_hex(style.get("zh_color"), DEFAULT_ZH_COLOR),
+        normalize_hex(style.get("en_color"), DEFAULT_EN_COLOR),
+    )
 
 
 def _legacy_user_config_path() -> Path:

@@ -31,7 +31,7 @@ from bilingual_sub.core.glossary_ai import extract_glossary
 from bilingual_sub.core.langs import convert_han, whisper_language
 from bilingual_sub.core.netflix import fit_cues
 from bilingual_sub.core.translate_refine import translate_cues_refined
-from bilingual_sub.core.render import load_cues_json, save_cues_json, write_subtitles
+from bilingual_sub.core.render import apply_subtitle_colors, load_cues_json, save_cues_json, write_subtitles
 from bilingual_sub.core.translate import translate_cues
 from bilingual_sub.logging_util import setup_logging
 from bilingual_sub.models import STAGES, Cue, JobConfig, JobResult
@@ -125,7 +125,8 @@ def artifact_key(config: JobConfig) -> str:
         f"{config.whisper_model}|{config.translate_model}|{preview}|"
         f"{config.source_lang}|{config.target_lang}|{config.subtitle_mode}|"
         f"{config.asr_backend}|{int(config.refine_translate)}|{gloss}|"
-        f"{config.source_url or ''}"
+        f"{config.source_url or ''}|"
+        f"{config.subtitle_zh_color}|{config.subtitle_en_color}"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -201,13 +202,31 @@ def _can_reexport(config: JobConfig, work: Path) -> bool:
     return True
 
 
+def _styled_preset(config: JobConfig):
+    return apply_subtitle_colors(
+        load_style_preset(config.style_preset),
+        config.subtitle_zh_color,
+        config.subtitle_en_color,
+    )
+
+
+def _style_same(report: dict, config: JobConfig) -> bool:
+    from bilingual_sub.core.render import DEFAULT_EN_COLOR, DEFAULT_ZH_COLOR
+
+    return (
+        str(report.get("style_preset") or config.style_preset) == config.style_preset
+        and str(report.get("subtitle_zh_color") or DEFAULT_ZH_COLOR) == config.subtitle_zh_color
+        and str(report.get("subtitle_en_color") or DEFAULT_EN_COLOR) == config.subtitle_en_color
+    )
+
+
 def _export_subs(
     config: JobConfig,
     work: Path,
     cues: list[Cue],
     play_res: tuple[int, int],
 ) -> Path:
-    preset = load_style_preset(config.style_preset)
+    preset = _styled_preset(config)
     ass_path = work / "subs.ass"
     srt_out = config.output_srt
     srt_out.parent.mkdir(parents=True, exist_ok=True)
@@ -230,7 +249,7 @@ def _copy_or_burn(
     dest = config.output_video or config.output_srt.with_suffix(".mp4")
     dest.parent.mkdir(parents=True, exist_ok=True)
     prev = Path(str(report["output_mp4"])) if report.get("output_mp4") else None
-    style_same = str(report.get("style_preset") or config.style_preset) == config.style_preset
+    style_same = _style_same(report, config)
     if prev and prev.is_file() and style_same:
         if prev.resolve() != dest.resolve():
             shutil.copy2(prev, dest)
@@ -286,6 +305,8 @@ def _result_from_work(
         "whisper_model": config.whisper_model,
         "translate_model": config.translate_model,
         "style_preset": config.style_preset,
+        "subtitle_zh_color": config.subtitle_zh_color,
+        "subtitle_en_color": config.subtitle_en_color,
         "ui_locale": config.ui_locale,
         "source_lang": config.source_lang,
         "target_lang": config.target_lang,
@@ -452,7 +473,7 @@ def _run_job(
     ass_out = srt_out.with_suffix(".ass") if srt_out.suffix else Path(str(srt_out) + ".ass")
 
     glossary = Glossary.load(config.glossary_path or default_glossary_path())
-    preset = load_style_preset(config.style_preset)
+    preset = _styled_preset(config)
 
     cache_hits = 0
     api_calls = 0
@@ -722,6 +743,8 @@ def _run_job(
         "whisper_model": config.whisper_model,
         "translate_model": config.translate_model,
         "style_preset": config.style_preset,
+        "subtitle_zh_color": config.subtitle_zh_color,
+        "subtitle_en_color": config.subtitle_en_color,
         "source_lang": config.source_lang,
         "target_lang": config.target_lang,
         "subtitle_mode": config.subtitle_mode,

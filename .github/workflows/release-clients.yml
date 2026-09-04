@@ -48,10 +48,16 @@ jobs:
           if (Test-Path $internal) {
             Get-ChildItem $internal -File -Filter "icu*.dll" | Remove-Item -Force
           }
+          $ver = (Select-String -Path pyproject.toml -Pattern 'version = "([^"]+)"').Matches[0].Groups[1].Value
+          Compress-Archive -Path $dist -DestinationPath "SubFlow-Windows-$ver.zip" -Force
       - uses: actions/upload-artifact@v4
         with:
           name: SubFlow-Windows
           path: dist/SubFlow
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubFlow-Windows-zip
+          path: SubFlow-Windows-*.zip
 
   macos:
     needs: test
@@ -65,7 +71,34 @@ jobs:
         run: brew install ffmpeg
       - name: Build .app
         run: bash scripts/build-macos.sh
+      - name: Zip .app
+        run: |
+          VER=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          ditto -c -k --keepParent dist/SubFlow.app "SubFlow-macOS-${VER}.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: SubFlow-macOS
           path: dist/SubFlow.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubFlow-macOS-zip
+          path: SubFlow-macOS-*.zip
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: SubFlow-*-zip
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SubFlow-Windows-*.zip
+            SubFlow-macOS-*.zip
+          generate_release_notes: true

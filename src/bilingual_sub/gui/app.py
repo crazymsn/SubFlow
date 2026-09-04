@@ -28,7 +28,7 @@ from bilingual_sub.brand import (
     PRODUCT_ZH,
     WINDOW_TITLE,
 )
-from bilingual_sub.config import load_ui_theme, save_user_overrides
+from bilingual_sub.config import load_subtitle_colors, load_ui_theme, save_user_overrides
 from bilingual_sub.core.control import JobControl
 from bilingual_sub.gui.assets import GITHUB_MARK_PX, HEADER_MARK_PX, load_app_icon, load_brand_mark, load_github_mark
 from bilingual_sub.gui.model_choice import merge_model_list, preferred_model
@@ -193,6 +193,13 @@ class MainWindow(QMainWindow):
     def _hydrate(self) -> None:
         if get_api_key():
             self.key_edit.setPlaceholderText(tr("token_kept"))
+        zh, en = load_subtitle_colors()
+        self.zh_color_btn.set_hex(zh)
+        self.en_color_btn.set_hex(en)
+
+    def _persist_sub_color(self, which: str, color: str) -> None:
+        key = "zh_color" if which == "zh" else "en_color"
+        save_user_overrides({"style": {key: color}})
 
     def _apply_logo(self) -> None:
         pix = load_brand_mark(HEADER_MARK_PX, self, self._theme)
@@ -225,7 +232,16 @@ class MainWindow(QMainWindow):
         self._apply_logo()
         self._apply_github()
         self._refresh_drop()
-        for widget in (self.run_btn, self.download_btn, self.burn_check, self.refine_check, self.glossary_gen_check, self.dub_check):
+        for widget in (
+            self.run_btn,
+            self.download_btn,
+            self.burn_check,
+            self.refine_check,
+            self.glossary_gen_check,
+            self.dub_check,
+            self.zh_color_btn,
+            self.en_color_btn,
+        ):
             apply = getattr(widget, "apply_theme", None)
             if callable(apply):
                 apply(self._theme)
@@ -306,6 +322,8 @@ class MainWindow(QMainWindow):
             self.glossary_edit.text().strip(),
             bool(self.glossary_gen_check.isChecked()),
             bool(self.dub_check.isChecked()),
+            self.zh_color_btn.hex(),
+            self.en_color_btn.hex(),
         )
 
     def _reuse_sources(self) -> tuple[Path | None, Path | None, Path | None, Path | None] | None:
@@ -447,7 +465,7 @@ class MainWindow(QMainWindow):
                 self.model_combo.setCurrentText(pick)
             else:
                 self.model_combo.setCurrentIndex(-1)
-            self._set_key_status(tr("models_loaded").format(n=len(models)))
+            self._set_key_status("")
             QTimer.singleShot(0, self.model_combo.showPopup)
         else:
             self._set_key_status(tr("models_empty"))
@@ -518,6 +536,8 @@ class MainWindow(QMainWindow):
         self.glossary_gen_check.setText(tr("glossary_gen"))
         self.glossary_browse_btn.setText(tr("browse"))
         self.dub_check.setText(tr("dub"))
+        self.lbl_zh_color.setText(tr("zh_color"))
+        self.lbl_en_color.setText(tr("en_color"))
         self.lbl_tts.setText(tr("tts_provider"))
         self.lbl_voice.setText(tr("tts_voice"))
         self.lbl_endpoint.setText(tr("tts_endpoint"))
@@ -672,6 +692,8 @@ class MainWindow(QMainWindow):
             tts_voice="" if tts != "openai" else str(self.tts_voice_edit.currentData() or "alloy"),
             tts_endpoint="" if tts != "gptsovits" else self.tts_endpoint_edit.text().strip(),
             ui_locale=str(self.locale_combo.currentData() or "zh-Hans"),
+            subtitle_zh_color=self.zh_color_btn.hex(),
+            subtitle_en_color=self.en_color_btn.hex(),
         )
         if self._video and self._video.is_file():
             cfg.source_url = None

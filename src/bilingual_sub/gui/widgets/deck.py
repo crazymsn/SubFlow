@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from bilingual_sub.adapters.whisper_backend import default_whisper_model
 from bilingual_sub.core.langs import SOURCE_LANGS, SUB_LANGS
 from bilingual_sub.gui.widgets.brand_check import BrandCheck
+from bilingual_sub.gui.widgets.color_chip import ColorChip
 from bilingual_sub.gui.widgets.field import FitScroll, expanding, field_col, path_row
 from bilingual_sub.i18n import tr
 
@@ -235,13 +236,22 @@ def build_more_drawer(win) -> QFrame:
     more.addWidget(win.glossary_gen_check, 1, 2, 1, 2)
     more.addWidget(win.dub_check, 1, 4, 1, 2)
 
+    win.lbl_zh_color = win._field_label(tr("zh_color"))
+    win.lbl_en_color = win._field_label(tr("en_color"))
+    win.zh_color_btn = ColorChip("#FFFFFF", object_name="zhColorBtn")
+    win.en_color_btn = ColorChip("#F2F2F2", object_name="enColorBtn")
+    win.zh_color_btn.color_changed.connect(lambda color: win._persist_sub_color("zh", color))
+    win.en_color_btn.color_changed.connect(lambda color: win._persist_sub_color("en", color))
+    more.addWidget(field_col(win.lbl_zh_color, expanding(win.zh_color_btn)), 2, 0, 1, 3)
+    more.addWidget(field_col(win.lbl_en_color, expanding(win.en_color_btn)), 2, 3, 1, 3)
+
     win.glossary_edit = QLineEdit()
     win.glossary_edit.setPlaceholderText(tr("glossary_ph"))
     win.glossary_browse_btn = QPushButton(tr("browse"))
     win.glossary_browse_btn.setObjectName("ghost")
     win.glossary_browse_btn.setMinimumHeight(36)
     win.glossary_browse_btn.clicked.connect(win._browse_glossary)
-    more.addWidget(field_col(win._section("glossary", tr("glossary")), path_row(win.glossary_edit, win.glossary_browse_btn)), 2, 0, 1, 6)
+    more.addWidget(field_col(win._section("glossary", tr("glossary")), path_row(win.glossary_edit, win.glossary_browse_btn)), 3, 0, 1, 6)
 
     win.dub_box = QWidget()
     win.dub_box.setObjectName("moreTrack")
@@ -283,7 +293,7 @@ def build_more_drawer(win) -> QFrame:
     track.addWidget(win._slot_endpoint, 3)
     dub.addLayout(track)
     win.dub_box.setVisible(False)
-    more.addWidget(win.dub_box, 3, 0, 1, 6)
+    more.addWidget(win.dub_box, 4, 0, 1, 6)
     for col in range(6):
         more.setColumnStretch(col, 1)
     drawer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)

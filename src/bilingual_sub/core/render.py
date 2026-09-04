@@ -26,8 +26,37 @@ def ass_esc(text: str) -> str:
     return text.replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
 
 
+DEFAULT_ZH_COLOR = "#FFFFFF"
+DEFAULT_EN_COLOR = "#F2F2F2"
+
+
+def normalize_hex(value: object, default: str = DEFAULT_ZH_COLOR) -> str:
+    raw = str(value or "").strip()
+    if raw.lower().startswith("0x"):
+        raw = raw[2:]
+    raw = raw.lstrip("#")
+    if len(raw) == 3 and all(char in "0123456789abcdefABCDEF" for char in raw):
+        raw = "".join(char * 2 for char in raw)
+    if len(raw) == 6 and all(char in "0123456789abcdefABCDEF" for char in raw):
+        return f"#{raw.upper()}"
+    return default
+
+
+def apply_subtitle_colors(preset: StylePreset, zh: str | None, en: str | None) -> StylePreset:
+    style = dict(preset.style)
+    zh_cfg = dict(style.get("zh") or {})
+    en_cfg = dict(style.get("en") or {})
+    if zh:
+        zh_cfg["color"] = normalize_hex(zh, str(zh_cfg.get("color") or DEFAULT_ZH_COLOR))
+    if en:
+        en_cfg["color"] = normalize_hex(en, str(en_cfg.get("color") or DEFAULT_EN_COLOR))
+    style["zh"] = zh_cfg
+    style["en"] = en_cfg
+    return preset.model_copy(update={"style": style})
+
+
 def _hex_to_ass(color: str) -> str:
-    c = color.lstrip("#")
+    c = normalize_hex(color).lstrip("#")
     if len(c) == 6:
         r, g, b = c[0:2], c[2:4], c[4:6]
         return f"&H00{b.upper()}{g.upper()}{r.upper()}"
@@ -131,8 +160,8 @@ def render_ass_srt(
     en_font = en_cfg.get("font", "Microsoft YaHei")
     zh_outline = float(zh_cfg.get("outline", 3.2))
     en_outline = float(en_cfg.get("outline", 2.6))
-    zh_color = _hex_to_ass(str(zh_cfg.get("color", "#FFFFFF")))
-    en_color = _hex_to_ass(str(en_cfg.get("color", "#F2F2F2")))
+    zh_color = _hex_to_ass(str(zh_cfg.get("color", DEFAULT_ZH_COLOR)))
+    en_color = _hex_to_ass(str(en_cfg.get("color", DEFAULT_EN_COLOR)))
     zh_bold = -1 if zh_cfg.get("bold", True) else 0
     en_bold = -1 if en_cfg.get("bold", False) else 0
 

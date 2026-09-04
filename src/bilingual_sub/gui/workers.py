@@ -76,4 +76,6 @@ class DownloadWorker(QThread):
             path = ytdlp_download(self.url, self.dest)
             self.ok.emit(str(path))
         except Exception as exc:
-            self.fail.emit(str(exc))
+            from bilingual_sub.adapters.ytdlp import explain_download_error
+
+            self.fail.emit(explain_download_error(exc))

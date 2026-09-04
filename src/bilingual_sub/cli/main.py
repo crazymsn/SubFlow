@@ -242,6 +242,8 @@ def run_cmd(
     tts_provider: Annotated[str, typer.Option("--tts-provider")] = "none",
     tts_voice: Annotated[str, typer.Option("--tts-voice")] = "",
     tts_endpoint: Annotated[str, typer.Option("--tts-endpoint")] = "",
+    zh_color: Annotated[str, typer.Option("--zh-color", help="Chinese subtitle hex color")] = "#FFFFFF",
+    en_color: Annotated[str, typer.Option("--en-color", help="English subtitle hex color")] = "#F2F2F2",
 ) -> None:
     """Full pipeline: ASR → translate → render → burn."""
     if not url and (input_video is None or not input_video.is_file()):
@@ -293,6 +295,8 @@ def run_cmd(
         tts_provider=tts_provider,  # type: ignore[arg-type]
         tts_voice=tts_voice,
         tts_endpoint=tts_endpoint,
+        subtitle_zh_color=zh_color,
+        subtitle_en_color=en_color,
     )
 
     def on_progress(stage: str, pct: float) -> None:

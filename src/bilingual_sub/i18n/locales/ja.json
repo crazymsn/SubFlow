@@ -17,6 +17,8 @@
   "engine_whisper": "Whisper",
   "engine_whisperx": "WhisperX",
   "burn": "動画に焼き込み",
+  "zh_color": "中国語字幕の色",
+  "en_color": "英語字幕の色",
   "refine": "映画品質の推敲",
   "glossary": "用語集",
   "glossary_gen": "動画から用語を生成",

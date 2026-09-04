@@ -17,6 +17,8 @@
   "engine_whisper": "Whisper",
   "engine_whisperx": "WhisperX",
   "burn": "Burn into video",
+  "zh_color": "Chinese subtitle color",
+  "en_color": "English subtitle color",
   "refine": "Cinematic polish",
   "glossary": "Glossary",
   "glossary_gen": "Generate glossary from video",
