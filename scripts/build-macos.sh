@@ -67,8 +67,9 @@ if command -v ffmpeg >/dev/null; then
   fi
 fi
 
+# --deep fails on .dist-info folders inside _internal. Sign the launcher only.
 if command -v codesign >/dev/null; then
-  codesign --force --deep --sign - "$APP"
+  codesign --force --sign - "$APP/Contents/MacOS/SubFlow" || true
 fi
 
 if [[ ! -f "$APP/Contents/MacOS/SubFlow" ]]; then
