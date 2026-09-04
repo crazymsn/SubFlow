@@ -2,9 +2,7 @@
 
 **新一代 AI 视频语音识别、自动翻译、字幕生成工具**
 
-深度云创科技出品。[Windows 客户端](https://github.com/crazymsn/SubFlow/releases/latest) · [API 分发站](https://api.meding.site) · [MIT License](LICENSE)
-
-本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
+深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
 ![SubFlow 语幕桌面客户端](docs/images/desktop-light.png)
 
