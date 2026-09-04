@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1 — 2026-09-04
+
+- Docker 官方镜像：`crazymsn/subflow:latest`（`docker-compose.yml` 默认拉取 Hub）
+- 文档重写：字幕烧录颜色、浏览器 Cookie 兜底、BAAI 过滤、Win / Mac 发布包
+- 自定义字幕颜色（桌面色块 + CLI `--zh-color` / `--en-color`）已随 1.2.0 落地，本版一并写进文档
+
 ## 1.2.0 — 2026-09-04
 
 - 视频下载：游客失败后读取本机已安装浏览器登录 Cookie（Firefox / Edge / Safari / Chrome）

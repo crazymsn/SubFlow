@@ -1,25 +1,25 @@
 # 架构 — SubFlow 语幕
 
-产品：**SubFlow 语幕**（深度云创科技）。CLI 入口 `subflow`，桌面入口 `subflow gui` / `SubFlow.exe`。
+产品：**SubFlow 语幕**（深度云创科技）。CLI 入口 `subflow`，桌面入口 `subflow gui` / `SubFlow.exe`，容器入口 `crazymsn/subflow:latest`。
 
-保存 API 令牌后调用 `GET /v1/models` 填充翻译模型。Base URL 固定为 `https://api.meding.site`，只在 `adapters/meding.py` 出现一次。
+保存 API 令牌后调用 `GET /v1/models` 填充翻译模型。Base URL 固定为 `https://api.meding.site`，只在 `adapters/meding.py` 出现一次。列表会丢掉 BAAI / 智源相关 id。
 
 ```
 CLI / GUI / Docker
         ↓
    pipeline.run
-        ├── ingest          yt-dlp（仅当 source_url 有值）
+        ├── ingest          yt-dlp（仅当 source_url 有值；游客失败后读浏览器 Cookie）
         ├── core.audio      抽音、silencedetect
         ├── adapters.whisper / whisperx
         ├── core.cues + glossary / glossary_ai
         ├── core.translate → adapters.meding + secrets
         ├── core.translate_refine   （可选电影级润色）
-        ├── core.render     ASS / SRT
+        ├── core.render     ASS / SRT（subtitle_zh_color / subtitle_en_color）
         ├── core.burn       adapters.ffmpeg
         └── core.dub        OpenAI TTS / GPT-SoVITS
 ```
 
-桌面层：`gui/app.py` 组窗口；`gui/theme.py` 管颜色与字阶；`gui/widgets/*` 画甲板、开始栏、勾选、主按钮；`gui/workers.py` 把流水线丢到后台线程。`core/*` 不得依赖 `cli` / `gui`。
+桌面层：`gui/app.py` 组窗口；`gui/theme.py` 管颜色与字阶；`gui/widgets/color_chip.py` 是字幕色块；`gui/workers.py` 把流水线丢到后台线程。`core/*` 不得依赖 `cli` / `gui`。
 
 ## JobConfig
 
@@ -31,6 +31,7 @@ CLI / GUI / Docker
 | `output_srt` | 输出 SRT |
 | `work_dir` | 工作目录，`auto` = 系统临时目录下的作业夹 |
 | `style_preset` | 样式 preset 名 |
+| `subtitle_zh_color` / `subtitle_en_color` | 烧录用的中英 HEX 颜色 |
 | `whisper_model` | Whisper 模型名 |
 | `asr_backend` | `whisper` / `whisperx` |
 | `device` | `auto` / `cuda` / `cpu` |
@@ -45,6 +46,8 @@ CLI / GUI / Docker
 | `preview_minutes` | 只处理前 N 分钟 |
 
 阶段顺序见 `models.STAGES`：`init → ingest → extract → silence → transcribe → build_cues → glossary → translate → fit_subs → render → burn → dub → done`。
+
+只改输出路径：拷贝成品。只改字幕颜色：从 `render` 续跑。
 
 ## 扩展点
 
@@ -62,4 +65,4 @@ CLI / GUI / Docker
 
 ## 桌面字体
 
-全界面同一套栈：微软雅黑 UI → Segoe UI Variable → Segoe UI → 苹方。字阶只有五档：标签 12、提示/日志 13、控件 14、标题 20、进度 32。勾选与主按钮也走 `type_font()`，避免再出现西文控件 + 中文勾选两套脸。
+全界面同一套栈：微软雅黑 UI → Segoe UI Variable → Segoe UI → 苹方。字阶只有五档：标签 12、提示/日志 13、控件 14、标题 20、进度 32。勾选、主按钮、色块也走 `type_font()`。

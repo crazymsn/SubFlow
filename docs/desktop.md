@@ -1,6 +1,6 @@
 # 桌面客户端 — SubFlow 语幕
 
-当前发布包：[`SubFlow-Windows-1.2.0.zip`](https://github.com/crazymsn/SubFlow/releases/latest) · [`SubFlow-macOS-1.2.0.zip`](https://github.com/crazymsn/SubFlow/releases/latest)
+当前发布包：[`SubFlow-Windows-1.2.1.zip`](https://github.com/crazymsn/SubFlow/releases/latest) · [`SubFlow-macOS-1.2.1.zip`](https://github.com/crazymsn/SubFlow/releases/latest)
 
 窗口标题为 **深度云创科技**，界面品牌为 **SubFlow 语幕**。
 
@@ -12,7 +12,7 @@
 
 客户端是 PyInstaller onedir 包，exe 只是入口。只拷 exe 会找不到 Qt 与运行库。
 
-macOS 发布包是 GitHub Actions 按同一套源码打出的 `SubFlow.app`。解压 zip 后拖到「应用程序」。首次打开若被拦截，按住 Control 点击图标再选打开。
+macOS 发布包是 GitHub Actions 按同一套源码打出的 `SubFlow.app`（Apple Silicon）。解压 zip 后拖到「应用程序」。首次打开若被拦截，按住 Control 点击图标再选打开。
 
 本机从源码构建：
 
@@ -20,8 +20,6 @@ macOS 发布包是 GitHub Actions 按同一套源码打出的 `SubFlow.app`。�
 bash scripts/build-macos.sh
 # 产物：dist/SubFlow.app
 ```
-
-Windows 从源码重打：
 
 ```powershell
 .\scripts\build-windows.ps1
@@ -31,20 +29,35 @@ Windows 从源码重打：
 ## 第一次使用
 
 1. 打开 [https://api.meding.site](https://api.meding.site) 领取 API 令牌。
-2. 在「API 令牌」粘贴后点「保存令牌」，再点「获取模型」，从列表选翻译模型。
+2. 在「API 令牌」粘贴后点「保存令牌」，再点「获取模型」，从列表选翻译模型（BAAI / 智源条目不会出现）。
 3. 左侧拖入 MP4 / MKV / MOV / WEBM，或右侧粘贴 YouTube / Bilibili 链接后点「下载」。
 4. 确认源语言、目标语言、字幕模式、识别引擎、识别模型。
 5. 需要烧录成片时勾选「烧录到视频」。
-6. 填好输出路径，点「开始处理」。
+6. 需要改字幕颜色时，打开「更多选项」，点中文 / 英文字幕色块。
+7. 填好输出路径，点「开始处理」。
 
 进度以 `0%`、`7%`、`100%` 这种整数百分比显示。处理日志在窗口底部。
+
+## 自定义字幕烧录颜色
+
+在「更多选项」里有两个色块：
+
+| 控件 | 默认 | 作用 |
+| --- | --- | --- |
+| 中文字幕颜色 | `#FFFFFF` | 写入 ASS 的中文轨并烧进成片 |
+| 英文字幕颜色 | `#F2F2F2` | 写入 ASS 的英文轨并烧进成片 |
+
+点击色块打开系统选色器。颜色保存在本机配置目录，下次启动沿用。
+
+- 只改颜色、不改视频：重渲 ASS 并重烧，**不重跑识别 / 翻译**
+- 命令行等价：`--zh-color "#FFD400" --en-color "#E8E8E8"`
 
 ## 主界面字段
 
 | 区域 | 作用 |
 | --- | --- |
 | 上传视频 | 拖放或点击选择本地文件 |
-| 视频链接 | 远程地址入库，下载完成后进入同一条流水线 |
+| 视频链接 | 远程地址入库；游客失败后读取本机浏览器登录 Cookie |
 | 源语言 / 目标语言 | 识别语言与翻译方向 |
 | 字幕模式 | 中英双语，或单行 Netflix |
 | 识别引擎 | Whisper（默认）或 WhisperX（词级更准；未就绪时自动回退） |
@@ -56,7 +69,7 @@ Windows 从源码重打：
 
 | 选项 | 作用 |
 | --- | --- |
-| 中文字幕颜色 / 英文字幕颜色 | 点色块自选，写入 ASS 并烧录；只改颜色会重渲字幕，不重跑识别 |
+| 中文字幕颜色 / 英文字幕颜色 | 点色块自选，写入 ASS 并烧录 |
 | 电影级润色 | 翻译后走 reflect / adapt，措辞更稳，更耗配额 |
 | 从视频生成术语 | 先抽术语再翻译，专有名词更稳 |
 | 术语 | 本机 JSON / YAML 术语表（可选） |
@@ -71,9 +84,11 @@ Windows 从源码重打：
 ## 本机构件
 
 - API 令牌：Windows 凭据管理器，失败时写入 `%APPDATA%\SubFlow\`
+- 字幕颜色：`%APPDATA%\SubFlow\`（macOS / Linux 为用户配置目录）
 - Whisper 权重：本机缓存，按模型名下载
 - WhisperX：需要独立 runtime；打包版可按需准备，失败则回退 Whisper
-- 官方 Windows 包**不内置** PyTorch / WhisperX / GPT-SoVITS 权重
+- 官方客户端**不内置** PyTorch / WhisperX / GPT-SoVITS 权重
+- 批量 / 无界面处理可用 Docker 镜像 `crazymsn/subflow:latest`
 
 ## 不要做
 

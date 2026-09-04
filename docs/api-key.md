@@ -22,7 +22,7 @@
 
 旧版 `bilingual-sub` 路径仍会被读取，便于升级后沿用已保存的 Key。
 
-环境变量优先：`SUBFLOW_API_KEY` 或 `MEDING_API_KEY`。Docker 用 `.env` 注入，**不要写进镜像**。
+环境变量优先：`SUBFLOW_API_KEY` 或 `MEDING_API_KEY`。Docker 用 `.env` 注入到 `crazymsn/subflow:latest`，**不要写进镜像、不要提交 `.env`**。
 
 ## 命令
 

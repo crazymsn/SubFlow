@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "subflow"
-version = "1.2.0"
+version = "1.2.1"
 description = "SubFlow 语幕 — 新一代 AI 视频语音识别、自动翻译、字幕生成工具（深度云创科技）"
 readme = "README.md"
 license = "MIT"
@@ -53,7 +53,6 @@ packages = ["src/bilingual_sub"]
 "config" = "bilingual_sub/_data/config"
 "fonts" = "bilingual_sub/_data/fonts"
 "assets/brand" = "bilingual_sub/_data/brand"
-"src/bilingual_sub/i18n/locales" = "bilingual_sub/i18n/locales"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

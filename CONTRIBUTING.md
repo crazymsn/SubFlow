@@ -15,7 +15,7 @@ pytest tests/unit --cov=bilingual_sub.core --cov-report=term-missing -o addopts=
 mypy src/bilingual_sub
 ```
 
-`.verify/` 是本机截图与冒烟产物，不要提交。
+`.verify/`、`dist/`、`build/` 是本机产物，不要提交。Docker 官方镜像名为 `crazymsn/subflow`，令牌只放 `.env`。
 
 ## PR 检查清单
 
