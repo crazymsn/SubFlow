@@ -34,6 +34,7 @@ def translate_cues(
     source_lang: str = "zh",
     target_lang: str = "en",
     glossary_block: str = "",
+    control=None,
 ) -> tuple[list[Cue], TranslateStats, list[str]]:
     key = api_key or get_api_key()
     if not key and client is None:
@@ -69,6 +70,8 @@ def translate_cues(
         pending.append(zh)
 
     for i in range(0, len(pending), batch_size):
+        if control:
+            control.wait_if_paused()
         batch = pending[i : i + batch_size]
         try:
             results = meding.translate_batch(

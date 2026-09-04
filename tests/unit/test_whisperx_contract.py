@@ -2,7 +2,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from bilingual_sub.adapters.asr_protocol import AsrResult
-from bilingual_sub.adapters.whisperx_backend import WhisperXBackend, whisperx_available
+from bilingual_sub.adapters.whisperx_backend import (
+    WhisperXBackend,
+    ensure_whisperx_runtime,
+    whisperx_available,
+)
 from bilingual_sub.models import JobConfig, Segment
 
 
@@ -31,8 +35,15 @@ def test_default_job_still_whisper():
     assert cfg.asr_backend == "whisper"
 
 
+def test_ensure_skips_when_not_frozen(monkeypatch):
+    monkeypatch.delenv("SUBFLOW_PROVISION_WX", raising=False)
+    monkeypatch.setattr("bilingual_sub.adapters.whisperx_backend.find_whisperx_python", lambda: None)
+    monkeypatch.setattr("bilingual_sub.adapters.whisperx_backend.should_provision_whisperx", lambda: False)
+    assert ensure_whisperx_runtime() is None
+
+
 def test_available_false_when_import_fails():
-    with patch("bilingual_sub.adapters.whisperx_backend.find_whisper_python", return_value=None):
+    with patch("bilingual_sub.adapters.whisperx_backend.find_whisperx_python", return_value=None):
         assert whisperx_available() is False
     backend = WhisperXBackend()
     with patch.object(backend, "available", return_value=False):

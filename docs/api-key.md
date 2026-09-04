@@ -1,22 +1,28 @@
-# API Key 配置（语幕 SubFlow）
+# API 令牌 — SubFlow 语幕
 
-## 获取 Key
+翻译与云端配音走 [meding](https://api.meding.site) 的 OpenAI 兼容接口。识别在本机完成，不消耗该令牌。
 
-从 meding 运营渠道获取 API Key（占位，待运营补链接）。
+## 获取
+
+打开 [https://api.meding.site](https://api.meding.site)（客户端内「API 分发站」同一地址），按站点说明领取 Key。
 
 ## 承诺
 
-- Key **只保存在本机**（Windows Credential Manager / macOS Keychain / Linux secretstorage）
+- 令牌**只保存在本机**
 - 工具**不上传**、**不汇聚**、**不共享** Key
 - 日志自动脱敏，异常栈不含 Authorization 头
 
 ## 存储位置
 
 | 平台 | 主存储 | 兜底 |
-|------|--------|------|
-| Windows | Credential Manager | `%APPDATA%\bilingual-sub\credentials.json` (0600) |
-| macOS | Keychain | `~/.config/bilingual-sub/credentials.json` |
-| Linux | secretstorage | `~/.config/bilingual-sub/credentials.json` |
+| --- | --- | --- |
+| Windows | Credential Manager（服务名 `subflow`） | `%APPDATA%\SubFlow\users\<用户>\credentials.json` |
+| macOS | Keychain | `~/.config/subflow/users/<用户>/credentials.json` |
+| Linux | secretstorage | `~/.config/subflow/users/<用户>/credentials.json` |
+
+旧版 `bilingual-sub` 路径仍会被读取，便于升级后沿用已保存的 Key。
+
+环境变量优先：`SUBFLOW_API_KEY` 或 `MEDING_API_KEY`。Docker 用 `.env` 注入，**不要写进镜像**。
 
 ## 命令
 
@@ -28,15 +34,15 @@ subflow config show
 subflow config delete-api-key
 ```
 
-Docker 用环境变量 `SUBFLOW_API_KEY`，不要写进镜像。
+桌面客户端：粘贴令牌 →「保存令牌」→「获取模型」→ 下拉选择。留空保存表示沿用本机已有令牌。
 
-## 轮换 Key
+## 轮换
 
 ```bash
-bilingual-sub config delete-api-key
-bilingual-sub config set-api-key
+subflow config delete-api-key
+subflow config set-api-key
 ```
 
 ## 多用户同机
 
-各 OS 账户凭据隔离，互不可见。
+按操作系统账户隔离凭据，互不可见。

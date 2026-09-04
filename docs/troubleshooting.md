@@ -1,24 +1,33 @@
-# 故障排除
+# 故障排除 — SubFlow 语幕
 
 | 现象 | 原因 | 处理 |
-|------|------|------|
-| 字幕不显示 | fontsdir 错误或字体缺失 | 检查 `fonts/` 目录；运行 `doctor` |
-| 烧录失败（中文路径） | ffmpeg subtitles 滤镜路径问题 | 工具会自动 copy 到 ASCII workdir |
-| 音画时长变短 | 误设 fps 滤镜 | 本工具禁止改帧率，保持 `-c:a copy` |
-| 英文空白 | API 失败 | 查看 `report.json` 的 `missing_en_samples` |
-| 字幕太小/太大 | preset 不匹配 | `--preset no-plate-large` 或编辑 yaml |
-| doctor 报 whisper 缺失 | 未装 cuda 可选依赖 | `pip install bilingual-sub[cuda]` |
-| 401 / API key | Key 无效或未配置 | `bilingual-sub config set-api-key` |
-| 字幕出画 / 只在 2560×1600 正常 | 旧版写死坐标 | 已按帧高缩放；换 preset 或升级版本 |
-| 无音轨 | 视频没有音频 | 工具会报错退出，需有语音轨 |
+| --- | --- | --- |
+| 双击 exe 报找不到 Qt / DLL | 只复制了 exe，或缺少 VC++ 运行库 | 整夹启动；安装 [VC++ 2015–2022 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) |
+| 启动即 WinError 127 | 包内误带了外来 ICU DLL | 官方构建脚本会删掉 `_internal/icu*.dll`；请用 Releases 包或重新 `build-windows.ps1` |
+| 点开始提示「请先选择视频」 | 未拖入文件且未完成链接下载 | 拖入视频，或粘贴链接后先点「下载」 |
+| 提示需要令牌 / 模型 | 未保存 Key 或未拉取列表 | 保存令牌后点「获取模型」并选中一项 |
+| 输出路径不能和原片相同 | 会覆盖源文件 | 换一个文件名或文件夹 |
+| 识别很慢 / 内存暴涨 | `large` 模型 + CPU | 改用 `small` / `medium`，或装 CUDA 后走源码 `[cuda]` |
+| 日志出现回退 Whisper | 本机没有可用的 WhisperX runtime | 属预期；要词级对齐需单独准备 WhisperX |
+| 字幕不显示 | fontsdir 错误或字体缺失 | 检查 `fonts/`；运行 `subflow doctor` |
+| 烧录失败（中文路径） | ffmpeg subtitles 滤镜怕非 ASCII | 工具会拷到 ASCII 工作目录再烧 |
+| 音画时长变短 | 误改帧率 | 本工具禁止改 fps，音频 `-c:a copy` |
+| 英文空白 | 翻译 API 失败 | 看作业 `report.json` 的 `missing_en_samples` |
+| 字幕太小 / 太大 | preset 不匹配分辨率 | `--preset no-plate-large` 或改 yaml；字号按帧高缩放 |
+| 字幕出画 | 旧版写死 2560×1600 坐标 | 升级后已按画面缩放，换 preset 即可 |
+| doctor 报 whisper 缺失 | 未装识别依赖 | `pip install -e ".[cuda]"` 或使用 Docker |
+| 401 | Key 无效或未配置 | `subflow config set-api-key` |
+| 429 / 5xx | 配额或服务端抖动 | 客户端会按 1s / 2s / 4s 重试三次 |
+| 无音轨 | 视频没有音频 | 工具报错退出，需有语音轨 |
+| 无网不能翻译 | 翻译走 meding | 可对已译作业 `--resume-from render` |
 
 ## 退出码
 
 | Code | 含义 |
-|------|------|
+| --- | --- |
 | 0 | 成功 |
 | 1 | 输入错误 |
 | 2 | 环境不满足 |
-| 3 | API Key 问题 |
+| 3 | API 令牌问题 |
 | 4 | 处理中断 |
-| 5 | 部分成功（有 missing_en） |
+| 5 | 部分成功（存在 missing_en） |

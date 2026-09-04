@@ -8,14 +8,20 @@ from bilingual_sub.adapters.ffmpeg import FfmpegError, find_ffmpeg, run_cmd
 logger = logging.getLogger(__name__)
 
 
-def extract_wav(video: Path, wav_out: Path, *, preview_sec: float | None = None) -> None:
+def extract_wav(
+    video: Path,
+    wav_out: Path,
+    *,
+    preview_sec: float | None = None,
+    control=None,
+) -> None:
     wav_out.parent.mkdir(parents=True, exist_ok=True)
     args = [find_ffmpeg(), "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000"]
     if preview_sec:
         args[2:2] = ["-t", str(preview_sec)]
     args.append(str(wav_out))
     try:
-        run_cmd(args)
+        run_cmd(args, control=control)
     except FfmpegError as exc:
         msg = str(exc).lower()
         if "does not contain any stream" in msg or "output file #" in msg or "no audio" in msg:
@@ -31,6 +37,7 @@ def detect_silences(
     *,
     noise_db: float = -32,
     min_duration: float = 0.35,
+    control=None,
 ) -> list[tuple[float, float]]:
     """Parse ffmpeg silencedetect output into (start, end) silence islands."""
     proc = run_cmd(
@@ -46,6 +53,7 @@ def detect_silences(
             "-",
         ],
         check=False,
+        control=control,
     )
     text = proc.stderr or ""
     starts: list[float] = []

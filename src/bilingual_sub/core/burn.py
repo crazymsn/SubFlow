@@ -5,6 +5,7 @@ from pathlib import Path
 
 from bilingual_sub.adapters.ffmpeg import escape_subtitles_path, find_ffmpeg, has_nvenc, run_cmd
 from bilingual_sub.config import bundled_fonts_dir
+from bilingual_sub.core.control import JobStopped
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ def burn_subtitles(
     encoder: str = "auto",
     cq: int = 18,
     preset: str = "p4",
+    control=None,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     fonts_dir = bundled_fonts_dir()
@@ -66,7 +68,9 @@ def burn_subtitles(
 
     args.append(str(output))
     try:
-        run_cmd(args)
+        run_cmd(args, control=control)
+    except JobStopped:
+        raise
     except Exception as exc:
         if enc != "h264_nvenc":
             raise
@@ -92,5 +96,5 @@ def burn_subtitles(
             str(max(18, cq)),
             str(output),
         ]
-        run_cmd(retry)
+        run_cmd(retry, control=control)
     logger.info("burned subtitles -> %s", output)

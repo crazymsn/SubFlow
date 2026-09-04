@@ -13,4 +13,7 @@ build/
 credentials.json
 data/*
 !data/.gitkeep
+.verify/
+.tmp-*
+*.zip
 

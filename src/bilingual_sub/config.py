@@ -170,6 +170,13 @@ def default_glossary_path() -> Path:
     return _bundled_config_dir() / "glossary.example.yaml"
 
 
+def load_ui_theme() -> str:
+    data = _load_yaml(_user_config_path())
+    ui = data.get("ui") if isinstance(data.get("ui"), dict) else {}
+    theme = str(ui.get("theme") or "light")
+    return theme if theme in {"light", "dark"} else "light"
+
+
 def save_user_overrides(overrides: dict[str, Any]) -> Path:
     path = _user_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -52,19 +52,36 @@ def find_ffprobe() -> str:
     return exe
 
 
-def run_cmd(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run_cmd(args: list[str], *, check: bool = True, control=None) -> subprocess.CompletedProcess[str]:
     logger.debug("run: %s", " ".join(args))
-    proc = subprocess.run(
+    if control is None:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **hidden_run_kwargs(),
+        )
+        if check and proc.returncode != 0:
+            raise FfmpegError(proc.stderr.strip() or proc.stdout.strip() or "ffmpeg failed")
+        return proc
+
+    control.check()
+    popen = subprocess.Popen(
         args,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
         **hidden_run_kwargs(),
     )
-    if check and proc.returncode != 0:
-        raise FfmpegError(proc.stderr.strip() or proc.stdout.strip() or "ffmpeg failed")
-    return proc
+    out, err = control.run_attached(popen)
+    code = 0 if popen.returncode is None else popen.returncode
+    if check and code != 0:
+        raise FfmpegError((err or "").strip() or (out or "").strip() or "ffmpeg failed")
+    return subprocess.CompletedProcess(args, code, out, err)
 
 
 def ffmpeg_version() -> str:

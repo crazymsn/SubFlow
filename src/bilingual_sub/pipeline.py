@@ -13,7 +13,7 @@ from pathlib import Path
 
 from bilingual_sub.adapters.ffmpeg import FfmpegError, copy_to_ascii_workdir, probe_video
 from bilingual_sub.adapters.whisper_backend import load_transcript, transcribe
-from bilingual_sub.adapters.whisperx_backend import WhisperXBackend
+from bilingual_sub.adapters.whisperx_backend import WhisperXBackend, ensure_whisperx_runtime
 from bilingual_sub.adapters.ytdlp import download as ytdlp_download
 from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.config import (
@@ -223,6 +223,7 @@ def _copy_or_burn(
     work: Path,
     settings: AppSettings,
     report: dict,
+    control: JobControl | None = None,
 ) -> Path | None:
     if not config.burn:
         return None
@@ -247,6 +248,7 @@ def _copy_or_burn(
         encoder=settings.burn.encoder,
         cq=settings.burn.cq,
         preset=settings.burn.preset,
+        control=control,
     )
     return dest
 
@@ -322,6 +324,7 @@ def _reexport_if_possible(
     work: Path,
     on_progress: ProgressCb,
     t0: float,
+    control: JobControl | None = None,
 ) -> JobResult | None:
     if not _can_reexport(config, work):
         return None
@@ -340,7 +343,7 @@ def _reexport_if_possible(
     prog("export", 0.85)
     ts = time.time()
     ass_out = _export_subs(config, work, cues, play_res)
-    output_mp4 = _copy_or_burn(config, work, settings, report)
+    output_mp4 = _copy_or_burn(config, work, settings, report, control=control)
     stages = {"export_sec": time.time() - ts}
     prog("done", 1.0)
     return _result_from_work(
@@ -375,7 +378,7 @@ def run(
     stages: dict[str, float] = {}
 
     work = _work_dir(config, settings)
-    reused = _reexport_if_possible(config, settings, work, on_progress, t0)
+    reused = _reexport_if_possible(config, settings, work, on_progress, t0, control=control)
     if reused:
         return reused
     state_path = work / "job_state.json"
@@ -462,7 +465,7 @@ def _run_job(
         _gate(control)
         prog("extract", 0.05)
         ts = time.time()
-        extract_wav(source, speech, preview_sec=preview_sec)
+        extract_wav(source, speech, preview_sec=preview_sec, control=control)
         stages["extract_sec"] = time.time() - ts
         _save_state(work, "extract", {"job_id": job_id}, control=control)
 
@@ -477,6 +480,7 @@ def _run_job(
                 speech,
                 noise_db=settings.silence.noise_db,
                 min_duration=settings.silence.min_duration,
+                control=control,
             )
             silences_path.write_text(json.dumps(silences), encoding="utf-8")
         stages["silence_sec"] = time.time() - ts
@@ -494,6 +498,9 @@ def _run_job(
         used_x = False
         if config.asr_backend == "whisperx":
             backend = WhisperXBackend()
+            if not backend.available():
+                logger.info("正在准备内置 WhisperX 环境…")
+                ensure_whisperx_runtime()
             if backend.available():
                 result = backend.transcribe(
                     speech,
@@ -516,6 +523,7 @@ def _run_job(
                 device=config.device or settings.asr.device,  # type: ignore[arg-type]
                 out_json=transcript_path,
                 on_progress=prog,
+                control=control,
             )
         stages["transcribe_sec"] = time.time() - ts
         _save_state(work, "transcribe", {"job_id": job_id, "asr_backend": "whisperx" if used_x else "whisper"}, control=control)
@@ -602,6 +610,7 @@ def _run_job(
                     source_lang=config.source_lang,
                     target_lang=config.target_lang,
                     glossary_block=glossary.block(),
+                    control=control,
                 )
             if config.source_lang == "zh-Hant" or config.target_lang == "zh-Hant":
                 for cue in cues:
@@ -656,6 +665,7 @@ def _run_job(
             encoder=settings.burn.encoder,
             cq=settings.burn.cq,
             preset=settings.burn.preset,
+            control=control,
         )
         output_mp4 = out
         stages["burn_sec"] = time.time() - ts

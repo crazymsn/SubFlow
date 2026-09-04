@@ -32,6 +32,11 @@ def test_candidates_include_env_and_home_venv(monkeypatch, tmp_path):
     found = [str(p) for p in _python_candidates()]
     assert str(fake) in found
     assert str(home_venv) in found
+    runtime = tmp_path / "roaming" / "SubFlow" / "runtime" / "Scripts" / "python.exe"
+    runtime.parent.mkdir(parents=True, exist_ok=True)
+    runtime.write_text("", encoding="utf-8")
+    found = [str(p) for p in _python_candidates()]
+    assert str(runtime) in found
 
 
 def test_cache_path_under_subflow(monkeypatch, tmp_path):

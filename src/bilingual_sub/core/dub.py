@@ -17,7 +17,7 @@ def clamp_rate(audio_sec: float, target_sec: float) -> float:
     return max(0.90, min(1.15, audio_sec / target_sec))
 
 
-def _audio_duration(path: Path) -> float:
+def _audio_duration(path: Path, control: JobControl | None = None) -> float:
     import json
 
     proc = run_cmd(
@@ -30,7 +30,8 @@ def _audio_duration(path: Path) -> float:
             "-of",
             "json",
             str(path),
-        ]
+        ],
+        control=control,
     )
     data = json.loads(proc.stdout or "{}")
     try:
@@ -39,8 +40,8 @@ def _audio_duration(path: Path) -> float:
         return 0.0
 
 
-def fit_clip(src: Path, dest: Path, target_sec: float) -> None:
-    audio_sec = _audio_duration(src) or target_sec or 1
+def fit_clip(src: Path, dest: Path, target_sec: float, control: JobControl | None = None) -> None:
+    audio_sec = _audio_duration(src, control=control) or target_sec or 1
     target = max(0.4, target_sec)
     rate = clamp_rate(audio_sec, target)
     run_cmd(
@@ -54,7 +55,8 @@ def fit_clip(src: Path, dest: Path, target_sec: float) -> None:
             "-t",
             f"{target:.3f}",
             str(dest),
-        ]
+        ],
+        control=control,
     )
 
 
@@ -63,6 +65,7 @@ def mix_timeline(
     clips: list[tuple[float, Path]],
     output: Path,
     duration: float,
+    control: JobControl | None = None,
 ) -> None:
     if not clips:
         raise RuntimeError("no dub clips")
@@ -97,7 +100,7 @@ def mix_timeline(
             str(output),
         ]
     )
-    run_cmd(args)
+    run_cmd(args, control=control)
 
 
 def dub_cues(
@@ -126,8 +129,8 @@ def dub_cues(
         if not raw.is_file():
             provider.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=raw), control=control)
         if not fitted.is_file():
-            fit_clip(raw, fitted, max(0.4, cue.end - cue.start))
+            fit_clip(raw, fitted, max(0.4, cue.end - cue.start), control=control)
         clips.append((cue.start, fitted))
     output.parent.mkdir(parents=True, exist_ok=True)
-    mix_timeline(video, clips, output, duration)
+    mix_timeline(video, clips, output, duration, control=control)
     return output

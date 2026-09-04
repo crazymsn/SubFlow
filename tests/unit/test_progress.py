@@ -1,4 +1,4 @@
-from bilingual_sub.gui.progress import should_log_stage, stage_text
+from bilingual_sub.gui.progress import format_pct, should_log_stage, stage_text
 from bilingual_sub.i18n import set_locale
 
 
@@ -18,3 +18,9 @@ def test_other_stages_log_once():
     assert stage_text("burn") == "烧录视频"
     assert stage_text("ingest") == "下载视频"
     assert stage_text("dub") == "配音"
+
+
+def test_counter_pads_to_two_digits():
+    assert format_pct(0) == "0%"
+    assert format_pct(7) == "7%"
+    assert format_pct(100) == "100%"

@@ -1,10 +1,13 @@
 from pathlib import Path
 
 from bilingual_sub.gui.output_path import (
+    copy_finished_outputs,
     default_output_mp4,
     next_output_path,
     relocate_output,
     resolve_output_mp4,
+    sidecar_ass,
+    sidecar_srt,
 )
 
 
@@ -49,6 +52,23 @@ def test_next_output_keeps_custom_path_when_video_changes():
     nxt = Path(r"C:\media\two.mp4")
     got = next_output_path(r"D:\exports\final.mp4", prev, nxt)
     assert got == Path(r"D:\exports\final.mp4")
+
+
+def test_copy_finished_outputs_renames_sidecars(tmp_path: Path):
+    src_dir = tmp_path / "old"
+    src_dir.mkdir()
+    src_mp4 = src_dir / "talk-中英字幕.mp4"
+    src_srt = src_dir / "talk-中英字幕.bilingual.srt"
+    src_ass = src_dir / "talk-中英字幕.bilingual.ass"
+    src_mp4.write_bytes(b"mp4-bytes")
+    src_srt.write_text("srt", encoding="utf-8")
+    src_ass.write_text("ass", encoding="utf-8")
+    dest = tmp_path / "exports" / "final.mp4"
+    copied = copy_finished_outputs(dest, src_mp4=src_mp4, src_srt=src_srt, src_ass=src_ass)
+    assert dest.read_bytes() == b"mp4-bytes"
+    assert sidecar_srt(dest).read_text(encoding="utf-8") == "srt"
+    assert sidecar_ass(dest).read_text(encoding="utf-8") == "ass"
+    assert copied["mp4"] == dest
 
 
 def test_next_output_refreshes_when_still_on_auto_default():

@@ -10,9 +10,11 @@ PRODUCT_FULL = f"{PRODUCT_EN} {PRODUCT_ZH}"
 COMPANY_ZH = "深度云创科技"
 COMPANY_EN = "DeepCloud"
 WINDOW_TITLE = COMPANY_ZH
-TAGLINE = "中文视频一键双语字幕"
+TAGLINE = "新一代 AI 视频语音识别、自动翻译、字幕生成工具"
 CLI_NAME = "subflow"
 APP_USER_MODEL_ID = "tech.deepcloud.subflow"
+API_PORTAL_URL = "https://api.meding.site"
+GITHUB_URL = "https://github.com/crazymsn/SubFlow"
 
 
 def brand_dir() -> Path:

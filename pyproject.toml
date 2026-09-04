@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "subflow"
-version = "1.0.0"
-description = "SubFlow — 中文视频一键双语字幕（深度云创科技）"
+version = "1.1.0"
+description = "SubFlow 语幕 — 新一代 AI 视频语音识别、自动翻译、字幕生成工具（深度云创科技）"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

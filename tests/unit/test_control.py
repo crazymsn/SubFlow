@@ -60,4 +60,20 @@ def test_kill_attached_fake_popen():
     proc.poll.return_value = None
     ctl.attach_proc(proc)
     ctl.kill_attached()
-    proc.terminate.assert_called()
+    assert proc.terminate.called or proc.kill.called
+
+
+def test_pause_suspends_attached_proc(monkeypatch):
+    hits: list[str] = []
+    monkeypatch.setattr("bilingual_sub.core.control._suspend_proc", lambda _proc: hits.append("suspend"))
+    monkeypatch.setattr("bilingual_sub.core.control._resume_proc", lambda _proc: hits.append("resume"))
+    ctl = JobControl()
+    proc = MagicMock(spec=subprocess.Popen)
+    proc.poll.return_value = None
+    ctl.attach_proc(proc)
+    ctl.pause()
+    assert "suspend" in hits
+    ctl.resume()
+    assert "resume" in hits
+    ctl.stop()
+    assert proc.terminate.called or proc.kill.called

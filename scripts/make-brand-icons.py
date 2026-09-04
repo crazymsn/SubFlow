@@ -54,6 +54,22 @@ def _ink_to_rgba(im: Image.Image, fill: tuple[int, int, int, int]) -> Image.Imag
     return rgba
 
 
+def _official_lockup_icon(im: Image.Image, size: int, pad_ratio: float = 0.08) -> Image.Image:
+    """Client icon = uploaded lockup on a white plate."""
+    rgb = im.convert("RGB")
+    box = _bbox_ink(rgb)
+    cropped = rgb.crop(box)
+    canvas = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+    pad = max(4, int(size * pad_ratio))
+    inner = max(1, size - pad * 2)
+    w, h = cropped.size
+    scale = inner / max(w, h)
+    nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+    fitted = cropped.resize((nw, nh), Image.Resampling.LANCZOS).convert("RGBA")
+    canvas.paste(fitted, ((size - nw) // 2, (size - nh) // 2))
+    return canvas
+
+
 def _square(im: Image.Image, fill: tuple[int, int, int, int], pad_ratio: float) -> Image.Image:
     """Scale the mark to fill a square. Tiny pad only so Windows 16px does not clip."""
     if im.mode != "RGBA":
@@ -92,12 +108,13 @@ def main() -> None:
     full.save(master_path, "PNG")
 
     cloud = _cloud_only(master)
-    mark = _square(_ink_to_rgba(cloud, CREAM), (0, 0, 0, 0), 0.02)
+    mark = _square(_ink_to_rgba(cloud, (20, 24, 32, 255)), (0, 0, 0, 0), 0.02)
     mark.save(dest / "subflow-mark.png", "PNG")
 
-    ico_mark = _square(cloud.convert("RGBA"), (255, 255, 255, 255), 0.04)
+    ico_mark = _official_lockup_icon(master, 256)
     ico_sizes = [(16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48), (64, 64), (128, 128), (256, 256)]
     ico_mark.save(dest / "subflow.ico", format="ICO", sizes=ico_sizes)
+    ico_mark.save(dest / "subflow-icon.png", "PNG")
     print(f"wrote {master_path} {full.size}")
     print(f"wrote {dest / 'subflow-mark.png'} {mark.size}")
     print(f"wrote {dest / 'subflow.ico'} {ico_mark.size}")

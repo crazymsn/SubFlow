@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from bilingual_sub.adapters.procwin import gui_python, hidden_run_kwargs
+from bilingual_sub.core.control import JobStopped
 from bilingual_sub.models import Segment, WordSpan
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,23 @@ def worker_script() -> Path:
     raise RuntimeError("whisper_worker.py missing from the client bundle")
 
 
+def runtime_home() -> Path:
+    if os.name == "nt":
+        return Path(os.environ.get("APPDATA", Path.home())) / "SubFlow" / "runtime"
+    return Path.home() / ".local" / "share" / "subflow" / "runtime"
+
+
+def _runtime_roots() -> list[Path]:
+    roots: list[Path] = []
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).resolve().parent
+        roots.extend((exe / "runtime", exe / "_internal" / "runtime"))
+    else:
+        roots.append(Path(__file__).resolve().parents[3] / "runtime")
+    roots.append(runtime_home())
+    return roots
+
+
 def _cache_path() -> Path:
     if os.name == "nt":
         root = Path(os.environ.get("APPDATA", Path.home())) / "SubFlow"
@@ -127,6 +145,11 @@ def _python_candidates() -> list[Path]:
     cached = _cache_path()
     if cached.is_file():
         add(cached.read_text(encoding="utf-8").strip())
+    for root in _runtime_roots():
+        add(root / "python.exe")
+        add(root / "Scripts" / "python.exe")
+        add(root / "bin" / "python3")
+        add(root / "bin" / "python")
     if not getattr(sys, "frozen", False):
         add(sys.executable)
     for name in ("python", "python3"):
@@ -160,10 +183,10 @@ def _python_candidates() -> list[Path]:
     return found
 
 
-def _python_has_whisper(python: Path) -> bool:
+def _python_has_module(python: Path, module: str) -> bool:
     try:
         proc = subprocess.run(
-            [str(gui_python(python)), "-c", "import whisper"],
+            [str(gui_python(python)), "-c", f"import {module}"],
             capture_output=True,
             text=True,
             timeout=12,
@@ -172,6 +195,10 @@ def _python_has_whisper(python: Path) -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     return proc.returncode == 0
+
+
+def _python_has_whisper(python: Path) -> bool:
+    return _python_has_module(python, "whisper")
 
 
 def find_whisper_python() -> Path | None:
@@ -237,6 +264,7 @@ def _transcribe_external(
     device: str,
     out_json: Path,
     on_progress: Callable[[str, float], None] | None = None,
+    control=None,
 ) -> list[Segment]:
     script = worker_script()
     runner = gui_python(python)
@@ -266,13 +294,19 @@ def _transcribe_external(
             env=env,
             **hidden_run_kwargs(),
         )
+    if control:
+        control.attach_proc(proc)
     started = time.time()
     while proc.poll() is None:
+        if control:
+            control.wait_if_paused()
         elapsed = time.time() - started
         pct = 0.20 + min(0.24, elapsed / 900.0 * 0.24)
         if on_progress:
             on_progress("transcribe", pct)
         time.sleep(1.5)
+    if control and control.is_stopped():
+        raise JobStopped()
     if proc.returncode != 0:
         detail = ""
         if log_path.is_file():
@@ -291,19 +325,25 @@ def transcribe(
     device: str = "auto",
     out_json: Path | None = None,
     on_progress: Callable[[str, float], None] | None = None,
+    control=None,
 ) -> list[Segment]:
+    if control:
+        control.wait_if_paused()
     try:
         import whisper  # noqa: F401
 
         if on_progress:
             on_progress("transcribe", 0.22)
-        return _transcribe_inprocess(
+        result = _transcribe_inprocess(
             wav,
             model_name=model_name,
             language=language,
             device=device,
             out_json=out_json,
         )
+        if control:
+            control.check()
+        return result
     except ImportError:
         python = find_whisper_python()
         if python is None:
@@ -317,6 +357,7 @@ def transcribe(
             device=device,
             out_json=target,
             on_progress=on_progress,
+            control=control,
         )
 
 
