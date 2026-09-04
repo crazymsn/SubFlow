@@ -1,0 +1,1 @@
+# Local credential storage

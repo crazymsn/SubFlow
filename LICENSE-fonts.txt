@@ -1,0 +1,7 @@
+Fonts bundled under fonts/ may include Microsoft YaHei (msyh.ttc, msyhbd.ttc).
+
+Microsoft YaHei is a proprietary font. End users must ensure they have
+a valid license to use and redistribute these files in their jurisdiction.
+
+For redistribution without a YaHei license, replace fonts/ with Noto Sans SC
+from Google Fonts (SIL Open Font License).

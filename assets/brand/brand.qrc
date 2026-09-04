@@ -1,0 +1,7 @@
+<RCC>
+  <qresource prefix="/brand">
+    <file alias="check-off.png">check-off.png</file>
+    <file alias="check-on.png">check-on.png</file>
+    <file alias="chevron-down.png">chevron-down.png</file>
+  </qresource>
+</RCC>

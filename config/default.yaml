@@ -1,0 +1,31 @@
+video:
+  work_dir: auto
+  copy_to_ascii_path: true
+
+asr:
+  model: medium
+  language: zh
+  device: auto
+
+silence:
+  noise_db: -32
+  min_duration: 0.35
+
+cues:
+  min_duration: 0.90
+  max_duration: 8.0
+  silence_split_threshold: 0.55
+  snap_tolerance: 0.22
+
+translate:
+  model: gpt-4o-mini
+  batch_size: 30
+  cache_enabled: true
+  max_en_chars: 120
+
+burn:
+  encoder: auto
+  cq: 18
+  preset: p4
+
+style_preset: no-plate-large

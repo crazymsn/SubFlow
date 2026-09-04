@@ -1,0 +1,96 @@
+# ASR correction glossary — fix proper nouns only; keep spoken wording.
+replacements:
+  - from: prefuel
+    to: Prefill
+  - from: Prefuel
+    to: Prefill
+  - from: kvcatch
+    to: KV cache
+  - from: KVcatch
+    to: KV cache
+  - from: KV catch
+    to: KV cache
+  - from: 体温
+    to: 提问
+  - from: 图得很慢
+    to: 吐得很慢
+  - from: 提词越长
+    to: 提示词越长
+  - from: 大元模型
+    to: 大语言模型
+  - from: 蚕素
+    to: 参数
+  - from: DeepStake
+    to: DeepSeek
+  - from: DeepSec
+    to: DeepSeek
+  - from: DeepSync
+    to: DeepSeek
+  - from: 千文3.827B
+    to: Qwen 3.8 27B
+  - from: 千文3.8B
+    to: Qwen3 8B
+  - from: OSS 20B
+    to: gpt-oss-20B
+  - from: GOS是120B
+    to: gpt-oss-120B
+  - from: OS4 120B
+    to: gpt-oss-120B
+  - from: Q1 3.827B
+    to: Qwen 3.8 27B
+  - from: 5142G
+    to: 512GB
+  - from: 混源
+    to: 混元
+  - from: 上下纹
+    to: 上下文
+  - from: GLMGPU的5.3
+    to: GLM-5.3
+  - from: GLM5.3
+    to: GLM-5.3
+  - from: 抓劲见肘
+    to: 捉襟见肘
+  - from: 晶能的86749
+    to: 竟然要 86,749
+  - from: DX Pro 6000
+    to: RTX PRO 6000
+  - from: RTX Pro 6000
+    to: RTX PRO 6000
+  - from: Orama
+    to: Ollama
+  - from: 等等挡
+    to: 等等党
+  - from: 揭露我们的
+    to: 调用我们的
+  - from: 500 XRGB
+    to: 512GB
+  - from: G580
+    to: 高配
+  - from: Mac的Studio
+    to: Mac Studio
+  - from: MacStudio
+    to: Mac Studio
+  - from: 直面的token
+    to: 直观的 Token
+  - from: token
+    to: Token
+  - from: 塞出更大
+    to: 塞下更大
+  - from: 一个比是
+    to: 体积是
+  - from: Q1的
+    to: Qwen 的
+  - from: M5 MiniMax的M5模型
+    to: MiniMax 的 M3 模型
+  - from: V4 Flash
+    to: V4-Flash
+  - from: V4 Pro
+    to: V4-Pro
+
+regex:
+  - pattern: '(?<!\d),(?!\d)'
+    replace: "，"
+
+punctuation:
+  "?": "？"
+  "!": "！"

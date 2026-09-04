@@ -1,0 +1,14 @@
+.git
+.venv
+.pytest_cache
+__pycache__
+*.egg-info
+dist
+build
+data
+tests
+.coverage
+htmlcov
+*.md
+!README.md
+.env

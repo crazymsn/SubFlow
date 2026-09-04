@@ -1,0 +1,25 @@
+name: no-plate-large
+style:
+  play_res: auto
+  zh:
+    font: Microsoft YaHei
+    size: 80
+    bold: true
+    color: "#FFFFFF"
+    outline: 3.2
+    shadow: 0
+    spacing: 0.8
+  en:
+    font: Microsoft YaHei
+    size: 56
+    bold: false
+    color: "#F2F2F2"
+    outline: 2.6
+    shadow: 0
+    spacing: 1.2
+  layout:
+    cn_y: 1376
+    en_y: 1472
+    anchor: center
+    margin_lr: 160
+  scale_to_fit_width: 2280

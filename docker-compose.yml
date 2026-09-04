@@ -1,0 +1,25 @@
+# 语幕 SubFlow — 开箱即用
+# 1. 复制 .env.example 为 .env 并填入 SUBFLOW_API_KEY
+# 2. 把视频放到 ./data
+# 3. docker compose run --rm subflow run /data/你的视频.mp4 -o /data/out.mp4
+
+services:
+  subflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: subflow:1.0.0
+    environment:
+      SUBFLOW_API_KEY: ${SUBFLOW_API_KEY:-}
+      SUBFLOW_TRANSLATE_MODEL: ${SUBFLOW_TRANSLATE_MODEL:-}
+    volumes:
+      - ./data:/data
+      - whisper-cache:/root/.cache/whisper
+      - subflow-cache:/root/.cache/bilingual-sub
+    working_dir: /data
+    stdin_open: true
+    tty: true
+
+volumes:
+  whisper-cache:
+  subflow-cache:

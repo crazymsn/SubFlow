@@ -1,0 +1,55 @@
+name: Release clients
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    tags:
+      - "v*"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FFmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Install package
+        run: python -m pip install -e ".[gui,packaging]"
+      - name: PyInstaller
+        run: python -m PyInstaller --noconfirm --clean packaging/subflow.spec
+      - name: Bundle ffmpeg and strip ICU
+        shell: pwsh
+        run: |
+          $dist = "dist/SubFlow"
+          $ffmpeg = (Get-Command ffmpeg).Source
+          $probe = (Get-Command ffprobe).Source
+          Copy-Item $ffmpeg (Join-Path $dist "ffmpeg.exe") -Force
+          Copy-Item $probe (Join-Path $dist "ffprobe.exe") -Force
+          $internal = Join-Path $dist "_internal"
+          if (Test-Path $internal) {
+            Get-ChildItem $internal -File -Filter "icu*.dll" | Remove-Item -Force
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubFlow-Windows
+          path: dist/SubFlow
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FFmpeg
+        run: brew install ffmpeg
+      - name: Build .app
+        run: bash scripts/build-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubFlow-macOS
+          path: dist/SubFlow.app
