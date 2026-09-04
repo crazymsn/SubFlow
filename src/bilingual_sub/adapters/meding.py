@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import sqlite3
 import time
@@ -8,6 +9,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from openai import APIStatusError, OpenAI
+
+try:
+    import json_repair
+except ImportError:  # pragma: no cover
+    json_repair = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +32,18 @@ class MedingAuthError(MedingError):
 class MedingClient(Protocol):
     def healthcheck(self) -> bool: ...
     def list_models(self) -> list[str]: ...
-    def translate_batch(self, texts: list[str], *, model: str, max_en_chars: int) -> list[str]: ...
+    def translate_batch(
+        self,
+        texts: list[str],
+        *,
+        model: str,
+        max_en_chars: int,
+        source_lang: str = "zh",
+        target_lang: str = "en",
+        glossary_block: str = "",
+    ) -> list[str]: ...
+
+    def chat_json(self, *, model: str, system: str, user: str) -> dict: ...
 
 
 def parse_model_ids(payload: Any) -> list[str]:
@@ -60,12 +77,14 @@ def parse_model_ids(payload: Any) -> list[str]:
     return out
 
 
-SYSTEM_PROMPT = """You translate Chinese spoken subtitles to English. Rules:
+SYSTEM_PROMPT = """You translate {source_name} spoken subtitles to {target_name}. Rules:
 - One line only, no quotes
 - Spoken/casual tone, not literary
 - Keep product names unchanged (RTX, Prefill, Decode, KV cache, Token, etc.)
+- Honor terminology when provided
 - Do not add explanations
-- Max length: {max_en_chars} characters"""
+- Max length: {max_en_chars} characters
+{glossary}"""
 
 
 class OpenAIMedingClient:
@@ -100,15 +119,47 @@ class OpenAIMedingClient:
             logger.warning("models.list failed: %s", exc)
         return []
 
-    def translate_batch(self, texts: list[str], *, model: str, max_en_chars: int) -> list[str]:
+    def chat_json(self, *, model: str, system: str, user: str) -> dict:
+        resp = self._client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.2,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            if json_repair is None:
+                raise MedingError("JSON parse failed and json_repair is not installed")
+            data = json_repair.loads(content)
+        if not isinstance(data, dict):
+            raise MedingError("chat_json did not return an object")
+        return data
+
+    def translate_batch(
+        self,
+        texts: list[str],
+        *,
+        model: str,
+        max_en_chars: int,
+        source_lang: str = "zh",
+        target_lang: str = "en",
+        glossary_block: str = "",
+    ) -> list[str]:
         if not texts:
             return []
+        from bilingual_sub.core.langs import prompt_name
+
         numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
         user_msg = (
-            "Translate each numbered Chinese subtitle line to English.\n"
+            f"Translate each numbered {prompt_name(source_lang)} subtitle line to {prompt_name(target_lang)}.\n"
             "Return ONLY the translations, one per line, same order, same count.\n\n"
             f"{numbered}"
         )
+        gloss = f"Terminology:\n{glossary_block}" if glossary_block else ""
         delays = [1.0, 2.0, 4.0]
         last_exc: Exception | None = None
         for attempt, delay in enumerate([0.0] + delays):
@@ -120,7 +171,12 @@ class OpenAIMedingClient:
                     messages=[
                         {
                             "role": "system",
-                            "content": SYSTEM_PROMPT.format(max_en_chars=max_en_chars),
+                            "content": SYSTEM_PROMPT.format(
+                                max_en_chars=max_en_chars,
+                                source_name=prompt_name(source_lang),
+                                target_name=prompt_name(target_lang),
+                                glossary=gloss,
+                            ),
                         },
                         {"role": "user", "content": user_msg},
                     ],

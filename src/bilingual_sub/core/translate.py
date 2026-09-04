@@ -31,6 +31,9 @@ def translate_cues(
     cache_enabled: bool = True,
     api_key: str | None = None,
     client: MedingClient | None = None,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+    glossary_block: str = "",
 ) -> tuple[list[Cue], TranslateStats, list[str]]:
     key = api_key or get_api_key()
     if not key and client is None:
@@ -51,9 +54,14 @@ def translate_cues(
     zh_to_en: dict[str, str] = {}
     pending: list[str] = []
 
+    def _ck(text: str) -> str:
+        if source_lang == "zh" and target_lang == "en" and not glossary_block:
+            return text
+        return f"{source_lang}|{target_lang}|{glossary_block}|{text}"
+
     for zh in unique_zh:
         if cache:
-            hit = cache.get(model, zh)
+            hit = cache.get(model, _ck(zh))
             if hit:
                 zh_to_en[zh] = hit
                 stats.cache_hits += 1
@@ -63,21 +71,35 @@ def translate_cues(
     for i in range(0, len(pending), batch_size):
         batch = pending[i : i + batch_size]
         try:
-            results = meding.translate_batch(batch, model=model, max_en_chars=max_en_chars)
+            results = meding.translate_batch(
+                batch,
+                model=model,
+                max_en_chars=max_en_chars,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                glossary_block=glossary_block,
+            )
             stats.api_calls += 1
             for zh, en in zip(batch, results):
                 zh_to_en[zh] = en
                 if cache:
-                    cache.set(model, zh, en)
+                    cache.set(model, _ck(zh), en)
         except MedingError as exc:
             logger.error("batch translate failed: %s", exc)
             for zh in batch:
                 try:
-                    single = meding.translate_batch([zh], model=model, max_en_chars=max_en_chars)
+                    single = meding.translate_batch(
+                        [zh],
+                        model=model,
+                        max_en_chars=max_en_chars,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        glossary_block=glossary_block,
+                    )
                     stats.api_calls += 1
                     zh_to_en[zh] = single[0]
                     if cache:
-                        cache.set(model, zh, single[0])
+                        cache.set(model, _ck(zh), single[0])
                 except MedingError:
                     missing.append(zh)
 

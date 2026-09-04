@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from bilingual_sub.adapters.procwin import gui_python, hidden_run_kwargs
-from bilingual_sub.models import Segment
+from bilingual_sub.models import Segment, WordSpan
 
 logger = logging.getLogger(__name__)
 
@@ -324,11 +324,25 @@ def load_transcript(path: Path) -> list[Segment]:
     data = json.loads(path.read_text(encoding="utf-8"))
     segs = []
     for seg in data.get("segments") or []:
+        words = []
+        for raw in seg.get("words") or []:
+            try:
+                words.append(
+                    WordSpan(
+                        start=float(raw.get("start") or 0),
+                        end=float(raw.get("end") or 0),
+                        text=str(raw.get("word") or raw.get("text") or "").strip(),
+                        score=float(raw["score"]) if raw.get("score") is not None else None,
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
         segs.append(
             Segment(
                 start=float(seg["start"]),
                 end=float(seg["end"]),
                 text=str(seg.get("text") or "").strip(),
+                words=tuple(w for w in words if w.text),
             )
         )
     return segs

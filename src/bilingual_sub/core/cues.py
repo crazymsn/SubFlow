@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 
 from bilingual_sub.core.glossary import Glossary
-from bilingual_sub.models import Cue, Segment
+from bilingual_sub.models import Cue, Segment, WordSpan
+
+_SENT_END = re.compile(r"[。！？!?；;]")
 
 
 def tidy_zh(zh: str) -> str:
@@ -90,6 +92,45 @@ def long_internal_silence(
     return hits
 
 
+def cues_from_words(segments: list[Segment], glossary: Glossary) -> list[Cue] | None:
+    packed: list[WordSpan] = []
+    for seg in segments:
+        words = list(getattr(seg, "words", ()) or [])
+        if not words:
+            continue
+        packed.extend(words)
+    if not packed:
+        return None
+    out: list[Cue] = []
+    buf: list[WordSpan] = []
+    for word in packed:
+        buf.append(word)
+        if _SENT_END.search(word.text):
+            text = glossary.correct("".join(w.text for w in buf).strip())
+            if text:
+                out.append(
+                    Cue(
+                        start=round(buf[0].start, 2),
+                        end=round(buf[-1].end, 2),
+                        zh=text,
+                        words=list(buf),
+                    )
+                )
+            buf = []
+    if buf:
+        text = glossary.correct("".join(w.text for w in buf).strip())
+        if text:
+            out.append(
+                Cue(
+                    start=round(buf[0].start, 2),
+                    end=round(buf[-1].end, 2),
+                    zh=text,
+                    words=list(buf),
+                )
+            )
+    return out or None
+
+
 def build_cues(
     segments: list[Segment],
     silences: list[tuple[float, float]],
@@ -100,6 +141,9 @@ def build_cues(
     max_duration: float = 8.0,
     silence_split_threshold: float = 0.55,
 ) -> list[Cue]:
+    word_cues = cues_from_words(segments, glossary)
+    if word_cues:
+        return word_cues
     cues: list[tuple[float, float, str]] = []
     for seg in segments:
         if not seg.text.strip():

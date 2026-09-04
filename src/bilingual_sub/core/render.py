@@ -115,6 +115,7 @@ def render_ass_srt(
     preset: StylePreset,
     *,
     play_res: tuple[int, int] | None = None,
+    mode: str = "bilingual",
 ) -> tuple[str, str]:
     style = preset.style
     geo = resolve_play_layout(style, play_res)
@@ -170,6 +171,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f"{{{en_pos}\\b0\\fs{en_fs}{en_tag}\\bord{en_outline}\\shad0\\c{en_color}}}"
             f"{ass_esc(en)}"
         )
+        if mode == "netflix_single":
+            line = (cue.en or cue.zh or "").strip()
+            tag = scale_tag(line, zh_fs, max_w)
+            body = (
+                f"{{{cn_pos}\\b1\\fs{zh_fs}{tag}\\bord{zh_outline}\\shad0\\c{zh_color}}}"
+                f"{ass_esc(line)}"
+            )
+            events.append(f"Dialogue: 0,{ass_time(cue.start)},{ass_time(cue.end)},CN,,0,0,0,,{body}")
+            srt_blocks.append(f"{i}\n{srt_time(cue.start)} --> {srt_time(cue.end)}\n{line}\n")
+            continue
         events.append(f"Dialogue: 1,{ass_time(cue.start)},{ass_time(cue.end)},CN,,0,0,0,,{zh_line}")
         events.append(f"Dialogue: 0,{ass_time(cue.start)},{ass_time(cue.end)},EN,,0,0,0,,{en_line}")
         srt_blocks.append(f"{i}\n{srt_time(cue.start)} --> {srt_time(cue.end)}\n{cue.zh}\n{en}\n")
@@ -184,8 +195,9 @@ def write_subtitles(
     srt_path: Path,
     *,
     play_res: tuple[int, int] | None = None,
+    mode: str = "bilingual",
 ) -> None:
-    ass_text, srt_text = render_ass_srt(cues, preset, play_res=play_res)
+    ass_text, srt_text = render_ass_srt(cues, preset, play_res=play_res, mode=mode)
     ass_path.parent.mkdir(parents=True, exist_ok=True)
     ass_path.write_text(ass_text, encoding="utf-8-sig")
     srt_path.write_text(srt_text, encoding="utf-8")

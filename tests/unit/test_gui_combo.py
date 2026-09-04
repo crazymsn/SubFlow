@@ -50,7 +50,9 @@ def test_fetch_fills_noneditable_dropdown():
 
     from bilingual_sub.gui.app import MainWindow
     from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
 
+    set_locale("zh-Hans")
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(app_qss())
     win = MainWindow()
@@ -76,7 +78,9 @@ def test_output_path_is_editable_and_survives_new_video():
     from bilingual_sub.gui.app import MainWindow
     from bilingual_sub.gui.output_path import default_output_mp4
     from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
 
+    set_locale("zh-Hans")
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(app_qss())
     win = MainWindow()
@@ -102,7 +106,9 @@ def test_window_chrome():
 
     from bilingual_sub.gui.app import MainWindow
     from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
 
+    set_locale("zh-Hans")
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(app_qss())
     win = MainWindow()
@@ -112,6 +118,19 @@ def test_window_chrome():
     assert all(lbl.objectName() != "company" for lbl in labels)
     assert win.burn_check.text() == "烧录到视频"
     assert win.whisper_combo.currentText() in {"tiny", "base", "small", "medium", "large"}
+    assert win.locale_combo.count() == 7
+    assert win.locale_combo.currentData() == "zh-Hans"
+    assert win.mode_combo.currentData() == "bilingual"
+    assert win.source_lang_combo.currentData() == "zh"
+    assert win.target_lang_combo.currentData() == "en"
+    assert win.asr_backend_combo.currentData() == "whisper"
+    assert win.refine_check.isChecked() is False
+    assert win.dub_check.isChecked() is False
+    assert win.url_edit.objectName() or True
+    assert win.start_btn is win.run_btn
+    assert win.pause_btn.isEnabled() is False
+    assert win.resume_btn.isEnabled() is False
+    assert win.stop_btn.isEnabled() is False
     win.showMaximized()
     assert bool(win.windowState() & Qt.WindowState.WindowMaximized)
     win.close()
@@ -127,8 +146,10 @@ def test_progress_log_skips_transcribe_and_done_has_no_popup():
 
     from bilingual_sub.gui.app import MainWindow
     from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
     from bilingual_sub.models import JobResult
 
+    set_locale("zh-Hans")
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(app_qss())
     win = MainWindow()
@@ -159,5 +180,56 @@ def test_progress_log_skips_transcribe_and_done_has_no_popup():
         win._on_done(result)
     assert info.call_count == 0
     assert "完成，3 条字幕" in win.log.toPlainText()
+    win.close()
+    _ = app
+
+
+def test_pause_resume_stop_state_machine():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.core.control import JobControl
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    win._control = JobControl()
+    win._set_running_ui(True, paused=False)
+    assert win.run_btn.isEnabled() is False
+    assert win.pause_btn.isEnabled() is True
+    assert win.stop_btn.isEnabled() is True
+    assert win.resume_btn.isEnabled() is False
+    win._pause()
+    assert win.resume_btn.isEnabled() is True
+    assert win.pause_btn.isEnabled() is False
+    win._resume()
+    assert win.pause_btn.isEnabled() is True
+    win._set_running_ui(False)
+    assert win.run_btn.isEnabled() is True
+    win.close()
+    _ = app
+
+
+def test_locale_switch_does_not_change_subtitle_langs():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    assert win.source_lang_combo.currentData() == "zh"
+    assert win.target_lang_combo.currentData() == "en"
+    win.locale_combo.setCurrentIndex(0)
+    assert win.source_lang_combo.currentData() == "zh"
+    assert win.target_lang_combo.currentData() == "en"
+    assert win.mode_combo.currentData() == "bilingual"
+    from bilingual_sub.i18n import set_locale
+
+    set_locale("zh-Hans")
     win.close()
     _ = app

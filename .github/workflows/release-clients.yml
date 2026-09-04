@@ -8,7 +8,22 @@ on:
       - "v*"
 
 jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install FFmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Install package
+        run: python -m pip install -e ".[gui,dev]"
+      - name: Tests
+        run: python -m pytest tests/unit tests/contract tests/integration/test_pipeline_any_video.py -q --no-cov
+
   windows:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +54,7 @@ jobs:
           path: dist/SubFlow
 
   macos:
+    needs: test
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

@@ -29,6 +29,8 @@ dependencies = [
   "pyyaml>=6",
   "rich>=13",
   "keyring>=25",
+  "yt-dlp>=2024.8",
+  "json-repair>=0.25",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +38,8 @@ cuda = ["openai-whisper", "torch"]
 gui = ["pyside6>=6.6"]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11"]
 packaging = ["pyinstaller>=6.10"]
+opencc = ["opencc-python-reimplemented"]
+nlp = ["spacy"]
 
 [project.scripts]
 subflow = "bilingual_sub.cli.main:app"
@@ -49,6 +53,7 @@ packages = ["src/bilingual_sub"]
 "config" = "bilingual_sub/_data/config"
 "fonts" = "bilingual_sub/_data/fonts"
 "assets/brand" = "bilingual_sub/_data/brand"
+"src/bilingual_sub/i18n/locales" = "bilingual_sub/i18n/locales"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

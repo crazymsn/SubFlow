@@ -15,6 +15,12 @@ if (ROOT / "assets" / "brand").is_dir():
 worker = SRC / "bilingual_sub" / "adapters" / "whisper_worker.py"
 if worker.is_file():
     datas.append((str(worker), "bilingual_sub/adapters"))
+wx_worker = SRC / "bilingual_sub" / "adapters" / "whisperx_worker.py"
+if wx_worker.is_file():
+    datas.append((str(wx_worker), "bilingual_sub/adapters"))
+locales = SRC / "bilingual_sub" / "i18n" / "locales"
+if locales.is_dir():
+    datas.append((str(locales), "bilingual_sub/i18n/locales"))
 
 hidden = [
     "bilingual_sub",
@@ -27,6 +33,24 @@ hidden = [
     "bilingual_sub.adapters.ffmpeg",
     "bilingual_sub.adapters.procwin",
     "bilingual_sub.adapters.whisper_backend",
+    "bilingual_sub.adapters.whisperx_backend",
+    "bilingual_sub.adapters.ytdlp",
+    "bilingual_sub.adapters.tts",
+    "bilingual_sub.adapters.tts.base",
+    "bilingual_sub.adapters.tts.openai_tts",
+    "bilingual_sub.adapters.tts.azure_tts",
+    "bilingual_sub.adapters.tts.gptsovits",
+    "bilingual_sub.i18n",
+    "bilingual_sub.core.control",
+    "bilingual_sub.core.langs",
+    "bilingual_sub.core.netflix",
+    "bilingual_sub.core.glossary_ai",
+    "bilingual_sub.core.prompts",
+    "bilingual_sub.core.translate_refine",
+    "bilingual_sub.core.dub",
+    "yt_dlp",
+    "json_repair",
+    "httpx",
     "bilingual_sub.brand",
     "bilingual_sub.config",
     "bilingual_sub.secrets.store",
@@ -44,6 +68,13 @@ hidden = [
     "shiboken6",
 ]
 
+try:
+    from PyInstaller.utils.hooks import collect_submodules
+
+    hidden += collect_submodules("yt_dlp")
+except Exception:
+    pass
+
 excludes = [
     "tkinter",
     "matplotlib",
@@ -52,6 +83,7 @@ excludes = [
     "torchaudio",
     "whisper",
     "openai_whisper",
+    "whisperx",
     "pandas",
     "pyarrow",
     "tensorflow",

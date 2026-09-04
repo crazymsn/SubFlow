@@ -1,0 +1,14 @@
+SubFlow 语幕
+Copyright 深度云创科技
+
+This product includes or is inspired by the following open-source projects:
+
+- VideoLingo (https://github.com/Huanshere/VideoLingo) — Apache-2.0
+  Pipeline semantics for word-level ASR, glossary, translate-reflect-adapt,
+  and Netflix-style single-line limits. Prompts were rewritten; Streamlit UI
+  and Excel logs were not copied.
+- Whisper / openai-whisper — MIT
+- WhisperX — BSD-4-Clause
+- yt-dlp — Unlicense
+- json_repair — MIT
+- FFmpeg — LGPL/GPL (external binary, not bundled)

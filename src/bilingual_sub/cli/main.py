@@ -216,7 +216,7 @@ def doctor() -> None:
 
 @app.command("run")
 def run_cmd(
-    input_video: Annotated[Path, typer.Argument(help="Input video file")],
+    input_video: Annotated[Path | None, typer.Argument(help="Input video file")] = None,
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Output MP4")] = None,
     srt: Annotated[Path | None, typer.Option("--srt", help="Output SRT path")] = None,
     work_dir: Annotated[Path | None, typer.Option("--work-dir")] = None,
@@ -231,10 +231,30 @@ def run_cmd(
         str | None,
         typer.Option("--translate-model", "--model", help="Translation model (default: saved preference)"),
     ] = None,
+    source_lang: Annotated[str, typer.Option("--source-lang")] = "zh",
+    target_lang: Annotated[str, typer.Option("--target-lang")] = "en",
+    subtitle_mode: Annotated[str, typer.Option("--subtitle-mode")] = "bilingual",
+    asr_backend: Annotated[str, typer.Option("--asr-backend")] = "whisper",
+    refine: Annotated[bool, typer.Option("--refine", help="3-step translate-reflect-adapt")] = False,
+    url: Annotated[str | None, typer.Option("--url", help="YouTube / video URL")] = None,
+    glossary_generate: Annotated[bool, typer.Option("--glossary-generate")] = False,
+    enable_dub: Annotated[bool, typer.Option("--dub")] = False,
+    tts_provider: Annotated[str, typer.Option("--tts-provider")] = "none",
+    tts_voice: Annotated[str, typer.Option("--tts-voice")] = "",
+    tts_endpoint: Annotated[str, typer.Option("--tts-endpoint")] = "",
 ) -> None:
     """Full pipeline: ASR → translate → render → burn."""
-    if not input_video.is_file():
+    if not url and (input_video is None or not input_video.is_file()):
         console.print(f"[red]File not found: {input_video}[/red]")
+        _exit(1)
+    if subtitle_mode not in ("bilingual", "netflix_single"):
+        console.print("[red]--subtitle-mode must be bilingual or netflix_single[/red]")
+        _exit(1)
+    if asr_backend not in ("whisper", "whisperx"):
+        console.print("[red]--asr-backend must be whisper or whisperx[/red]")
+        _exit(1)
+    if tts_provider not in ("none", "openai", "azure", "gptsovits"):
+        console.print("[red]--tts-provider must be none, openai, azure, or gptsovits[/red]")
         _exit(1)
     if device not in ("auto", "cuda", "cpu"):
         console.print("[red]--device must be auto, cuda, or cpu[/red]")
@@ -245,11 +265,12 @@ def run_cmd(
 
     settings = load_settings()
     chosen_model = translate_model or settings.translate.model
-    out_srt = srt or input_video.with_name(input_video.stem + ".bilingual.srt")
-    out_mp4 = output or input_video.with_name(input_video.stem + "-中英字幕.mp4")
+    source = input_video.resolve() if input_video else Path(url or "source.mp4")
+    out_srt = srt or source.with_name(source.stem + ".bilingual.srt")
+    out_mp4 = output or source.with_name(source.stem + "-中英字幕.mp4")
 
     cfg = JobConfig(
-        input_video=input_video.resolve(),
+        input_video=source,
         output_video=None if no_burn else out_mp4.resolve(),
         output_srt=out_srt.resolve(),
         work_dir=work_dir or Path("auto"),
@@ -261,6 +282,17 @@ def run_cmd(
         resume_from=resume_from,
         preview_minutes=preview_minutes,
         translate_model=chosen_model,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        subtitle_mode=subtitle_mode,  # type: ignore[arg-type]
+        asr_backend=asr_backend,  # type: ignore[arg-type]
+        refine_translate=refine,
+        source_url=None if (input_video and input_video.is_file()) else url,
+        glossary_generate=glossary_generate,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,  # type: ignore[arg-type]
+        tts_voice=tts_voice,
+        tts_endpoint=tts_endpoint,
     )
 
     def on_progress(stage: str, pct: float) -> None:

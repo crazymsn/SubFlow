@@ -13,6 +13,9 @@ from pathlib import Path
 
 from bilingual_sub.adapters.ffmpeg import FfmpegError, copy_to_ascii_workdir, probe_video
 from bilingual_sub.adapters.whisper_backend import load_transcript, transcribe
+from bilingual_sub.adapters.whisperx_backend import WhisperXBackend
+from bilingual_sub.adapters.ytdlp import download as ytdlp_download
+from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.config import (
     AppSettings,
     default_glossary_path,
@@ -22,7 +25,12 @@ from bilingual_sub.config import (
 from bilingual_sub.core.audio import detect_silences, extract_wav
 from bilingual_sub.core.burn import burn_subtitles
 from bilingual_sub.core.cues import build_cues
+from bilingual_sub.core.dub import dub_cues
 from bilingual_sub.core.glossary import Glossary
+from bilingual_sub.core.glossary_ai import extract_glossary
+from bilingual_sub.core.langs import convert_han, whisper_language
+from bilingual_sub.core.netflix import fit_cues
+from bilingual_sub.core.translate_refine import translate_cues_refined
 from bilingual_sub.core.render import load_cues_json, save_cues_json, write_subtitles
 from bilingual_sub.core.translate import translate_cues
 from bilingual_sub.logging_util import setup_logging
@@ -72,8 +80,17 @@ def _should_run(resume_from: str | None, stage: str) -> bool:
     return _stage_index(stage) >= _stage_index(resume_from)
 
 
-def _save_state(work_dir: Path, stage: str, extra: dict | None = None) -> None:
-    data = {"stage": stage}
+def _save_state(
+    work_dir: Path,
+    stage: str,
+    extra: dict | None = None,
+    *,
+    control: JobControl | None = None,
+) -> None:
+    data = {"stage": stage, "paused": False, "stopped": False}
+    if control:
+        data["paused"] = control.is_paused()
+        data["stopped"] = control.is_stopped()
     if extra:
         data.update(extra)
     (work_dir / "job_state.json").write_text(
@@ -83,6 +100,8 @@ def _save_state(work_dir: Path, stage: str, extra: dict | None = None) -> None:
 
 def video_fingerprint(path: Path) -> dict:
     resolved = path.resolve()
+    if not resolved.is_file():
+        return {"path": str(resolved), "size": 0, "mtime_ns": 0}
     st = resolved.stat()
     return {
         "path": str(resolved),
@@ -91,12 +110,22 @@ def video_fingerprint(path: Path) -> dict:
     }
 
 
+def _glossary_hash(path: Path | None) -> str:
+    if path is None or not path.is_file():
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
 def artifact_key(config: JobConfig) -> str:
     fp = video_fingerprint(config.input_video)
     preview = config.preview_minutes or 0
+    gloss = _glossary_hash(config.glossary_path)
     raw = (
         f"{fp['path']}|{fp['size']}|{fp['mtime_ns']}|"
-        f"{config.whisper_model}|{config.translate_model}|{preview}"
+        f"{config.whisper_model}|{config.translate_model}|{preview}|"
+        f"{config.source_lang}|{config.target_lang}|{config.subtitle_mode}|"
+        f"{config.asr_backend}|{int(config.refine_translate)}|{gloss}|"
+        f"{config.source_url or ''}"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -159,6 +188,16 @@ def _can_reexport(config: JobConfig, work: Path) -> bool:
         return False
     if str(report.get("translate_model") or config.translate_model) != config.translate_model:
         return False
+    if str(report.get("source_lang") or "zh") != config.source_lang:
+        return False
+    if str(report.get("target_lang") or "en") != config.target_lang:
+        return False
+    if str(report.get("subtitle_mode") or "bilingual") != config.subtitle_mode:
+        return False
+    if str(report.get("asr_backend") or "whisper") != config.asr_backend:
+        return False
+    if bool(report.get("refine", False)) != bool(config.refine_translate):
+        return False
     return True
 
 
@@ -173,7 +212,7 @@ def _export_subs(
     srt_out = config.output_srt
     srt_out.parent.mkdir(parents=True, exist_ok=True)
     ass_out = srt_out.with_suffix(".ass") if srt_out.suffix else Path(str(srt_out) + ".ass")
-    write_subtitles(cues, preset, ass_path, srt_out, play_res=play_res)
+    write_subtitles(cues, preset, ass_path, srt_out, play_res=play_res, mode=config.subtitle_mode)
     if ass_out != ass_path:
         shutil.copy2(ass_path, ass_out)
     return ass_out
@@ -245,6 +284,15 @@ def _result_from_work(
         "whisper_model": config.whisper_model,
         "translate_model": config.translate_model,
         "style_preset": config.style_preset,
+        "ui_locale": config.ui_locale,
+        "source_lang": config.source_lang,
+        "target_lang": config.target_lang,
+        "subtitle_mode": config.subtitle_mode,
+        "asr_backend": config.asr_backend,
+        "refine": config.refine_translate,
+        "source_url": config.source_url,
+        "last_stage": "done",
+        "stopped": False,
         "reused": reused,
     }
     report_path = work / "report.json"
@@ -309,11 +357,17 @@ def _reexport_if_possible(
     )
 
 
+def _gate(control: JobControl | None) -> None:
+    if control:
+        control.wait_if_paused()
+
+
 def run(
     config: JobConfig,
     settings: AppSettings | None = None,
     *,
     on_progress: ProgressCb = None,
+    control: JobControl | None = None,
 ) -> JobResult:
     setup_logging(api_key=get_api_key())
     settings = settings or load_settings()
@@ -338,12 +392,45 @@ def run(
         if on_progress:
             on_progress(stage, pct)
 
+    try:
+        return _run_job(config, settings, on_progress, control, work, job_id, t0, stages, prog)
+    except JobStopped:
+        _save_state(work, "stopped", {"job_id": job_id, "stopped": True, "note": "stopped"}, control=control)
+        raise
+
+
+def _run_job(
+    config: JobConfig,
+    settings: AppSettings,
+    on_progress: ProgressCb,
+    control: JobControl | None,
+    work: Path,
+    job_id: str,
+    t0: float,
+    stages: dict[str, float],
+    prog,
+) -> JobResult:
+    if _should_run(config.resume_from, "ingest"):
+        _gate(control)
+        if config.source_url:
+            prog("ingest", 0.03)
+            ts = time.time()
+            (work / "source.url.txt").write_text(config.source_url, encoding="utf-8")
+            downloaded = ytdlp_download(config.source_url, work, on_progress=prog, control=control)
+            config.input_video = downloaded
+            stages["ingest_sec"] = time.time() - ts
+        _save_state(work, "ingest", {"job_id": job_id}, control=control)
+
     input_video = config.input_video
+    if not input_video.is_file():
+        raise FileNotFoundError("请先选择本地视频，或填写可下载的视频链接")
     if settings.video.copy_to_ascii_path:
         source = copy_to_ascii_workdir(input_video, work)
     else:
         source = input_video
-        shutil.copy2(input_video, work / "source.mp4")
+        dest = work / "source.mp4"
+        if source.resolve() != dest.resolve():
+            shutil.copy2(input_video, dest)
 
     meta = probe_video(source)
     duration = float(meta.get("duration") or 0)
@@ -372,13 +459,15 @@ def run(
     preview_sec = config.preview_minutes * 60 if config.preview_minutes else None
 
     if _should_run(config.resume_from, "extract"):
+        _gate(control)
         prog("extract", 0.05)
         ts = time.time()
         extract_wav(source, speech, preview_sec=preview_sec)
         stages["extract_sec"] = time.time() - ts
-        _save_state(work, "extract", {"job_id": job_id})
+        _save_state(work, "extract", {"job_id": job_id}, control=control)
 
     if _should_run(config.resume_from, "silence"):
+        _gate(control)
         prog("silence", 0.12)
         ts = time.time()
         if silences_path.is_file() and config.resume_from:
@@ -391,27 +480,50 @@ def run(
             )
             silences_path.write_text(json.dumps(silences), encoding="utf-8")
         stages["silence_sec"] = time.time() - ts
-        _save_state(work, "silence", {"job_id": job_id})
+        _save_state(work, "silence", {"job_id": job_id}, control=control)
     else:
         silences = [tuple(x) for x in json.loads(silences_path.read_text(encoding="utf-8"))]
 
+    asr_lang = whisper_language(config.source_lang) if config.source_lang != "auto" else "auto"
+    if asr_lang == "auto":
+        asr_lang = settings.asr.language
     if _should_run(config.resume_from, "transcribe"):
+        _gate(control)
         prog("transcribe", 0.2)
         ts = time.time()
-        segments = transcribe(
-            speech,
-            model_name=config.whisper_model or settings.asr.model,
-            language=settings.asr.language,
-            device=config.device or settings.asr.device,  # type: ignore[arg-type]
-            out_json=transcript_path,
-            on_progress=prog,
-        )
+        used_x = False
+        if config.asr_backend == "whisperx":
+            backend = WhisperXBackend()
+            if backend.available():
+                result = backend.transcribe(
+                    speech,
+                    model_name=config.whisper_model or settings.asr.model,
+                    language=config.source_lang,
+                    device=config.device or settings.asr.device,
+                    out_json=transcript_path,
+                    on_progress=prog,
+                    control=control,
+                )
+                segments = result.segments
+                used_x = True
+            else:
+                logger.warning("识别 · 已回退 whisper（未找到 WhisperX 环境）")
+        if not used_x:
+            segments = transcribe(
+                speech,
+                model_name=config.whisper_model or settings.asr.model,
+                language=asr_lang if asr_lang != "auto" else settings.asr.language,
+                device=config.device or settings.asr.device,  # type: ignore[arg-type]
+                out_json=transcript_path,
+                on_progress=prog,
+            )
         stages["transcribe_sec"] = time.time() - ts
-        _save_state(work, "transcribe", {"job_id": job_id})
+        _save_state(work, "transcribe", {"job_id": job_id, "asr_backend": "whisperx" if used_x else "whisper"}, control=control)
     else:
         segments = load_transcript(transcript_path)
 
     if _should_run(config.resume_from, "build_cues"):
+        _gate(control)
         prog("build_cues", 0.45)
         ts = time.time()
         cues = build_cues(
@@ -424,43 +536,115 @@ def run(
             silence_split_threshold=settings.cues.silence_split_threshold,
         )
         save_cues_json(cues, cues_zh_path)
+        save_cues_json(cues, work / "cues.source.json")
         stages["build_cues_sec"] = time.time() - ts
-        _save_state(work, "build_cues", {"job_id": job_id, "cue_count": len(cues)})
+        _save_state(work, "build_cues", {"job_id": job_id, "cue_count": len(cues)}, control=control)
     else:
         cues = load_cues_json(cues_zh_path if cues_zh_path.is_file() else cues_bi_path)
 
+    if _should_run(config.resume_from, "glossary"):
+        _gate(control)
+        ts = time.time()
+        if config.glossary_generate:
+            prog("glossary", 0.52)
+            from bilingual_sub.adapters.meding import create_client
+            from bilingual_sub.secrets.store import get_api_key
+
+            key = get_api_key()
+            if key:
+                generated = extract_glossary(
+                    cues,
+                    model=config.translate_model or settings.translate.model,
+                    source_lang=config.source_lang,
+                    target_lang=config.target_lang,
+                    client=create_client(key),
+                )
+                generated.save(work / "glossary.generated.yaml")
+                if config.glossary_path:
+                    glossary = Glossary.merge(generated, glossary)
+                else:
+                    glossary = Glossary.merge(glossary, generated)
+                glossary.save(work / "glossary.merged.yaml")
+        stages["glossary_sec"] = time.time() - ts
+        _save_state(work, "glossary", {"job_id": job_id}, control=control)
+
     if _should_run(config.resume_from, "translate"):
+        _gate(control)
         prog("translate", 0.6)
         ts = time.time()
         if cues:
-            cues, tstats, missing = translate_cues(
-                cues,
-                model=config.translate_model or settings.translate.model,
-                batch_size=config.translate_batch_size or settings.translate.batch_size,
-                max_en_chars=settings.translate.max_en_chars,
-                cache_enabled=settings.translate.cache_enabled,
-            )
+            if config.refine_translate:
+                from bilingual_sub.adapters.meding import TranslationCache, create_client
+                from bilingual_sub.secrets.store import get_api_key
+
+                key = get_api_key()
+                if not key:
+                    from bilingual_sub.adapters.meding import MedingAuthError
+
+                    raise MedingAuthError("API key not configured")
+                cues, tstats, missing = translate_cues_refined(
+                    cues,
+                    model=config.translate_model or settings.translate.model,
+                    source_lang=config.source_lang,
+                    target_lang=config.target_lang,
+                    glossary=glossary,
+                    client=create_client(key),
+                    cache=TranslationCache() if settings.translate.cache_enabled else None,
+                    control=control,
+                )
+            else:
+                cues, tstats, missing = translate_cues(
+                    cues,
+                    model=config.translate_model or settings.translate.model,
+                    batch_size=config.translate_batch_size or settings.translate.batch_size,
+                    max_en_chars=settings.translate.max_en_chars,
+                    cache_enabled=settings.translate.cache_enabled,
+                    source_lang=config.source_lang,
+                    target_lang=config.target_lang,
+                    glossary_block=glossary.block(),
+                )
+            if config.source_lang == "zh-Hant" or config.target_lang == "zh-Hant":
+                for cue in cues:
+                    if config.source_lang == "zh-Hant":
+                        cue.zh = convert_han(cue.zh, "zh-Hant")
+                    if config.target_lang == "zh-Hant" and cue.en:
+                        cue.en = convert_han(cue.en, "zh-Hant")
             cache_hits = tstats.cache_hits
             api_calls = tstats.api_calls
         save_cues_json(cues, cues_bi_path)
         stages["translate_sec"] = time.time() - ts
-        _save_state(work, "translate", {"job_id": job_id, "missing_en": len(missing)})
+        _save_state(work, "translate", {"job_id": job_id, "missing_en": len(missing)}, control=control)
     else:
         cues = load_cues_json(cues_bi_path)
 
+    if _should_run(config.resume_from, "fit_subs"):
+        _gate(control)
+        ts = time.time()
+        if config.subtitle_mode == "netflix_single":
+            prog("fit_subs", 0.72)
+            cues = fit_cues(cues, config.target_lang, use_target=True)
+        save_cues_json(cues, work / "cues.fitted.json")
+        stages["fit_subs_sec"] = time.time() - ts
+        _save_state(work, "fit_subs", {"job_id": job_id}, control=control)
+
     if _should_run(config.resume_from, "render"):
+        _gate(control)
         prog("render", 0.8)
         ts = time.time()
-        write_subtitles(cues, preset, ass_path, srt_out, play_res=play_res)
+        write_subtitles(
+            cues, preset, ass_path, srt_out, play_res=play_res, mode=config.subtitle_mode
+        )
         if ass_out != ass_path:
             shutil.copy2(ass_path, ass_out)
         stages["render_sec"] = time.time() - ts
-        _save_state(work, "render", {"job_id": job_id})
+        _save_state(work, "render", {"job_id": job_id}, control=control)
     elif ass_path.is_file() and not srt_out.is_file():
         shutil.copy2(ass_path, ass_out)
 
     output_mp4: Path | None = None
+    output_dub: Path | None = None
     if config.burn and _should_run(config.resume_from, "burn"):
+        _gate(control)
         prog("burn", 0.9)
         ts = time.time()
         out = config.output_video or srt_out.with_suffix(".mp4")
@@ -475,7 +659,38 @@ def run(
         )
         output_mp4 = out
         stages["burn_sec"] = time.time() - ts
-        _save_state(work, "burn", {"job_id": job_id})
+        _save_state(work, "burn", {"job_id": job_id}, control=control)
+
+    if config.enable_dub and config.tts_provider != "none" and _should_run(config.resume_from, "dub"):
+        _gate(control)
+        prog("dub", 0.94)
+        ts = time.time()
+        from bilingual_sub.adapters.tts import select_tts
+
+        provider = select_tts(config.tts_provider)
+        if config.tts_provider == "gptsovits" and config.tts_endpoint:
+            from bilingual_sub.adapters.tts.gptsovits import GptSovitsTts
+
+            provider = GptSovitsTts(config.tts_endpoint)
+        dub_out = (config.output_video or srt_out).with_name(
+            (config.output_video or srt_out).stem + "-dub.mp4"
+        )
+        try:
+            output_dub = dub_cues(
+                cues,
+                video=source,
+                work=work,
+                output=dub_out,
+                provider=provider,
+                lang=config.target_lang,
+                voice=config.tts_voice,
+                duration=duration,
+                control=control,
+            )
+        except Exception as exc:
+            logger.warning("dub failed, keeping subtitle outputs: %s", exc)
+        stages["dub_sec"] = time.time() - ts
+        _save_state(work, "dub", {"job_id": job_id}, control=control)
 
     elapsed = time.time() - t0
     report = {
@@ -497,11 +712,21 @@ def run(
         "whisper_model": config.whisper_model,
         "translate_model": config.translate_model,
         "style_preset": config.style_preset,
+        "source_lang": config.source_lang,
+        "target_lang": config.target_lang,
+        "subtitle_mode": config.subtitle_mode,
+        "asr_backend": config.asr_backend,
+        "refine": config.refine_translate,
+        "source_url": config.source_url,
+        "ui_locale": config.ui_locale,
+        "last_stage": "done",
+        "stopped": False,
+        "output_dub": str(output_dub) if output_dub else None,
         "reused": False,
     }
     report_path = work / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    _save_state(work, "done", {"job_id": job_id})
+    _save_state(work, "done", {"job_id": job_id}, control=control)
 
     prog("done", 1.0)
     return JobResult(
@@ -518,4 +743,5 @@ def run(
         translate_api_calls=api_calls,
         stages=stages,
         reused=False,
+        output_dub=output_dub,
     )

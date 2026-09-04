@@ -136,3 +136,15 @@ def test_different_video_or_model_skips_reuse(tmp_path: Path, video: Path):
         burn=True,
     )
     assert _can_reexport(model_cfg, work) is False
+
+    lang_cfg = JobConfig(
+        input_video=video,
+        output_video=tmp_path / "d.mp4",
+        output_srt=tmp_path / "d.srt",
+        work_dir=Path("auto"),
+        whisper_model=cfg.whisper_model,
+        translate_model=cfg.translate_model,
+        burn=True,
+        target_lang="ja",
+    )
+    assert _can_reexport(lang_cfg, work) is False
