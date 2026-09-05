@@ -1,5 +1,4 @@
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from bilingual_sub.core.dub import clamp_rate, dub_cues, mix_timeline
 from bilingual_sub.models import Cue

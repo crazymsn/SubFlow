@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 PRODUCT_EN = "SubFlow"
@@ -17,12 +18,36 @@ API_PORTAL_URL = "https://api.meding.site"
 GITHUB_URL = "https://github.com/crazymsn/SubFlow"
 
 
+def _brand_candidates() -> list[Path]:
+    module = Path(__file__).resolve()
+    roots = [module.parent / "_data" / "brand"]
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).resolve().parent
+        meipass = Path(getattr(sys, "_MEIPASS", exe))
+        roots.extend(
+            (
+                meipass / "bilingual_sub" / "_data" / "brand",
+                exe / "_internal" / "bilingual_sub" / "_data" / "brand",
+                exe / "brand",
+            )
+        )
+    # brand.py -> bilingual_sub -> src -> repo
+    roots.append(module.parents[2] / "assets" / "brand")
+    return roots
+
+
 def brand_dir() -> Path:
-    bundled = Path(__file__).resolve().parent / "_data" / "brand"
-    if bundled.is_dir():
-        return bundled
-    repo = Path(__file__).resolve().parents[2] / "assets" / "brand"
-    return repo
+    fallback = _brand_candidates()[-1]
+    for path in _brand_candidates():
+        try:
+            if path.is_dir() and (path / "subflow.png").is_file():
+                return path
+        except OSError:
+            continue
+    for path in _brand_candidates():
+        if path.is_dir():
+            return path
+    return fallback
 
 
 def logo_path() -> Path:

@@ -156,7 +156,7 @@ def test_brand_check_label_optically_centers():
     from bilingual_sub.gui.widgets.brand_check import BrandCheck, CAPTION_SETTLE
 
     app = QApplication.instance() or QApplication([])
-    for label in ("烧录到视频", "电影级润色", "从视频生成术语", "配音"):
+    for label in ("烧录到视频", "电影级润色", "字幕颜色", "配音"):
         box = BrandCheck(label)
         box.resize(box.sizeHint())
         box.show()
@@ -214,20 +214,48 @@ def test_window_chrome():
     assert win.windowTitle() == "深度云创科技"
     labels = win.findChildren(QLabel)
     assert any(lbl.text() == "SubFlow 语幕" for lbl in labels)
-    assert all(lbl.objectName() != "company" for lbl in labels)
+    assert win.company_lbl.objectName() == "company"
+    assert win.company_lbl.text() == "深度云创科技"
     assert win.burn_check.text() == "烧录到视频"
     from bilingual_sub.gui.widgets.brand_check import BrandCheck
 
     assert isinstance(win.burn_check, BrandCheck)
+    assert isinstance(win.color_check, BrandCheck)
     assert isinstance(win.refine_check, BrandCheck)
-    assert isinstance(win.glossary_gen_check, BrandCheck)
     assert isinstance(win.dub_check, BrandCheck)
+    assert not hasattr(win, "glossary_gen_check")
+    assert not hasattr(win, "glossary_edit")
     assert win.whisper_combo.currentText() in {"tiny", "base", "small", "medium", "large"}
-    assert win.locale_combo.count() == 7
+    assert win.locale_combo.count() == 8
+    assert win.locale_combo.itemData(0) == "zh-Hans"
+    assert win.locale_combo.itemText(0) == "简体中文"
     assert win.locale_combo.currentData() == "zh-Hans"
     assert win.mode_combo.currentData() == "bilingual"
+    assert [win.mode_combo.itemData(i) for i in range(win.mode_combo.count())] == [
+        "bilingual",
+        "enzh",
+        "single:en",
+        "single:zh",
+        "single:zh-Hant",
+        "single:ja",
+        "single:es",
+        "single:ru",
+        "single:fr",
+        "single:de",
+        "netflix_single",
+    ]
+    assert win.lbl_source.text() == "源语种"
+    assert win.lbl_target.text() == "目标语种"
+    assert win.lbl_mode.text() == "字幕样式"
+    assert win.mode_combo.itemText(0) == "中英字幕"
+    assert win.mode_combo.itemText(1) == "英中字幕"
+    assert win.mode_combo.itemText(2) == "English"
+    assert win.mode_combo.itemText(3) == "简体中文"
     assert win.source_lang_combo.currentData() == "zh"
-    assert win.target_lang_combo.currentData() == "en"
+    assert win.target_lang_combo.currentData() == "zh"
+    target_codes = [win.target_lang_combo.itemData(i) for i in range(win.target_lang_combo.count())]
+    assert target_codes[-2:] == ["fr", "de"]
+    assert win.target_lang_combo.itemText(target_codes.index("de")) == "Deutsch"
     assert win.asr_backend_combo.currentData() == "whisper"
     assert not win.asr_backend_combo.isHidden()
     assert win.tts_combo.findData("azure") < 0
@@ -383,10 +411,10 @@ def test_locale_switch_does_not_change_subtitle_langs():
     app.setStyleSheet(app_qss())
     win = MainWindow()
     assert win.source_lang_combo.currentData() == "zh"
-    assert win.target_lang_combo.currentData() == "en"
-    win.locale_combo.setCurrentIndex(0)
+    assert win.target_lang_combo.currentData() == "zh"
+    win.locale_combo.setCurrentIndex(win.locale_combo.findData("en"))
     assert win.source_lang_combo.currentData() == "zh"
-    assert win.target_lang_combo.currentData() == "en"
+    assert win.target_lang_combo.currentData() == "zh"
     assert win.mode_combo.currentData() == "bilingual"
     from bilingual_sub.i18n import set_locale
 
@@ -395,9 +423,51 @@ def test_locale_switch_does_not_change_subtitle_langs():
     _ = app
 
 
-def test_empty_counter_download_gate_and_more_overlay():
+def test_english_target_auto_enables_dub():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    assert win.dub_check.isChecked() is False
+    win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
+    assert win.target_lang_combo.currentData() == "en"
+    assert win.mode_combo.currentData() == "bilingual"
+    assert win.dub_check.isChecked() is True
+    win.close()
+    _ = app
+
+
+def test_subtitle_style_does_not_change_target_lang():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
+
+    set_locale("zh-Hans")
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    assert win.target_lang_combo.currentData() == "zh"
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("single:en"))
+    assert win.mode_combo.currentData() == "single:en"
+    assert win.target_lang_combo.currentData() == "zh"
+    assert win.dub_check.isChecked() is False
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("enzh"))
+    assert win.target_lang_combo.currentData() == "zh"
+    win.close()
+    _ = app
+
+
+def test_empty_counter_download_gate_and_more_overlay():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QWidget
 
     from bilingual_sub.gui.app import MainWindow
     from bilingual_sub.gui.styles import app_qss
@@ -435,9 +505,21 @@ def test_empty_counter_download_gate_and_more_overlay():
     assert win.github_btn.objectName() == "githubBtn"
     assert win.github_btn.width() >= 36
     assert win.github_btn.height() >= 36
+    theme_c = win.theme_combo.mapTo(win, win.theme_combo.rect().center())
+    locale_c = win.locale_combo.mapTo(win, win.locale_combo.rect().center())
+    github_c = win.github_btn.mapTo(win, win.github_btn.rect().center())
+    assert theme_c.x() < locale_c.x() < github_c.x()
+    assert github_c.y() < 80
+    assert github_c.x() >= win.width() - 80
+    assert abs(github_c.y() - locale_c.y()) <= 8
+    assert win.company_lbl.text() == "深度云创科技"
+    company_c = win.company_lbl.mapTo(win, win.company_lbl.rect().center())
+    assert abs(company_c.x() - win.width() / 2) <= 8
+    assert company_c.y() >= win.height() - 80
+    assert company_c.y() > github_c.y() + 200
     assert win.asr_help.isHidden()
     assert win.tts_help.isHidden()
-    assert win.video_name.isHidden()
+    assert not hasattr(win, "video_name")
     assert win.lbl_source_file.text() == "上传视频"
     assert win.lbl_source_url.text() == "视频链接"
     win.more_btn.setChecked(True)
@@ -466,6 +548,11 @@ def test_empty_counter_download_gate_and_more_overlay():
     assert win.out_edit.isVisible()
     assert win.browse_out_btn.isVisible()
     assert win.out_edit.height() >= 32
+    assert abs(win.out_edit.height() - win.browse_out_btn.height()) <= 1
+    assert abs(
+        win.out_edit.mapTo(win, win.out_edit.rect().topLeft()).y()
+        - win.browse_out_btn.mapTo(win, win.browse_out_btn.rect().topLeft()).y()
+    ) <= 1
     assert win.save_btn.objectName() == "brandGhost"
     assert win.clear_key_btn.objectName() == "brandGhost"
     assert win.api_portal_btn.objectName() == "brandGhost"
@@ -474,32 +561,60 @@ def test_empty_counter_download_gate_and_more_overlay():
     app.processEvents()
     after_bar = win.run_btn.mapTo(win, win.run_btn.rect().topLeft()).y()
     more_bottom = win.more_box.mapTo(win, win.more_box.rect().bottomLeft()).y()
+    more_top = win.more_btn.mapTo(win, win.more_btn.rect().topLeft()).y()
+    key_bottom = win.key_edit.mapTo(win, win.key_edit.rect().bottomLeft()).y()
     bar_bottom = win.run_btn.mapTo(win, win.run_btn.rect().bottomLeft()).y()
     assert win.more_box.isVisible()
-    assert win.more_box.height() >= 70
-    assert win.glossary_edit.isVisible()
-    assert win.glossary_edit.height() >= 28
+    assert win.more_box.height() >= 36
+    assert win.color_check.isVisible()
+    assert win.dub_check.isVisible()
+    assert win.refine_check.isVisible()
+    assert win.color_box.isHidden()
+    assert win.color_check.mapTo(win, win.color_check.rect().topLeft()).x() < win.dub_check.mapTo(
+        win, win.dub_check.rect().topLeft()
+    ).x()
+    assert win.dub_check.mapTo(win, win.dub_check.rect().topLeft()).x() < win.refine_check.mapTo(
+        win, win.refine_check.rect().topLeft()
+    ).x()
+    assert not win.key_edit.visibleRegion().isEmpty()
+    assert not win.model_combo.visibleRegion().isEmpty()
+    assert not win.source_lang_combo.visibleRegion().isEmpty()
+    assert key_bottom <= more_top + 2
     assert win.out_edit.isVisible()
     assert win.out_edit.height() >= 32
-    assert after_bar > before_bar
-    assert more_bottom <= after_bar + 4
+    assert after_bar >= before_bar
+    deck = win.findChild(QWidget, "deck")
+    assert deck is not None
+    deck_bottom = deck.mapTo(win, deck.rect().bottomLeft()).y()
+    assert deck_bottom <= after_bar + 8
+    assert more_bottom <= deck_bottom + 8 or win.form_scroll.widget().isAncestorOf(win.more_box)
     assert bar_bottom < win.height()
+    win.color_check.setChecked(True)
+    app.processEvents()
+    assert win.color_box.isVisible()
+    assert win.zh_color_btn.isVisible()
+    assert win.en_color_btn.isVisible()
+    assert not win.key_edit.visibleRegion().isEmpty()
+    assert not win.model_combo.visibleRegion().isEmpty()
     win.dub_check.setChecked(True)
     app.processEvents()
-    more_bottom = win.more_box.mapTo(win, win.more_box.rect().bottomLeft()).y()
     after_bar = win.run_btn.mapTo(win, win.run_btn.rect().topLeft()).y()
     bar_bottom = win.run_btn.mapTo(win, win.run_btn.rect().bottomLeft()).y()
-    assert more_bottom <= after_bar + 4
+    deck_bottom = deck.mapTo(win, deck.rect().bottomLeft()).y()
+    assert deck_bottom <= after_bar + 8
     assert win.run_btn.isVisible()
+    assert not win.run_btn.visibleRegion().isEmpty()
     assert bar_bottom < win.height()
     assert win.out_edit.isVisible() and win.out_edit.height() >= 32
+    assert not win.key_edit.visibleRegion().isEmpty()
     win.resize(1200, 760)
     app.processEvents()
-    more_bottom = win.more_box.mapTo(win, win.more_box.rect().bottomLeft()).y()
     after_bar = win.run_btn.mapTo(win, win.run_btn.rect().topLeft()).y()
     bar_bottom = win.run_btn.mapTo(win, win.run_btn.rect().bottomLeft()).y()
+    deck_bottom = deck.mapTo(win, deck.rect().bottomLeft()).y()
     assert win.more_box.isVisible()
-    assert more_bottom <= after_bar + 4
+    assert deck_bottom <= after_bar + 8
+    assert not win.run_btn.visibleRegion().isEmpty()
     assert bar_bottom < win.height()
     win.close()
     _ = app
@@ -507,7 +622,6 @@ def test_empty_counter_download_gate_and_more_overlay():
 
 def test_same_video_new_path_copies_without_worker(tmp_path):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from pathlib import Path
 
     from PySide6.QtWidgets import QApplication
 

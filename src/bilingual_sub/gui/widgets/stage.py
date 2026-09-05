@@ -9,11 +9,11 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QSizePolicy,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from bilingual_sub.brand import COMPANY_ZH
 from bilingual_sub.gui.progress import format_pct
 from bilingual_sub.gui.theme import type_font
 from bilingual_sub.i18n import tr
@@ -62,16 +62,16 @@ def build_stage(win) -> QWidget:
     win.log.setMinimumHeight(48)
     layout.addWidget(win.log, 1)
 
-    foot = QHBoxLayout()
+    foot_w = QWidget()
+    foot_w.setObjectName("stageFoot")
+    foot_w.setFixedHeight(40)
+    foot = QHBoxLayout(foot_w)
     foot.setContentsMargins(0, 0, 0, 0)
-    foot.addStretch(1)
-    win.github_btn = QToolButton()
-    win.github_btn.setObjectName("githubBtn")
-    win.github_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    win.github_btn.setAutoRaise(True)
-    win.github_btn.setFixedSize(40, 40)
-    win.github_btn.setToolTip("GitHub")
-    win.github_btn.clicked.connect(win._open_github)
-    foot.addWidget(win.github_btn, 0, Qt.AlignmentFlag.AlignRight)
-    layout.addLayout(foot)
+    foot.setSpacing(0)
+    win.company_lbl = QLabel(COMPANY_ZH)
+    win.company_lbl.setObjectName("company")
+    win.company_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    win.company_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+    foot.addWidget(win.company_lbl, 1)
+    layout.addWidget(foot_w)
     return frame

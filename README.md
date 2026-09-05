@@ -4,7 +4,7 @@
 
 深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
-[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Hub](https://hub.docker.com/r/crazymsn/subflow) · [API 分发站](https://api.meding.site)
+当前版本 **1.2.2**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Hub](https://hub.docker.com/r/crazymsn/subflow) · [API 分发站](https://api.meding.site)
 
 ![SubFlow 语幕桌面客户端](docs/images/desktop-light.png)
 
@@ -13,27 +13,47 @@
 | 能力 | 说明 |
 | --- | --- |
 | 语音识别 | 本机 Whisper / WhisperX，不把原片上传到识别服务 |
-| 链接入库 | YouTube、Bilibili 等地址一键下载；游客失败后读取本机浏览器登录 Cookie |
+| 链接入库 | YouTube、Bilibili 一键下载最高清；优先原声音轨，避免英文自动配音 |
 | 自动翻译 | [meding](https://api.meding.site) OpenAI 兼容接口；获取模型时自动屏蔽 BAAI / 智源条目 |
-| 字幕规范 | 中英双语或单行 Netflix 风格；可选电影级润色与术语表 |
+| 中英字幕 | 中英 / 英中各 **1 行**，居中叠在安全区内；超长句缩放，不出画 |
+| 简繁 | 目标语种为简体时，中文轨一律转为简体（Whisper 默认繁体也会转） |
 | 烧录颜色 | 中英字幕颜色可自选；只改颜色会重渲 ASS 并重烧，不重跑识别 |
-| 成片导出 | 烧录 MP4，同时写出 SRT / ASS；输出路径可改而不必重跑 |
+| 成片导出 | 烧录 MP4，同时写出 SRT / ASS |
 | 配音 | OpenAI 云端多语种，或本机 GPT-SoVITS 克隆音色 |
 | 三种入口 | Windows / macOS 桌面客户端、Python CLI、Docker 镜像 |
 
-界面提供简体中文、繁体中文、English、日本語、Español、Русский、Français。
+界面提供简体中文、繁体中文、English、日本語、Español、Русский、Français、Deutsch。默认界面为简体中文。
 
 ![更多选项与深色主题](docs/images/desktop-more.png)
 
+## 字幕怎么对应
+
+三个控件职责分开，互不覆盖：
+
+| 控件 | 只管 |
+| --- | --- |
+| 源语种 | 识别 / Whisper 语言 |
+| 目标语种 | 配音语种，以及中文轨的简体 / 繁体 |
+| 字幕样式 | 画面上出现哪些语言、谁在上谁在下 |
+
+| 字幕样式 | 目标语种 | 画面 |
+| --- | --- | --- |
+| 中英字幕 | 简体中文 | 简体 1 行在上，英文 1 行在下 |
+| 中英字幕 | 繁體中文 | 繁体 1 行在上，英文 1 行在下 |
+| 英中字幕 | 简体中文 | 英文 1 行在上，简体 1 行在下 |
+| 单语「简体中文」 | — | 只烧简体 1 行 |
+| 单语 English | — | 只烧英文 1 行 |
+
+源语种和目标语种都选简体、字幕选中英：中文原声 + 简体/英文字幕，不会自动配成英文。
+
 ## 五分钟上手
 
-1. 打开 [Releases](https://github.com/crazymsn/SubFlow/releases/latest)，下载 `SubFlow-Windows-1.2.1.zip` 或 `SubFlow-macOS-1.2.1.zip`。
+1. 打开 [Releases](https://github.com/crazymsn/SubFlow/releases/latest)，下载 `SubFlow-Windows-1.2.2.zip` 或 `SubFlow-macOS-1.2.2.zip`。
 2. Windows：**整夹解压**，进入 `SubFlow` 目录，双击 `SubFlow.exe`。不要只拷贝 exe。
 3. macOS：解压后把 `SubFlow.app` 拖到「应用程序」；若提示未验证开发者，按住 Control 点击后选择打开。
 4. 到 [API 分发站](https://api.meding.site) 领取令牌，在客户端保存，再点「获取模型」。
 5. 拖入视频，或粘贴链接后下载。
-6. 需要改字幕颜色时，打开「更多选项」，点中文 / 英文字幕色块。
-7. 选好源语言、目标语言、识别引擎与翻译模型，点击「开始处理」。
+6. 选好源语言、目标语言、字幕样式，点击「开始处理」。
 
 首次识别会按所选 Whisper 模型下载权重。详细步骤见 [桌面客户端](docs/desktop.md)。
 
@@ -64,11 +84,11 @@ subflow run demo.mp4 -o out.mp4 --zh-color "#FFD400" --en-color "#F2F2F2"
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入 SUBFLOW_API_KEY
+# 编辑 .env，填入 SUBFLOW_API_KEY（不要提交 .env）
 docker compose pull
 docker compose run --rm subflow doctor
 docker compose run --rm subflow models
-docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp4 --zh-color "#FFFFFF" --en-color "#F2F2F2"
+docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp4
 ```
 
 也可以直接拉镜像：
@@ -84,8 +104,8 @@ docker run --rm -v "%cd%/data:/data" --env-file .env crazymsn/subflow:latest run
 
 ```
 视频 / 链接 → 抽音 → 静音切句 → Whisper / WhisperX
-    → 整理字幕 → 术语 → 翻译（可选润色）
-    → ASS / SRT（可自定义中英颜色）→ 烧录 MP4 → 可选配音
+    → 整理字幕 → 术语 → 翻译（可选润色）→ 简繁转换
+    → ASS / SRT（中英各 1 行）→ 烧录 MP4 → 可选配音
 ```
 
 暂停、继续、停止可在桌面客户端操作。同片只换输出路径或只改字幕颜色时，不会重跑识别。
@@ -115,6 +135,7 @@ docker run --rm -v "%cd%/data:/data" --env-file .env crazymsn/subflow:latest run
 ## 安全
 
 - API 令牌只写本机凭据库，工具不上传、不汇聚、不共享
+- 仓库与发布包**不含** API Key、Cookie、`.env`
 - 日志自动脱敏，异常栈不含 Authorization
 - 识别在本机完成；翻译请求只发字幕文本，不发原片
 - Docker 镜像不含令牌；用 `.env` 注入

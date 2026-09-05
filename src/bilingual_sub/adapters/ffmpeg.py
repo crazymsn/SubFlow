@@ -154,6 +154,48 @@ def escape_subtitles_path(path: Path) -> str:
     return s
 
 
+def remux_to_mp4(src: Path, dest: Path) -> Path:
+    """Prefer stream copy into MP4; transcode only if the container rejects the codecs."""
+    if src.suffix.lower() == ".mp4" and src.resolve() == dest.resolve():
+        return src
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    copy_args = [
+        find_ffmpeg(),
+        "-y",
+        "-i",
+        str(src),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(dest),
+    ]
+    try:
+        run_cmd(copy_args)
+        if dest.is_file() and dest.stat().st_size > 32:
+            return dest
+    except FfmpegError:
+        logger.info("stream copy to mp4 failed, transcoding %s", src)
+    run_cmd(
+        [
+            find_ffmpeg(),
+            "-y",
+            "-i",
+            str(src),
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(dest),
+        ]
+    )
+    return dest
+
+
 def copy_to_ascii_workdir(src: Path, work_dir: Path) -> Path:
     work_dir.mkdir(parents=True, exist_ok=True)
     dst = work_dir / "source.mp4"

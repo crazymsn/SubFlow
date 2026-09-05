@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.2 — 2026-09-05
+
+- 中英 / 英中字幕每种语言最多 1 行；超长句缩放进安全框，不再折成多行
+- 目标语种为简体时，中文轨强制转简体（修复 Whisper 默认繁体）
+- YouTube / Bilibili 下载优先原声音轨，避免英文自动配音
+- 源语种、目标语种、字幕样式职责拆开，互不覆盖
+- 重写 README 与桌面 / 安装 / 架构 / 故障排除文档
+- OpenCC 纳入主依赖，随 Win / Mac 客户端打包
+
 ## 1.2.1 — 2026-09-04
 
 - Docker 官方镜像：`crazymsn/subflow:latest`（`docker-compose.yml` 默认拉取 Hub）

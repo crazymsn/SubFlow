@@ -81,8 +81,4 @@ def build_source(win) -> QWidget:
     well.addStretch(1)
     rail.addWidget(_station(win.lbl_source_url, compose), 1)
     shell.addLayout(rail)
-
-    win.video_name = QLabel("")
-    win.video_name.setObjectName("videoChip")
-    win.video_name.hide()
     return strip

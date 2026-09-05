@@ -232,7 +232,7 @@ def run_cmd(
         typer.Option("--translate-model", "--model", help="Translation model (default: saved preference)"),
     ] = None,
     source_lang: Annotated[str, typer.Option("--source-lang")] = "zh",
-    target_lang: Annotated[str, typer.Option("--target-lang")] = "en",
+    target_lang: Annotated[str, typer.Option("--target-lang")] = "zh",
     subtitle_mode: Annotated[str, typer.Option("--subtitle-mode")] = "bilingual",
     asr_backend: Annotated[str, typer.Option("--asr-backend")] = "whisper",
     refine: Annotated[bool, typer.Option("--refine", help="3-step translate-reflect-adapt")] = False,
@@ -249,9 +249,12 @@ def run_cmd(
     if not url and (input_video is None or not input_video.is_file()):
         console.print(f"[red]File not found: {input_video}[/red]")
         _exit(1)
-    if subtitle_mode not in ("bilingual", "netflix_single"):
-        console.print("[red]--subtitle-mode must be bilingual or netflix_single[/red]")
+    from bilingual_sub.core.langs import effective_target_lang, is_valid_subtitle_mode
+
+    if not is_valid_subtitle_mode(subtitle_mode):
+        console.print("[red]--subtitle-mode must be bilingual, enzh, netflix_single, or single:<lang>[/red]")
         _exit(1)
+    target_lang = effective_target_lang(source_lang, target_lang, subtitle_mode)
     if asr_backend not in ("whisper", "whisperx"):
         console.print("[red]--asr-backend must be whisper or whisperx[/red]")
         _exit(1)
@@ -286,7 +289,7 @@ def run_cmd(
         translate_model=chosen_model,
         source_lang=source_lang,
         target_lang=target_lang,
-        subtitle_mode=subtitle_mode,  # type: ignore[arg-type]
+        subtitle_mode=subtitle_mode,
         asr_backend=asr_backend,  # type: ignore[arg-type]
         refine_translate=refine,
         source_url=None if (input_video and input_video.is_file()) else url,

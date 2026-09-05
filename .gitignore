@@ -11,6 +11,10 @@ build/
 .env
 *.db
 credentials.json
+*cookies*.txt
+!*cookies*.example.txt
+Cookies/*
+!Cookies/.gitkeep
 data/*
 !data/.gitkeep
 .verify/

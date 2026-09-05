@@ -101,6 +101,6 @@ def test_type_font_prefers_yahei():
     assert font.pixelSize() == 14
 
 
-def test_default_theme_is_light(tmp_path, monkeypatch):
+def test_default_theme_is_dark(tmp_path, monkeypatch):
     monkeypatch.setattr("bilingual_sub.config._user_config_path", lambda: tmp_path / "missing.yaml")
-    assert load_ui_theme() == "light"
+    assert load_ui_theme() == "dark"

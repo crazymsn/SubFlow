@@ -2,31 +2,28 @@ from bilingual_sub.i18n import available_locales, set_locale, tr
 
 
 REQUIRED = (
-    "upload",
     "url_ph",
     "download",
     "api",
     "models",
     "ui_lang",
-    "sub_lang",
     "source",
     "target",
     "mode_bi",
+    "mode_enzh",
     "mode_nf",
     "asr",
     "engine",
     "engine_whisperx",
     "burn",
+    "sub_color",
     "zh_color",
     "en_color",
     "refine",
-    "glossary",
-    "glossary_gen",
     "dub",
     "tts_provider",
     "tts_voice",
     "tts_endpoint",
-    "fallback_whisper",
     "out",
     "browse",
     "start",
@@ -35,16 +32,13 @@ REQUIRED = (
     "stop",
     "open",
     "waiting",
-    "drop_hint",
     "source_file",
     "source_url",
-    "url_hint",
     "theme_light",
     "theme_dark",
     "more",
     "asr_help",
     "tts_help",
-    "recognition",
     "save_token",
     "clear_token",
     "token_cleared",
@@ -54,9 +48,7 @@ REQUIRED = (
     "token_ph",
     "token_kept",
     "model_ph",
-    "glossary_ph",
     "out_ph",
-    "token_ready",
     "need_url",
     "need_video",
     "need_token",
@@ -70,7 +62,7 @@ REQUIRED = (
 
 
 def test_seven_locales():
-    assert available_locales() == ["en", "zh-Hans", "zh-Hant", "ja", "es", "ru", "fr"]
+    assert available_locales() == ["zh-Hans", "zh-Hant", "en", "ja", "es", "ru", "fr", "de"]
 
 
 def test_default_matches_chinese_ui():
@@ -79,6 +71,11 @@ def test_default_matches_chinese_ui():
     assert tr("burn") == "烧录到视频"
     assert tr("browse") == "浏览"
     assert tr("transcribe") == "语音识别"
+    assert tr("source") == "源语种"
+    assert tr("target") == "目标语种"
+    assert tr("mode") == "字幕样式"
+    assert tr("mode_bi") == "中英字幕"
+    assert tr("mode_enzh") == "英中字幕"
 
 
 def test_missing_key_falls_back_to_hans():

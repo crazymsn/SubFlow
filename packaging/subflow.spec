@@ -76,6 +76,7 @@ hidden = [
     "keyring.backends.macOS.api",
     "openai",
     "yaml",
+    "opencc",
     "PySide6.QtCore",
     "PySide6.QtGui",
     "PySide6.QtWidgets",
@@ -83,10 +84,14 @@ hidden = [
     "shiboken6",
 ]
 
+occ_bins = []
 try:
-    from PyInstaller.utils.hooks import collect_submodules
+    from PyInstaller.utils.hooks import collect_all, collect_submodules
 
     hidden += collect_submodules("yt_dlp")
+    occ_datas, occ_bins, occ_hidden = collect_all("opencc")
+    datas += occ_datas
+    hidden += occ_hidden
 except Exception:
     pass
 
@@ -120,7 +125,7 @@ excludes = [
 a = Analysis(
     [str(ROOT / "packaging" / "gui_entry.py")],
     pathex=[str(SRC)],
-    binaries=[],
+    binaries=occ_bins,
     datas=datas,
     hiddenimports=hidden,
     hookspath=[],

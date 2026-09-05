@@ -2,22 +2,40 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import sys
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from bilingual_sub.core.control import JobControl, JobStopped
 
 logger = logging.getLogger(__name__)
 
-# Highest resolution video + a real audio track. Prefer MP4/AAC so ffmpeg can merge.
-BEST_AV_FORMAT = (
-    "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
-    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
-    "bestvideo+bestaudio/"
-    "best[ext=mp4]/"
-    "best"
+# Prefer the original spoken track. YouTube/Bilibili `ba` is often an English auto-dub.
+ORIGINAL_AUDIO = (
+    "ba[format_note*=original]/"
+    "ba[language^=zh]/"
+    "ba[language^=yue]/"
+    "ba[format_note!*=dub]/"
+    "ba"
 )
-FALLBACK_AV_FORMAT = "bestaudio+bestvideo/best"
+# Highest video + original audio. Prefer HTTPS at the same height; never fall back to `/b`.
+BEST_AV_FORMAT = f"bv*[protocol^=http]+({ORIGINAL_AUDIO})/bv*+({ORIGINAL_AUDIO})"
+LIST_FORMAT = "bv*+ba/bv*/bestvideo*"
+HD_FLOOR = 1080
+# Login cookies must not use tv / android. visionos still returns HTTPS/HLS when web/safari go SABR.
+YT_SAFE_CLIENTS = ("default", "web_embedded", "visionos", "-tv", "-tv_downgraded")
+YT_COOKIE_CLIENTS = (
+    YT_SAFE_CLIENTS,
+    ("web_embedded", "visionos", "-tv", "-tv_downgraded"),
+)
+YT_GUEST_CLIENTS = (
+    ("default", "visionos"),
+    ("visionos",),
+    ("android", "ios", "visionos"),
+)
 BROWSERS = ("firefox", "edge", "safari", "chrome", "brave", "chromium")
 _BROWSER_PATHS = {
     "firefox": (
@@ -68,6 +86,25 @@ def is_youtube_url(url: str) -> bool:
     return any(part in text for part in ("youtube.com", "youtu.be", "youtube-nocookie.com", "music.youtube.com"))
 
 
+def media_slug(url: str) -> str:
+    parsed = urlparse(canonicalize_url(url))
+    host = (parsed.netloc or "").lower()
+    if "youtu.be" in host:
+        return (parsed.path.strip("/").split("/") or ["video"])[0] or "video"
+    video = (parse_qs(parsed.query).get("v") or [""])[0]
+    if video:
+        return video
+    for part in parsed.path.split("/"):
+        if part.startswith(("BV", "av", "ep")):
+            return part
+    return "video"
+
+
+def download_folder(url: str, root: Path | None = None) -> Path:
+    base = root or Path.home() / "Downloads" / "SubFlow"
+    return base / media_slug(url)
+
+
 def canonicalize_url(url: str) -> str:
     text = (url or "").strip()
     return (
@@ -95,10 +132,62 @@ def _bilibili_guest_cookies(dest_dir: Path) -> Path:
         "# Netscape HTTP Cookie File\n"
         f".bilibili.com\tTRUE\t/\tFALSE\t0\tbuvid3\t{buvid}\n"
         f".bilibili.com\tTRUE\t/\tFALSE\t0\tbuvid4\t{buvid}\n"
-        ".bilibili.com\tTRUE\t/\tFALSE\t0\tCURRENT_FNVAL\t4048\n",
+        ".bilibili.com\tTRUE\t/\tFALSE\t0\tCURRENT_FNVAL\t4048\n"
+        ".bilibili.com\tTRUE\t/\tFALSE\t0\tbili_locale\tzh-CN\n"
+        ".bilibili.com\tTRUE\t/\tFALSE\t0\tbili_locale_sec\tzh-CN\n",
         encoding="utf-8",
     )
     return path
+
+
+def _with_bilibili_locale(cookiefile: Path, dest_dir: Path) -> Path:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    out = dest_dir / "bili.locale.cookies.txt"
+    try:
+        text = cookiefile.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return cookiefile
+    lines = [line for line in text.splitlines() if "bili_locale" not in line.lower()]
+    if not lines or not lines[0].startswith("#"):
+        lines.insert(0, "# Netscape HTTP Cookie File")
+    lines.append(".bilibili.com\tTRUE\t/\tFALSE\t0\tbili_locale\tzh-CN")
+    lines.append(".bilibili.com\tTRUE\t/\tFALSE\t0\tbili_locale_sec\tzh-CN")
+    try:
+        out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError:
+        return cookiefile
+    return out
+
+
+def _patch_bilibili_original_audio() -> None:
+    """Account locale can make playurl return English AI dub as the only audio."""
+    try:
+        from yt_dlp.extractor.bilibili import BilibiliBaseIE
+    except Exception:
+        return
+    if getattr(BilibiliBaseIE, "_subflow_original_audio", False):
+        return
+
+    orig = BilibiliBaseIE._download_playinfo
+
+    def _download_playinfo(self, bvid, cid, headers=None, query=None, fatal=True):
+        q = dict(query or {})
+        q.pop("cur_language", None)
+        data = orig(self, bvid, cid, headers=headers, query=q, fatal=fatal)
+        if not data:
+            return data
+        current = str(data.get("cur_language") or "").strip()
+        if current:
+            logger.info("bilibili playurl used AI dub %s; refetching original audio", current)
+            q = dict(q)
+            q["cur_language"] = ""
+            retried = orig(self, bvid, cid, headers=headers, query=q, fatal=False)
+            if retried:
+                return retried
+        return data
+
+    BilibiliBaseIE._download_playinfo = _download_playinfo
+    BilibiliBaseIE._subflow_original_audio = True
 
 
 def available_browsers() -> tuple[str, ...]:
@@ -115,25 +204,291 @@ def available_browsers() -> tuple[str, ...]:
     return tuple(found)
 
 
-def cookie_file() -> Path | None:
-    env = (os.environ.get("SUBFLOW_COOKIES") or os.environ.get("YTDLP_COOKIES") or "").strip()
-    candidates: list[Path] = []
-    if env:
-        candidates.append(Path(env))
+def _project_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[3]
+
+
+def _usable_cookie(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 32
+    except OSError:
+        return False
+
+
+def _cookie_names(url: str | None) -> list[str]:
+    if url and is_youtube_url(url):
+        return ["youtube-cookies.txt", "cookies.txt"]
+    if url and is_bilibili_url(url):
+        return ["bilibili-cookies.txt", "cookies.txt"]
+    return ["cookies.txt", "youtube-cookies.txt", "bilibili-cookies.txt"]
+
+
+def cookie_folder_dirs() -> list[Path]:
+    """Dedicated Cookies folders only. Project / exe sibling first."""
+    dirs: list[Path] = []
+    primary = _project_root() / "Cookies"
+    if primary.is_dir():
+        dirs.append(primary)
     try:
         from bilingual_sub.config import user_config_dir
 
-        root = user_config_dir()
-        candidates.extend((root / "cookies.txt", root / "youtube-cookies.txt", root / "bilibili-cookies.txt"))
+        extra = user_config_dir() / "Cookies"
+        if extra.is_dir() and extra not in dirs:
+            dirs.append(extra)
     except Exception:
         pass
-    for path in candidates:
-        try:
-            if path.is_file() and path.stat().st_size > 32:
+    return dirs
+
+
+def cookie_search_dirs() -> list[Path]:
+    dirs = list(cookie_folder_dirs())
+    root = _project_root()
+    for extra in (root / "config", root):
+        if extra.is_dir() and extra not in dirs:
+            dirs.append(extra)
+    try:
+        from bilingual_sub.config import user_config_dir
+
+        cfg = user_config_dir()
+        if cfg.is_dir() and cfg not in dirs:
+            dirs.append(cfg)
+    except Exception:
+        pass
+    return dirs
+
+
+def cookie_file(url: str | None = None) -> Path | None:
+    names = _cookie_names(url)
+    for folder in cookie_folder_dirs():
+        for name in names:
+            path = folder / name
+            if _usable_cookie(path):
                 return path
-        except OSError:
+    env = (os.environ.get("SUBFLOW_COOKIES") or os.environ.get("YTDLP_COOKIES") or "").strip()
+    if env:
+        env_path = Path(env)
+        if _usable_cookie(env_path):
+            return env_path
+    seen = set(cookie_folder_dirs())
+    for root in cookie_search_dirs():
+        if root in seen:
             continue
+        for name in names:
+            path = root / name
+            if _usable_cookie(path):
+                return path
     return None
+
+
+def _as_float(value: object) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def download_fraction(status: dict) -> float | None:
+    state = str(status.get("status") or "")
+    if state == "finished":
+        return 1.0
+    if state != "downloading":
+        return None
+    done = _as_float(status.get("downloaded_bytes"))
+    total = _as_float(status.get("total_bytes")) or _as_float(status.get("total_bytes_estimate"))
+    frag_i = _as_float(status.get("fragment_index"))
+    frag_n = _as_float(status.get("fragment_count"))
+    if frag_n and frag_n > 1 and frag_i is not None:
+        inner = 0.0
+        if total and total > 0 and done is not None:
+            inner = min(1.0, max(0.0, done / total))
+        overall = (max(0.0, frag_i - 1.0) + inner) / frag_n
+        return min(0.999, max(0.0, overall))
+    if total and total > 0 and done is not None:
+        return min(0.999, max(0.0, done / total))
+    raw = str(status.get("_percent_str") or "").strip().rstrip("%")
+    try:
+        if raw:
+            return min(0.999, max(0.0, float(raw) / 100.0))
+    except ValueError:
+        return None
+    return None
+
+
+def _stream_key(status: dict) -> str:
+    info = status.get("info_dict") or {}
+    fmt = str(info.get("format_id") or "").strip()
+    if fmt:
+        return f"fmt:{fmt}"
+    name = str(status.get("filename") or status.get("tmpfilename") or "")
+    for token in ("-Frag", ".part"):
+        cut = name.find(token)
+        if cut > 0:
+            name = name[:cut]
+            break
+    return name or str(info.get("format") or "stream")
+
+
+class StreamProgress:
+    """Map video-then-audio (and retries) onto a single non-decreasing 0–1 bar."""
+
+    def __init__(self, expected: int = 1) -> None:
+        self.expected = max(1, expected)
+        self._keys: list[str] = []
+        self._frac: dict[str, float] = {}
+        self._last = 0.0
+        self._attempt_base = 0.0
+
+    def set_expected(self, n: int) -> None:
+        if n > 0:
+            self.expected = max(1, int(n))
+
+    def begin_attempt(self) -> None:
+        self._attempt_base = self._last
+        self._keys.clear()
+        self._frac.clear()
+
+    def feed(self, status: dict) -> float | None:
+        key = _stream_key(status)
+        if key not in self._keys:
+            self._keys.append(key)
+            if len(self._keys) > self.expected:
+                self.expected = len(self._keys)
+        local = download_fraction(status)
+        if local is None:
+            return None
+        self._frac[key] = max(self._frac.get(key, 0.0), min(1.0, local))
+        raw = sum(self._frac.get(item, 0.0) for item in self._keys) / max(self.expected, len(self._keys))
+        base = self._attempt_base
+        mapped = base + (0.99 - base) * raw if base > 0 else raw
+        self._last = min(0.99, max(self._last, mapped))
+        return self._last
+
+
+def max_video_height(info: dict | None) -> int:
+    if not info:
+        return 0
+    heights: list[int] = []
+    for fmt in info.get("formats") or ():
+        if (fmt.get("vcodec") or "none") == "none":
+            continue
+        if not (fmt.get("url") or fmt.get("manifest_url")):
+            continue
+        height = _as_float(fmt.get("height"))
+        if height and height > 0:
+            heights.append(int(height))
+    top = _as_float(info.get("height"))
+    if top and top > 0:
+        heights.append(int(top))
+    return max(heights) if heights else 0
+
+
+def selected_height(info: dict | None) -> int:
+    if not info:
+        return 0
+    heights: list[int] = []
+    for fmt in info.get("requested_formats") or ():
+        if (fmt.get("vcodec") or "none") == "none":
+            continue
+        height = _as_float(fmt.get("height"))
+        if height and height > 0:
+            heights.append(int(height))
+    if heights:
+        return max(heights)
+    return int(_as_float(info.get("height")) or 0)
+
+
+def quality_target(listed: int) -> int:
+    """Pin to the source maximum. If still unknown, refuse anything below HD."""
+    return int(listed) if listed > 0 else HD_FLOOR
+
+
+def format_for_height(height: int) -> str:
+    pin = quality_target(height)
+    return (
+        f"bv*[height>={pin}][protocol^=http]+({ORIGINAL_AUDIO})/"
+        f"bv*[height>={pin}]+({ORIGINAL_AUDIO})/"
+        f"b[height>={pin}][format_note*=original]/"
+        f"b[height>={pin}]"
+    )
+
+
+def _audio_formats(info: dict | None) -> list[dict]:
+    if not info:
+        return []
+    out: list[dict] = []
+    for fmt in list(info.get("requested_formats") or ()) + list(info.get("formats") or ()):
+        if str(fmt.get("acodec") or "none") == "none":
+            continue
+        out.append(fmt)
+    return out
+
+
+def audio_track_kind(fmt: dict | None) -> str:
+    """original | dubbed | unknown"""
+    if not fmt:
+        return "unknown"
+    note = str(fmt.get("format_note") or "").lower()
+    pref = fmt.get("language_preference")
+    try:
+        pref_n = int(pref) if pref is not None else None
+    except (TypeError, ValueError):
+        pref_n = None
+    if "original" in note or pref_n == 10:
+        return "original"
+    if "dub" in note or "dubbed" in note:
+        return "dubbed"
+    return "unknown"
+
+
+def original_audio_format_id(info: dict | None) -> str | None:
+    best_id = None
+    best_abr = -1.0
+    for fmt in (info or {}).get("formats") or ():
+        if str(fmt.get("acodec") or "none") == "none":
+            continue
+        if audio_track_kind(fmt) != "original":
+            continue
+        try:
+            abr = float(fmt.get("abr") or fmt.get("tbr") or 0)
+        except (TypeError, ValueError):
+            abr = 0.0
+        ident = str(fmt.get("format_id") or "").strip()
+        if ident and abr >= best_abr:
+            best_abr = abr
+            best_id = ident
+    return best_id
+
+
+def prefer_audio_format(info: dict | None, height: int) -> str:
+    fmt = format_for_height(height)
+    if not selected_audio_is_dubbed(info):
+        return fmt
+    orig = original_audio_format_id(info)
+    if not orig:
+        return fmt
+    logger.info("replacing dubbed audio with original %s", orig)
+    return (
+        f"bv*[height>={height}][protocol^=http]+{orig}/"
+        f"bv*[height>={height}]+{orig}/"
+        + fmt
+    )
+
+
+def selected_audio_is_dubbed(info: dict | None) -> bool:
+    requested = [
+        fmt
+        for fmt in (info or {}).get("requested_formats") or ()
+        if str(fmt.get("acodec") or "none") != "none"
+    ]
+    if not requested:
+        return False
+    return any(audio_track_kind(fmt) == "dubbed" for fmt in requested) and not any(
+        audio_track_kind(fmt) == "original" for fmt in requested
+    )
 
 
 def _impersonate():
@@ -171,6 +526,8 @@ def ydl_options(
         headers["Referer"] = "https://www.bilibili.com/"
         if cookiefile is None and not cookiesfrombrowser:
             cookiefile = _bilibili_guest_cookies(dest_dir)
+        if cookiefile is not None:
+            cookiefile = _with_bilibili_locale(cookiefile, dest_dir)
     target = _impersonate() if impersonate else None
     if target is None:
         headers["User-Agent"] = CHROME_UA
@@ -178,7 +535,10 @@ def ydl_options(
         "outtmpl": str(dest_dir / "source.%(ext)s"),
         "merge_output_format": "mp4",
         "format": fmt,
-        "format_sort": ["res", "fps:60", "codec:h264:av01:vp9", "size"],
+        "format_sort": ["lang", "res", "proto:https", "fps", "hdr:12", "vbr", "abr"],
+        "format_sort_force": True,
+        "overwrites": True,
+        "continuedl": False,
         "quiet": True,
         "noplaylist": True,
         "retries": 8,
@@ -194,7 +554,8 @@ def ydl_options(
     if is_youtube_url(url):
         opts["extractor_args"] = {
             "youtube": {
-                "player_client": list(clients or ("android", "ios")),
+                "player_client": list(clients or YT_SAFE_CLIENTS),
+                "lang": ["zh-CN", "zh-Hans", "zh"],
             }
         }
     if target is not None:
@@ -209,51 +570,57 @@ def ydl_options(
 
 
 def download_attempts(url: str) -> Iterator[dict]:
-    """Guest clients first, then the user's signed-in browser cookies."""
-    cookie = cookie_file()
+    """Cookies folder jar first; guest and browser jars only after that jar is exhausted."""
+    cookie = cookie_file(url)
     browsers = available_browsers() or ("firefox", "edge", "chrome")
+
+    def emit(profile: dict) -> dict:
+        return {**profile, "fmt": BEST_AV_FORMAT}
+
     if is_youtube_url(url):
-        profiles: list[dict] = [
-            {"clients": ("android", "ios"), "impersonate": True},
-            {"clients": ("tv", "web_safari"), "impersonate": True},
-            {"clients": ("web_safari",), "impersonate": True},
-        ]
         if cookie:
-            profiles.append(
-                {"clients": ("web_safari", "android"), "cookiefile": cookie, "impersonate": True}
-            )
+            for clients in YT_COOKIE_CLIENTS:
+                yield emit({"clients": clients, "cookiefile": cookie, "impersonate": True})
+            for browser in browsers:
+                yield emit(
+                    {
+                        "clients": YT_SAFE_CLIENTS,
+                        "cookiesfrombrowser": (browser,),
+                        "impersonate": True,
+                    }
+                )
+            for clients in YT_GUEST_CLIENTS:
+                yield emit({"clients": clients, "impersonate": True})
+            return
+        for clients in YT_GUEST_CLIENTS:
+            yield emit({"clients": clients, "impersonate": True})
         for browser in browsers:
-            # Cookies + web/android only. Do not pair a logged-in jar with the TV client.
-            profiles.append(
+            yield emit(
                 {
-                    "clients": ("web_safari", "android"),
+                    "clients": YT_SAFE_CLIENTS,
                     "cookiesfrombrowser": (browser,),
                     "impersonate": True,
                 }
             )
-    elif is_bilibili_url(url):
-        profiles = [{"impersonate": True}]
-        if cookie:
-            profiles.append({"cookiefile": cookie, "impersonate": True})
-        for browser in browsers:
-            profiles.append({"cookiesfrombrowser": (browser,), "impersonate": True})
-    else:
-        profiles = [{"impersonate": True}]
-        if cookie:
-            profiles.append({"cookiefile": cookie, "impersonate": True})
-        for browser in browsers:
-            profiles.append({"cookiesfrombrowser": (browser,), "impersonate": True})
+        return
 
-    for profile in profiles:
-        yield {**profile, "fmt": BEST_AV_FORMAT}
-    for profile in profiles[:2]:
-        yield {**profile, "fmt": FALLBACK_AV_FORMAT}
+    if cookie:
+        yield emit({"cookiefile": cookie, "impersonate": True})
+    for browser in browsers:
+        yield emit({"cookiesfrombrowser": (browser,), "impersonate": True})
+    yield emit({"impersonate": True})
 
 
 def explain_download_error(exc: BaseException) -> str:
-    text = str(exc)
+    text = str(exc).strip()
+    if text.startswith(("下载失败", "YouTube ", "B 站", "无法解析", "未安装", "无法下载", "禁止")):
+        return text
     low = text.lower()
     first = text.split("See https://", 1)[0].split("Also see https://", 1)[0].strip()
+    if "cookies are no longer valid" in low:
+        return "YouTube Cookie 已失效。请重新导出 youtube-cookies.txt 放到 Cookies 文件夹后再试。"
+    if "page needs to be reloaded" in low or "requested format is not available" in low:
+        return "YouTube 没有返回可下载地址。请再试一次；若仍失败，请更新 Cookies 文件夹里的 youtube-cookies.txt。"
     if "412" in low and any(token in low for token in ("bilibili", "b23.tv", "precondition")):
         return (
             "B 站拦截了网页请求。已尝试读取本机浏览器登录 Cookie；"
@@ -269,7 +636,7 @@ def explain_download_error(exc: BaseException) -> str:
     ):
         return (
             "B 站拒绝了游客下载。请用浏览器登录 bilibili.com 后再试，"
-            "或把 cookies.txt 放到本机配置目录。"
+            "或把 Netscape 格式的 bilibili-cookies.txt 放到本机配置目录。"
         )
     if "unsupported url" in low or "unable to extract" in low:
         return f"无法解析该链接：{first.splitlines()[0] if first else text}"
@@ -278,21 +645,42 @@ def explain_download_error(exc: BaseException) -> str:
     return f"下载失败：{exc}"
 
 
-def _picked_file(dest_dir: Path) -> Path | None:
+def _reset_outputs(dest_dir: Path) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for pattern in ("source.*", ".best*", "*.part"):
+        for path in dest_dir.glob(pattern):
+            try:
+                if path.is_file():
+                    path.unlink()
+            except OSError:
+                continue
+
+
+def _picked_file(dest_dir: Path, *, since: float | None = None) -> Path | None:
     exact = dest_dir / "source.mp4"
-    if exact.is_file():
-        return exact
-    candidates = sorted(p for p in dest_dir.glob("source.*") if p.is_file())
-    return candidates[0] if candidates else None
+    candidates = [exact] if exact.is_file() else sorted(p for p in dest_dir.glob("source.*") if p.is_file())
+    for path in candidates:
+        if not path.is_file():
+            continue
+        if since is not None and path.stat().st_mtime + 0.05 < since:
+            continue
+        return path
+    return None
 
 
 def _ensure_mp4(path: Path, dest_dir: Path) -> Path:
-    if path.suffix.lower() == ".mp4":
-        return path
     target = dest_dir / "source.mp4"
-    if path.resolve() != target.resolve():
-        path.replace(target)
-    return target
+    if path.suffix.lower() == ".mp4":
+        if path.resolve() != target.resolve():
+            shutil.copy2(path, target)
+        return target
+    try:
+        from bilingual_sub.adapters.ffmpeg import remux_to_mp4
+
+        return remux_to_mp4(path, target)
+    except Exception as exc:
+        logger.warning("remux to mp4 failed (%s); keeping %s", exc, path)
+        return path
 
 
 def _audio_status(path: Path) -> bool | None:
@@ -304,70 +692,174 @@ def _audio_status(path: Path) -> bool | None:
         return None
 
 
+def _video_height(path: Path) -> int:
+    try:
+        from bilingual_sub.adapters.ffmpeg import probe_video
+
+        return int(probe_video(path).get("height") or 0)
+    except Exception:
+        return 0
+
+
 def download(
     url: str,
     dest_dir: Path,
     *,
     on_progress: Callable[[str, float], None] | None = None,
     control: JobControl | None = None,
+    progress_range: tuple[float, float] = (0.03, 0.20),
 ) -> Path:
     url = canonicalize_url(url)
     dest_dir.mkdir(parents=True, exist_ok=True)
+    _reset_outputs(dest_dir)
     log_path = dest_dir / "ytdlp.log"
     try:
         from yt_dlp import YoutubeDL
     except ImportError as exc:
         raise DownloadError("未安装 yt-dlp，请执行 pip install yt-dlp") from exc
+    _patch_bilibili_original_audio()
+
+    start, end = progress_range
+    span = max(0.0, end - start)
+    tracker = StreamProgress(expected=1)
+
+    def emit(frac: float) -> None:
+        if on_progress:
+            on_progress("ingest", start + span * min(1.0, max(0.0, frac)))
 
     def hook(status: dict) -> None:
         if control:
             control.check()
-        if on_progress and status.get("status") == "downloading":
-            total = status.get("total_bytes") or status.get("total_bytes_estimate") or 0
-            done = status.get("downloaded_bytes") or 0
-            frac = min(0.99, done / total) if total else 0.1
-            on_progress("ingest", 0.05 + 0.10 * frac)
+        frac = tracker.feed(status)
+        if frac is None:
+            return
+        emit(frac)
 
-    last_error: Exception | None = None
-    notes: list[str] = []
-    for attempt in download_attempts(url):
-        if control:
-            control.wait_if_paused()
-        label = (
+    def label_of(attempt: dict) -> object:
+        return (
             attempt.get("clients")
             or attempt.get("cookiesfrombrowser")
             or attempt.get("cookiefile")
             or "default"
         )
-        if attempt.get("cookiesfrombrowser"):
-            logger.info("download fallback: browser cookies %s", attempt["cookiesfrombrowser"])
+
+    def build_opts(attempt: dict, *, fmt: str, with_hook: bool) -> dict:
+        return ydl_options(
+            dest_dir,
+            url,
+            hook=hook if with_hook else None,
+            fmt=fmt,
+            clients=attempt.get("clients"),
+            cookiefile=attempt.get("cookiefile"),
+            cookiesfrombrowser=attempt.get("cookiesfrombrowser"),
+            impersonate=bool(attempt.get("impersonate", True)),
+        )
+
+    def extract_listing(attempt: dict) -> tuple[dict | None, int]:
+        last_exc: Exception | None = None
+        for fmt in (LIST_FORMAT, BEST_AV_FORMAT, "all"):
+            try:
+                opts = build_opts(attempt, fmt=fmt, with_hook=False)
+                with YoutubeDL(opts) as ydl:
+                    if not hasattr(ydl, "extract_info"):
+                        return None, 0
+                    info = ydl.extract_info(url, download=False)
+                return info, max_video_height(info)
+            except JobStopped:
+                raise
+            except Exception as exc:
+                last_exc = exc
+                continue
+        if last_exc:
+            raise last_exc
+        return None, 0
+
+    last_error: Exception | None = None
+    notes: list[str] = []
+    best_path: Path | None = None
+    best_height = -1
+    listed_ceiling = 0
+    attempts = list(download_attempts(url))
+    cookie_attempts = [item for item in attempts if item.get("cookiefile")]
+    emit(0.02)
+
+    for probe in attempts[:6]:
+        if control:
+            control.wait_if_paused()
         try:
-            opts = ydl_options(
-                dest_dir,
-                url,
-                hook=hook,
-                fmt=str(attempt.get("fmt") or BEST_AV_FORMAT),
-                clients=attempt.get("clients"),
-                cookiefile=attempt.get("cookiefile"),
-                cookiesfrombrowser=attempt.get("cookiesfrombrowser"),
-                impersonate=bool(attempt.get("impersonate", True)),
-            )
+            _info, height = extract_listing(probe)
+        except JobStopped:
+            raise
+        except Exception as exc:
+            notes.append(f"{label_of(probe)} list: {exc}")
+            logger.warning("yt-dlp list %s failed: %s", label_of(probe), exc)
+            continue
+        if height > listed_ceiling:
+            listed_ceiling = height
+        if listed_ceiling >= 2160:
+            break
+
+    if listed_ceiling:
+        logger.info("highest listed format: %sp cookie=%s", listed_ceiling, bool(cookie_attempts))
+
+    for attempt in attempts:
+        if best_path is not None and listed_ceiling > 0 and best_height >= listed_ceiling:
+            break
+        if control:
+            control.wait_if_paused()
+        if attempt.get("cookiefile"):
+            logger.info("download with cookie file %s", Path(str(attempt["cookiefile"])).name)
+        elif attempt.get("cookiesfrombrowser"):
+            logger.info("download fallback: browser cookies %s", attempt["cookiesfrombrowser"])
+        want = quality_target(listed_ceiling)
+        fmt = format_for_height(want)
+        tracker.begin_attempt()
+        started = time.time()
+        try:
+            opts = build_opts(attempt, fmt=fmt, with_hook=True)
+            def after_pp(status: dict) -> None:
+                if tracker._last < 0.5:
+                    return
+                state = str(status.get("status") or "")
+                if state == "started":
+                    emit(0.97)
+                elif state == "finished":
+                    emit(0.99)
+
+            opts["postprocessor_hooks"] = [after_pp]
             with YoutubeDL(opts) as ydl:
+                if hasattr(ydl, "extract_info"):
+                    try:
+                        info = ydl.extract_info(url, download=False)
+                        listed_ceiling = max(listed_ceiling, max_video_height(info))
+                        want = quality_target(listed_ceiling)
+                        n = len((info or {}).get("requested_formats") or ()) or 1
+                        tracker.set_expected(n)
+                        ydl.params["format"] = prefer_audio_format(info, want)
+                        would = selected_height(info)
+                        if would and would < want:
+                            raise DownloadError(f"该通道只有 {would}p，低于 {want}p，已跳过")
+                    except DownloadError:
+                        raise
+                    except Exception as exc:
+                        notes.append(f"{label_of(attempt)} list: {exc}")
                 ydl.download([url])
         except JobStopped:
             raise
         except Exception as exc:
             last_error = exc
-            notes.append(f"{label}: {exc}")
-            if attempt.get("cookiesfrombrowser"):
-                logger.info("browser-cookie fallback %s failed: %s", label, exc)
+            notes.append(f"{label_of(attempt)}: {exc}")
+            if isinstance(exc, DownloadError) and "已跳过" in str(exc):
+                logger.info("skip low-res %s: %s", label_of(attempt), exc)
+            elif attempt.get("cookiesfrombrowser"):
+                logger.info("browser-cookie fallback %s failed: %s", label_of(attempt), exc)
             else:
-                logger.warning("yt-dlp %s failed: %s", label, exc)
+                logger.warning("yt-dlp %s failed: %s", label_of(attempt), exc)
             continue
-        picked = _picked_file(dest_dir)
+        picked = _picked_file(dest_dir, since=started)
         if not picked:
             last_error = DownloadError("下载完成但没有找到视频文件")
-            notes.append(f"{label}: missing file")
+            notes.append(f"{label_of(attempt)}: missing file")
             continue
         picked = _ensure_mp4(picked, dest_dir)
         audio = _audio_status(picked)
@@ -379,12 +871,35 @@ def download(
             except OSError:
                 pass
             continue
-        if on_progress:
-            on_progress("ingest", 0.15)
-        return picked
+        height = _video_height(picked)
+        want = quality_target(listed_ceiling)
+        if height < want:
+            notes.append(f"{label_of(attempt)}: got {height}p < {want}p")
+            logger.warning("rejected %sp below target %sp", height, want)
+            last_error = DownloadError(f"禁止保存低清晰度视频（{height}p < {want}p）")
+            try:
+                picked.unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+        if height > best_height:
+            stash = dest_dir / f".best{picked.suffix.lower()}"
+            if picked.resolve() != stash.resolve():
+                shutil.copy2(picked, stash)
+            best_path, best_height = stash, height
+        if best_height >= want:
+            break
 
+    want = quality_target(listed_ceiling)
+    if best_path and best_path.is_file() and best_height >= want:
+        final = _ensure_mp4(best_path, dest_dir)
+        try:
+            best_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if on_progress:
+            on_progress("ingest", end)
+        return final
     if notes:
         log_path.write_text("\n".join(notes), encoding="utf-8")
-    if last_error:
-        raise DownloadError(explain_download_error(last_error)) from last_error
-    raise DownloadError("下载失败：未能取得带声音的最高清视频")
+    raise DownloadError(f"无法下载最高清（{want}p），已禁止保存低清晰度视频。")

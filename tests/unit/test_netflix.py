@@ -38,9 +38,29 @@ def test_split_text_with_words():
 
 def test_bilingual_two_dialogues():
     cues = [Cue(1.0, 3.0, "大家好", "Hello.")]
-    ass, _ = render_ass_srt(cues, PRESET, play_res=(1920, 1080), mode="bilingual")
+    ass, srt = render_ass_srt(cues, PRESET, play_res=(1920, 1080), mode="bilingual")
     assert ass.count("Dialogue:") == 2
     assert ",CN," in ass and ",EN," in ass
+    assert srt.index("大家好") < srt.index("Hello.")
+
+
+def test_bilingual_does_not_stack_two_english_lines():
+    cues = [Cue(1.0, 3.0, "Hello everyone", "Hello")]
+    ass, srt = render_ass_srt(cues, PRESET, play_res=(1920, 1080), mode="bilingual")
+    assert ass.count("Dialogue:") == 1
+    assert "Hello everyone" in ass
+    assert srt.count("Hello") == 1
+
+
+def test_enzh_english_above_chinese():
+    cues = [Cue(1.0, 3.0, "大家好", "Hello.")]
+    ass, srt = render_ass_srt(cues, PRESET, play_res=(1920, 1080), mode="enzh")
+    assert ass.count("Dialogue:") == 2
+    assert ",CN," in ass and ",EN," in ass
+    en_at = ass.index(",EN,")
+    cn_at = ass.index(",CN,")
+    assert en_at < cn_at
+    assert srt.index("Hello.") < srt.index("大家好")
 
 
 def test_netflix_single_one_dialogue():
@@ -50,6 +70,16 @@ def test_netflix_single_one_dialogue():
     assert "Hello." in ass
     assert "大家好" not in ass or ass.count("大家好") == 0
     assert "Hello." in srt
+
+
+def test_single_english_one_dialogue():
+    cues = [Cue(1.0, 3.0, "大家好", "Hello.")]
+    ass, srt = render_ass_srt(cues, PRESET, play_res=(1920, 1080), mode="single:en")
+    assert ass.count("Dialogue:") == 1
+    assert "Hello." in ass
+    assert "大家好" not in ass
+    assert "Hello." in srt
+    assert "大家好" not in srt
 
 
 def test_fit_cues_splits_long():

@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from bilingual_sub.adapters.whisper_backend import (
     MISSING_WHISPER_MSG,

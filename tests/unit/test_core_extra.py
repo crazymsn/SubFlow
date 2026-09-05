@@ -31,6 +31,7 @@ def test_extract_wav_calls_ffmpeg(tmp_path):
     args = m.call_args[0][0]
     assert "-t" in args
     assert "30.0" in args
+    assert "aresample=async=1:first_pts=0" in args
 
 
 def test_burn_subtitles_builds_filter(tmp_path):
@@ -45,8 +46,10 @@ def test_burn_subtitles_builds_filter(tmp_path):
     ):
         burn_subtitles(video, ass, out)
     args = m.call_args[0][0]
-    assert "subtitles=" in args[args.index("-vf") + 1]
-    assert "-c:a" in args and "copy" in args
+    vf = args[args.index("-vf") + 1]
+    assert "setpts=PTS-STARTPTS" in vf
+    assert "subtitles=" in vf
+    assert "-c:a" in args and "aac" in args
     assert "libx264" in args
     assert "veryfast" in args
 

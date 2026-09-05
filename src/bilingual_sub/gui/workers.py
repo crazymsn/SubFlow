@@ -61,6 +61,7 @@ class ModelsWorker(QThread):
 
 
 class DownloadWorker(QThread):
+    progress = Signal(str, float)
     ok = Signal(str)
     fail = Signal(str)
 
@@ -73,7 +74,13 @@ class DownloadWorker(QThread):
         try:
             from bilingual_sub.adapters.ytdlp import download as ytdlp_download
 
-            path = ytdlp_download(self.url, self.dest)
+            path = ytdlp_download(
+                self.url,
+                self.dest,
+                on_progress=lambda stage, pct: self.progress.emit(stage, pct),
+                progress_range=(0.0, 1.0),
+            )
+            self.progress.emit("ingest", 1.0)
             self.ok.emit(str(path))
         except Exception as exc:
             from bilingual_sub.adapters.ytdlp import explain_download_error

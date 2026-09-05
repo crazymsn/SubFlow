@@ -188,10 +188,10 @@ def build_cues(
 
     out: list[Cue] = []
     for a, b, zh in tmp:
-        if out and a < out[-1].end + 0.03:
-            a = out[-1].end + 0.04
-            if b <= a:
-                b = a + 0.7
+        if out and a < out[-1].end:
+            a = out[-1].end
+        if b <= a:
+            continue
         b = min(b, a + max_duration)
         out.append(Cue(start=round(a, 2), end=round(b, 2), zh=zh))
     return out

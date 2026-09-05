@@ -10,6 +10,7 @@ from bilingual_sub.adapters.meding import (
     TranslationCache,
     create_client,
 )
+from bilingual_sub.core.langs import normalize_pair_fields, park_pair_source
 from bilingual_sub.models import Cue
 from bilingual_sub.secrets.store import get_api_key
 
@@ -113,3 +114,44 @@ def translate_cues(
             missing.append(c.zh)
         out.append(Cue(start=c.start, end=c.end, zh=c.zh, en=en))
     return out, stats, list(dict.fromkeys(missing))
+
+
+def translate_pair_cues(
+    cues: list[Cue],
+    *,
+    translator=None,
+    **kwargs,
+) -> tuple[list[Cue], TranslateStats, list[str]]:
+    """Fill a 中英 pair from whatever script ASR actually produced."""
+    work = translator or translate_cues
+    need_en, need_zh = park_pair_source(cues)
+    stats = TranslateStats()
+    missing: list[str] = []
+
+    if need_en:
+        subset = [cues[i] for i in need_en]
+        out, st, miss = work(subset, source_lang="zh", target_lang="en", **kwargs)
+        stats.cache_hits += getattr(st, "cache_hits", 0)
+        stats.api_calls += getattr(st, "api_calls", 0)
+        missing.extend(miss)
+        for index, updated in zip(need_en, out):
+            cues[index].en = updated.en
+            if updated.zh:
+                cues[index].zh = updated.zh
+
+    if need_zh:
+        subset = [
+            Cue(start=cues[i].start, end=cues[i].end, zh=cues[i].en or cues[i].zh or "", en=None)
+            for i in need_zh
+        ]
+        out, st, miss = work(subset, source_lang="en", target_lang="zh", **kwargs)
+        stats.cache_hits += getattr(st, "cache_hits", 0)
+        stats.api_calls += getattr(st, "api_calls", 0)
+        missing.extend(miss)
+        for index, updated in zip(need_zh, out):
+            chinese = (updated.en or "").strip()
+            if chinese:
+                cues[index].zh = chinese
+
+    normalize_pair_fields(cues)
+    return cues, stats, list(dict.fromkeys(missing))

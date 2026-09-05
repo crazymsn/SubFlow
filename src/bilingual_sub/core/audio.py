@@ -16,9 +16,23 @@ def extract_wav(
     control=None,
 ) -> None:
     wav_out.parent.mkdir(parents=True, exist_ok=True)
-    args = [find_ffmpeg(), "-y", "-i", str(video), "-vn", "-ac", "1", "-ar", "16000"]
+    args = [
+        find_ffmpeg(),
+        "-y",
+        "-fflags",
+        "+genpts",
+        "-i",
+        str(video),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-af",
+        "aresample=async=1:first_pts=0",
+    ]
     if preview_sec:
-        args[2:2] = ["-t", str(preview_sec)]
+        args[args.index("-i") : args.index("-i")] = ["-t", str(preview_sec)]
     args.append(str(wav_out))
     try:
         run_cmd(args, control=control)

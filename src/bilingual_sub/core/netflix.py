@@ -7,8 +7,8 @@ from bilingual_sub.models import Cue, WordSpan
 
 MAX_DURATION = 7.0
 MIN_DURATION = 5 / 6
-CPL = {"en": 42, "es": 42, "fr": 42, "ru": 42, "zh": 16, "zh-Hant": 16, "ja": 16}
-CPS = {"en": 20, "es": 20, "fr": 20, "ru": 20, "zh": 9, "zh-Hant": 9, "ja": 9}
+CPL = {"en": 42, "es": 42, "fr": 42, "de": 42, "ru": 42, "zh": 16, "zh-Hant": 16, "ja": 16}
+CPS = {"en": 20, "es": 20, "fr": 20, "de": 20, "ru": 20, "zh": 9, "zh-Hant": 9, "ja": 9}
 
 
 def cpl_limit(lang: str) -> int:

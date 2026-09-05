@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 SCROLL_FLOOR = 96
 
@@ -53,14 +53,3 @@ def field_col(label: QLabel, widget: QWidget) -> QWidget:
 def expanding(widget: QWidget) -> QWidget:
     widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return widget
-
-
-def path_row(edit: QWidget, browse: QWidget) -> QWidget:
-    row = QWidget()
-    row.setObjectName("pathRow")
-    layout = QHBoxLayout(row)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(8)
-    layout.addWidget(expanding(edit), 1)
-    layout.addWidget(browse, 0)
-    return row

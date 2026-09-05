@@ -121,7 +121,9 @@ def dub_cues(
     for i, cue in enumerate(cues):
         if control:
             control.wait_if_paused()
-        text = (cue.target or cue.source or "").strip()
+        from bilingual_sub.core.langs import spoken_line
+
+        text = spoken_line(cue, lang)
         if not text:
             continue
         raw = tts_dir / f"{i:04d}.wav"

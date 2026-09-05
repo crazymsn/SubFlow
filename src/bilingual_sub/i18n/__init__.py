@@ -27,7 +27,7 @@ _current = DEFAULT_LOCALE
 
 
 def available_locales() -> list[str]:
-    return ["en", "zh-Hans", "zh-Hant", "ja", "es", "ru", "fr"]
+    return ["zh-Hans", "zh-Hant", "en", "ja", "es", "ru", "fr", "de"]
 
 
 def _load(locale: str) -> dict[str, str]:

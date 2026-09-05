@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import re
+
 UI_LOCALES = (
-    ("en", "English"),
     ("zh-Hans", "简体中文"),
     ("zh-Hant", "繁體中文"),
+    ("en", "English"),
     ("ja", "日本語"),
     ("es", "Español"),
     ("ru", "Русский"),
     ("fr", "Français"),
+    ("de", "Deutsch"),
 )
 
 SUB_LANGS = (
@@ -20,9 +23,23 @@ SUB_LANGS = (
     ("es", "Español"),
     ("ru", "Русский"),
     ("fr", "Français"),
+    ("de", "Deutsch"),
 )
 
 SOURCE_LANGS = (("auto", "Auto"),) + SUB_LANGS
+
+SINGLE_SUB_MODES = (
+    ("single:en", "English"),
+    ("single:zh", "简体中文"),
+    ("single:zh-Hant", "繁體中文"),
+    ("single:ja", "日本語"),
+    ("single:es", "Español"),
+    ("single:ru", "Русский"),
+    ("single:fr", "Français"),
+    ("single:de", "Deutsch"),
+)
+
+_HAN = {"zh", "zh-Hans", "zh-Hant"}
 
 WHISPER_LANG = {
     "auto": "auto",
@@ -33,16 +50,18 @@ WHISPER_LANG = {
     "es": "es",
     "ru": "ru",
     "fr": "fr",
+    "de": "de",
 }
 
 PROMPT_NAME = {
-    "zh": "Chinese",
+    "zh": "Simplified Chinese",
     "zh-Hant": "Traditional Chinese",
     "en": "English",
     "ja": "Japanese",
     "es": "Spanish",
     "ru": "Russian",
     "fr": "French",
+    "de": "German",
     "auto": "the detected spoken language",
 }
 
@@ -54,7 +73,13 @@ AZURE_LOCALE = {
     "es": "es-ES",
     "ru": "ru-RU",
     "fr": "fr-FR",
+    "de": "de-DE",
 }
+
+PAIR_MODES = frozenset({"bilingual", "enzh"})
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
 
 
 def whisper_language(code: str) -> str:
@@ -81,9 +106,216 @@ def is_cjk(code: str) -> bool:
     return code in {"zh", "zh-Hant", "ja"}
 
 
+def single_subtitle_lang(mode: str) -> str | None:
+    if not (mode or "").startswith("single:"):
+        return None
+    lang = mode.split(":", 1)[1]
+    return "zh" if lang == "zh-Hans" else lang
+
+
+def is_pair_mode(mode: str) -> bool:
+    return (mode or "") in PAIR_MODES
+
+
+def is_valid_subtitle_mode(mode: str) -> bool:
+    if mode in PAIR_MODES or mode == "netflix_single":
+        return True
+    return mode in {code for code, _label in SINGLE_SUB_MODES}
+
+
+def effective_target_lang(source_lang: str, target_lang: str, mode: str) -> str:
+    """Dubbing language. Subtitle style does not override it."""
+    return target_lang
+
+
+def pair_translate_lang(source_lang: str) -> str:
+    """The other half of a 中英 / 英中 pair."""
+    return "zh" if lang_family(source_lang) == "en" else "en"
+
+
+def screen_translate_lang(source_lang: str, target_lang: str, mode: str) -> str:
+    if is_pair_mode(mode):
+        return pair_translate_lang(source_lang)
+    return single_subtitle_lang(mode) or target_lang
+
+
+def _han_variant(code: str) -> str | None:
+    if code in {"zh", "zh-Hans"}:
+        return "zh"
+    if code == "zh-Hant":
+        return "zh-Hant"
+    return None
+
+
+def screen_han_lang(source_lang: str, target_lang: str, mode: str) -> str:
+    """On-screen Chinese variant. Target/style win; default Simplified."""
+    single = single_subtitle_lang(mode)
+    if single in {"zh", "zh-Hant"}:
+        return single
+    for code in (target_lang, source_lang):
+        variant = _han_variant(code)
+        if variant:
+            return variant
+    return "zh"
+
+
+def text_family(text: str) -> str:
+    """Classify a subtitle line as zh, en, or empty."""
+    raw = text or ""
+    cjk = len(_CJK_RE.findall(raw))
+    latin = len(_LATIN_RE.findall(raw))
+    if cjk == 0 and latin == 0:
+        return ""
+    if cjk > 0 and cjk * 2 >= latin:
+        return "zh"
+    if latin > 0:
+        return "en"
+    return "zh"
+
+
+def spoken_family(cues, declared_source: str = "zh") -> str:
+    """Majority script of ASR text. Declared source is only a fallback."""
+    votes = {"zh": 0, "en": 0}
+    for cue in cues:
+        raw = getattr(cue, "zh", None) or getattr(cue, "en", None) or ""
+        fam = text_family(raw)
+        if fam in votes:
+            votes[fam] += max(1, len(raw))
+    if votes["zh"] == 0 and votes["en"] == 0:
+        if declared_source == "auto":
+            return "zh"
+        fam = lang_family(declared_source)
+        return "zh" if fam == "zh" else fam
+    return "zh" if votes["zh"] >= votes["en"] else "en"
+
+
+def park_pair_source(cues) -> tuple[list[int], list[int]]:
+    """Move English ASR out of cue.zh. Return (need_en_idx, need_zh_idx)."""
+    need_en: list[int] = []
+    need_zh: list[int] = []
+    for i, cue in enumerate(cues):
+        spoken = (cue.zh or cue.en or "").strip()
+        fam = text_family(spoken)
+        if fam == "en":
+            if text_family(cue.en or "") != "en":
+                cue.en = spoken
+            if text_family(cue.zh or "") == "en":
+                cue.zh = ""
+            if text_family(cue.zh or "") != "zh":
+                need_zh.append(i)
+        elif fam == "zh":
+            if text_family(cue.en or "") != "en":
+                need_en.append(i)
+    return need_en, need_zh
+
+
+def normalize_pair_fields(cues) -> None:
+    """cue.zh must be Chinese, cue.en must be English."""
+    for cue in cues:
+        zh_f = text_family(cue.zh or "")
+        en_f = text_family(cue.en or "")
+        if zh_f == "en" and en_f == "zh":
+            cue.zh, cue.en = cue.en, cue.zh
+        elif zh_f == "en" and en_f != "zh":
+            if en_f != "en":
+                cue.en = cue.zh
+            cue.zh = ""
+
+
+def pair_display_texts(cue) -> tuple[str, str]:
+    """On-screen 中 / 英. Never put English on the Chinese line."""
+    zh = (getattr(cue, "zh", None) or "").strip()
+    en = (getattr(cue, "en", None) or "").strip()
+    if text_family(zh) == "en":
+        if text_family(en) != "en" or len(zh) > len(en):
+            en = zh
+        zh = ""
+    if text_family(en) == "zh":
+        if text_family(zh) != "zh":
+            zh = en
+        en = ""
+    return zh, en
+
+
+def pair_cues_polluted(cues) -> bool:
+    """True when a 中英 pair still has English sitting in the Chinese field."""
+    for cue in cues:
+        if text_family(getattr(cue, "zh", None) or "") == "en":
+            return True
+    return False
+
+
+def assign_pair_fields(cues, source_lang: str) -> None:
+    """Keep cue.zh = Chinese and cue.en = English after pair translation."""
+    if lang_family(source_lang) == "en":
+        for cue in cues:
+            spoken = cue.zh
+            translated = cue.en
+            if text_family(spoken) == "en" and text_family(translated or "") == "zh":
+                cue.zh = translated or spoken
+                cue.en = spoken
+    normalize_pair_fields(cues)
+
+
+def lang_family(code: str) -> str:
+    if code in _HAN:
+        return "zh"
+    return code
+
+
+def _lang_family(code: str) -> str:
+    return lang_family(code)
+
+
+def wants_spoken_target(source_lang: str, target_lang: str) -> bool:
+    """True when dubbed speech should switch to the target language."""
+    if source_lang == "auto":
+        return lang_family(target_lang) != "zh"
+    return lang_family(source_lang) != lang_family(target_lang)
+
+
+def translation_needed(source_lang: str, target_lang: str, mode: str) -> bool:
+    """True when the subtitle style needs a language the source track does not already give."""
+    if is_pair_mode(mode):
+        return True
+    out = screen_translate_lang(source_lang, target_lang, mode)
+    if source_lang == "auto":
+        return lang_family(out) != "zh"
+    return lang_family(source_lang) != lang_family(out)
+
+
+def has_distinct_target_line(cues) -> bool:
+    for cue in cues:
+        target = (getattr(cue, "en", None) or "").strip()
+        source = (getattr(cue, "zh", None) or "").strip()
+        if target and target != source:
+            return True
+    return False
+
+
+def spoken_line(cue, target_lang: str) -> str:
+    """Text the dubber should speak. Target language is the spoken language."""
+    if lang_family(target_lang) == "zh":
+        return (getattr(cue, "zh", None) or "").strip()
+    return ((getattr(cue, "en", None) or getattr(cue, "zh", None) or "")).strip()
+
+
+def drop_target_if_unneeded(cues, source_lang: str, target_lang: str, mode: str) -> None:
+    """Same-language jobs must not keep a leftover English/target line."""
+    if translation_needed(source_lang, target_lang, mode):
+        return
+    for cue in cues:
+        cue.en = None
+
+
+_CC: dict[str, object] = {}
+
+
 def convert_han(text: str, lang: str) -> str:
-    """Convert Simplified ↔ Traditional when OpenCC is installed."""
+    """Convert Simplified ↔ Traditional. Target zh is always Simplified."""
     if not text or lang not in {"zh-Hant", "zh"}:
+        return text
+    if text_family(text) != "zh":
         return text
     try:
         import opencc
@@ -91,6 +323,19 @@ def convert_han(text: str, lang: str) -> str:
         return text
     config = "s2t" if lang == "zh-Hant" else "t2s"
     try:
-        return opencc.OpenCC(config).convert(text)
+        converter = _CC.get(config)
+        if converter is None:
+            converter = opencc.OpenCC(config)
+            _CC[config] = converter
+        return converter.convert(text)
     except Exception:
         return text
+
+
+def apply_han_to_cues(cues, han_lang: str) -> None:
+    """Normalize Chinese cue fields to the requested Han variant."""
+    if han_lang not in {"zh", "zh-Hant"}:
+        return
+    for cue in cues:
+        if text_family(getattr(cue, "zh", None) or "") == "zh":
+            cue.zh = convert_han(cue.zh, han_lang)

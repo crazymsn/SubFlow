@@ -27,7 +27,8 @@ def burn_subtitles(
 
     ass_esc = escape_subtitles_path(ass_path)
     fonts_esc = escape_subtitles_path(fonts_dir)
-    vf = f"subtitles='{ass_esc}':charenc=UTF-8:fontsdir='{fonts_esc}'"
+    vf = f"setpts=PTS-STARTPTS,subtitles='{ass_esc}':charenc=UTF-8:fontsdir='{fonts_esc}'"
+    audio = ["-af", "aresample=async=1:first_pts=0", "-c:a", "aac", "-b:a", "192k"]
 
     enc = encoder
     if enc == "auto":
@@ -40,8 +41,7 @@ def burn_subtitles(
         str(video),
         "-vf",
         vf,
-        "-c:a",
-        "copy",
+        *audio,
         "-movflags",
         "+faststart",
         "-pix_fmt",
@@ -82,8 +82,7 @@ def burn_subtitles(
             str(video),
             "-vf",
             vf,
-            "-c:a",
-            "copy",
+            *audio,
             "-movflags",
             "+faststart",
             "-pix_fmt",

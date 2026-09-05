@@ -37,6 +37,11 @@ def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, transla
                 "whisper_model": whisper,
                 "translate_model": translate,
                 "style_preset": "no-plate-large",
+                "subtitle_pack": "han-layout-v3",
+                "source_lang": "zh",
+                "target_lang": "zh",
+                "subtitle_mode": "bilingual",
+                "translated": True,
             },
             ensure_ascii=False,
         ),
@@ -148,3 +153,53 @@ def test_different_video_or_model_skips_reuse(tmp_path: Path, video: Path):
         target_lang="ja",
     )
     assert _can_reexport(lang_cfg, work) is False
+
+
+def test_stale_english_cues_block_single_chinese_reuse(tmp_path: Path, video: Path):
+    from bilingual_sub.pipeline import _can_reexport
+
+    cfg = JobConfig(
+        input_video=video,
+        output_video=tmp_path / "a.mp4",
+        output_srt=tmp_path / "a.srt",
+        work_dir=Path("auto"),
+        whisper_model="medium",
+        translate_model="gpt-4o-mini",
+        burn=True,
+        target_lang="zh",
+        subtitle_mode="single:zh",
+    )
+    work = tmp_path / "stale"
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    report = json.loads((work / "report.json").read_text(encoding="utf-8"))
+    report["subtitle_mode"] = "single:zh"
+    report["translated"] = False
+    (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    (work / "cues.bilingual.json").write_text(
+        json.dumps([{"start": 0.0, "end": 1.0, "zh": "你好", "en": "Hello"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert _can_reexport(cfg, work) is False
+
+
+def test_english_in_chinese_field_blocks_bilingual_reuse(tmp_path: Path, video: Path):
+    from bilingual_sub.pipeline import _can_reexport
+
+    cfg = JobConfig(
+        input_video=video,
+        output_video=tmp_path / "a.mp4",
+        output_srt=tmp_path / "a.srt",
+        work_dir=Path("auto"),
+        whisper_model="medium",
+        translate_model="gpt-4o-mini",
+        burn=True,
+        target_lang="zh",
+        subtitle_mode="bilingual",
+    )
+    work = tmp_path / "polluted"
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    (work / "cues.bilingual.json").write_text(
+        json.dumps([{"start": 0.0, "end": 1.0, "zh": "Hello everyone", "en": "Hello everyone"}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    assert _can_reexport(cfg, work) is False

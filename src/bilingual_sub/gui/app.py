@@ -30,6 +30,12 @@ from bilingual_sub.brand import (
 )
 from bilingual_sub.config import load_subtitle_colors, load_ui_theme, save_user_overrides
 from bilingual_sub.core.control import JobControl
+from bilingual_sub.core.langs import (
+    effective_target_lang,
+    translation_needed,
+    wants_spoken_target,
+)
+from bilingual_sub.adapters.ytdlp import download_folder
 from bilingual_sub.gui.assets import GITHUB_MARK_PX, HEADER_MARK_PX, load_app_icon, load_brand_mark, load_github_mark
 from bilingual_sub.gui.model_choice import merge_model_list, preferred_model
 from bilingual_sub.gui.output_path import (
@@ -52,7 +58,7 @@ from bilingual_sub.gui.widgets.header import build_header
 from bilingual_sub.gui.widgets.source_strip import build_source
 from bilingual_sub.gui.widgets.stage import build_stage
 from bilingual_sub.gui.workers import DownloadWorker, ModelsWorker, PipelineWorker
-from bilingual_sub.i18n import set_locale, tr
+from bilingual_sub.i18n import DEFAULT_LOCALE, set_locale, tr
 from bilingual_sub.logging_util import redact_api_key
 from bilingual_sub.models import JobConfig, JobResult
 from bilingual_sub.secrets.store import delete_api_key, get_api_key, set_api_key
@@ -71,9 +77,11 @@ class MainWindow(QMainWindow):
         self._last_result: JobResult | None = None
         self._last_signature: tuple | None = None
         self._last_log_stage: str | None = None
+        self._bar_floor = 0
         self._video: Path | None = None
         self._control: JobControl | None = None
         self._section_labels: dict[str, QLabel] = {}
+        set_locale(DEFAULT_LOCALE)
         self._theme = load_ui_theme()
 
         root = QWidget()
@@ -93,6 +101,8 @@ class MainWindow(QMainWindow):
         icon = load_app_icon(self)
         if not icon.isNull():
             self.setWindowIcon(icon)
+        self.source_lang_combo.currentIndexChanged.connect(self._sync_dub_default)
+        self.target_lang_combo.currentIndexChanged.connect(self._sync_dub_default)
         self._apply_theme(persist=False)
         self._hydrate()
         self.retranslateUi()
@@ -100,12 +110,6 @@ class MainWindow(QMainWindow):
     def _field_label(self, text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("fieldLabel")
-        return label
-
-    def _section(self, key: str, text: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("section")
-        self._section_labels[key] = label
         return label
 
     def resizeEvent(self, event) -> None:  # noqa: N802
@@ -140,6 +144,7 @@ class MainWindow(QMainWindow):
     def _relayout_deck(self) -> None:
         scroll = getattr(self, "form_scroll", None)
         if scroll is not None:
+            scroll.set_floor(SCROLL_FLOOR)
             scroll.updateGeometry()
         deck = self.findChild(QWidget, "deck")
         stage = self.findChild(QWidget, "stage")
@@ -147,44 +152,22 @@ class MainWindow(QMainWindow):
         layout = root.layout() if root is not None else None
         if deck is None or root is None or layout is None:
             return
-        more_open = self.more_box.isVisible()
-        more_need = self.more_box.sizeHint().height() if more_open else 0
-        if more_open:
-            self.more_box.setMinimumHeight(more_need)
-            self.more_box.setMaximumHeight(more_need)
-        else:
-            self.more_box.setMinimumHeight(0)
-            self.more_box.setMaximumHeight(16777215)
-        foot = self.more_btn.parentWidget()
-        foot_need = self.more_btn.sizeHint().height() + more_need + 18
-        if foot is not None:
-            if more_open:
-                foot.setMinimumHeight(foot_need)
-                foot.setMaximumHeight(foot_need)
-            else:
-                foot.setMinimumHeight(0)
-                foot.setMaximumHeight(16777215)
-        if scroll is not None:
-            scroll.set_floor(0 if more_open else SCROLL_FLOOR)
-        deck_floor = foot_need if more_open else SCROLL_FLOOR + foot_need
-        stage_floor = 96
-        if more_open:
-            for floor in (96, 72, 48):
-                stage_floor = floor
-                room = root.height() - self._chrome_except_deck(layout, deck, stage_floor=floor)
-                if room >= foot_need:
-                    break
-        else:
-            stage_floor = max(stage.minimumSizeHint().height() if stage is not None else 96, 96)
         if stage is not None:
-            stage.setMinimumHeight(stage_floor if more_open else 0)
-        room = max(deck_floor, root.height() - self._chrome_except_deck(layout, deck, stage_floor=stage_floor))
-        hint = max(deck_floor, deck.sizeHint().height())
-        deck.setMinimumHeight(min(max(deck_floor, hint if more_open else 0), room))
-        deck.setMaximumHeight(room if hint > room or more_open else 16777215)
+            stage.setMinimumHeight(96)
+        chrome = self._chrome_except_deck(layout, deck, stage_floor=96)
+        room = max(SCROLL_FLOOR, root.height() - chrome)
+        deck.setMinimumHeight(SCROLL_FLOOR)
+        deck.setMaximumHeight(room)
         deck.updateGeometry()
         layout.invalidate()
         layout.activate()
+        bar = getattr(self, "run_btn", None)
+        if bar is None:
+            return
+        gap = bar.mapTo(root, bar.rect().topLeft()).y() - deck.mapTo(root, deck.rect().bottomLeft()).y()
+        if gap < 4:
+            deck.setMaximumHeight(max(SCROLL_FLOOR, deck.height() + gap - 4))
+            layout.activate()
 
     def _set_key_status(self, text: str) -> None:
         self.key_status.setText(text)
@@ -236,8 +219,8 @@ class MainWindow(QMainWindow):
             self.run_btn,
             self.download_btn,
             self.burn_check,
+            self.color_check,
             self.refine_check,
-            self.glossary_gen_check,
             self.dub_check,
             self.zh_color_btn,
             self.en_color_btn,
@@ -249,8 +232,13 @@ class MainWindow(QMainWindow):
             save_user_overrides({"ui": {"theme": self._theme}})
 
     def _on_theme(self) -> None:
-        self._theme = str(self.theme_combo.currentData() or "light")
+        self._theme = str(self.theme_combo.currentData() or "dark")
         self._apply_theme(persist=True)
+
+    def _sync_dub_default(self) -> None:
+        source_lang = str(self.source_lang_combo.currentData() or "zh")
+        target_lang = str(self.target_lang_combo.currentData() or "zh")
+        self.dub_check.setChecked(wants_spoken_target(source_lang, target_lang))
 
     def _toggle_more(self, checked: bool) -> None:
         self.more_box.setVisible(checked)
@@ -261,10 +249,8 @@ class MainWindow(QMainWindow):
         tones = tokens_for(self._theme)
         if self._video:
             self.drop.set_prompt(self._video.name, title_color=tones.ink, hint_color=tones.muted)
-            self.video_name.setText(str(self._video))
         else:
             self.drop.set_prompt(tr("drop"), title_color=tones.ink, hint_color=tones.muted)
-            self.video_name.clear()
 
     def _set_video(self, path: Path) -> None:
         out = next_output_path(self.out_edit.text(), self._video, path)
@@ -283,11 +269,16 @@ class MainWindow(QMainWindow):
             return
         if self._dl_worker and self._dl_worker.isRunning():
             return
-        dest = Path.home() / "Downloads" / "SubFlow"
+        dest = download_folder(url)
         self.download_btn.setEnabled(False)
         self.stage_label.setText(tr("ingest"))
+        self.progress.setValue(0)
+        self.pct_label.setText(format_pct(0))
+        self._bar_floor = 0
         self._set_stage_failed(False)
+        self._last_log_stage = None
         self._dl_worker = DownloadWorker(url, dest)
+        self._dl_worker.progress.connect(self._on_progress)
         self._dl_worker.ok.connect(self._on_downloaded)
         self._dl_worker.fail.connect(self._on_download_fail)
         self._dl_worker.start()
@@ -295,10 +286,16 @@ class MainWindow(QMainWindow):
     def _on_downloaded(self, path: str) -> None:
         self._sync_download()
         self._set_video(Path(path))
+        self.progress.setValue(100)
+        self.pct_label.setText(format_pct(100))
+        self.stage_label.setText(tr("ingest"))
         self._log_line(f"{tr('ingest')}  {path}")
 
     def _on_download_fail(self, msg: str) -> None:
         self._sync_download()
+        self.progress.setValue(0)
+        self.pct_label.setText(format_pct(0))
+        self._bar_floor = 0
         self.stage_label.setText(tr("waiting"))
         QMessageBox.warning(self, PRODUCT_ZH, msg)
 
@@ -314,13 +311,11 @@ class MainWindow(QMainWindow):
             self.whisper_combo.currentText(),
             self.model_combo.currentText().strip(),
             str(self.source_lang_combo.currentData() or "zh"),
-            str(self.target_lang_combo.currentData() or "en"),
+            str(self.target_lang_combo.currentData() or "zh"),
             str(self.mode_combo.currentData() or "bilingual"),
             str(self.asr_backend_combo.currentData() or "whisper"),
             bool(self.refine_check.isChecked()),
             bool(self.burn_check.isChecked()),
-            self.glossary_edit.text().strip(),
-            bool(self.glossary_gen_check.isChecked()),
             bool(self.dub_check.isChecked()),
             self.zh_color_btn.hex(),
             self.en_color_btn.hex(),
@@ -332,6 +327,15 @@ class MainWindow(QMainWindow):
             return None
         mp4, srt, ass, dub = result.output_mp4, result.output_srt, result.output_ass, result.output_dub
         if not any(path is not None and path.is_file() for path in (mp4, srt, ass)):
+            return None
+        source_lang = str(self.source_lang_combo.currentData() or "zh")
+        mode = str(self.mode_combo.currentData() or "bilingual")
+        target_lang = effective_target_lang(
+            source_lang,
+            str(self.target_lang_combo.currentData() or "zh"),
+            mode,
+        )
+        if (not translation_needed(source_lang, target_lang, mode)) and getattr(result, "translated", False):
             return None
         return mp4, srt, ass, dub
 
@@ -486,7 +490,6 @@ class MainWindow(QMainWindow):
         self.retranslateUi()
 
     def retranslateUi(self) -> None:
-        self.lbl_ui_lang.setText(tr("ui_lang"))
         self.locale_combo.setAccessibleName(tr("ui_lang"))
         self.theme_combo.setItemText(0, tr("theme_light"))
         self.theme_combo.setItemText(1, tr("theme_dark"))
@@ -496,8 +499,6 @@ class MainWindow(QMainWindow):
         self.tts_help.setText(tr("tts_help"))
         for key, i18n_key in {
             "models": "models",
-            "glossary": "glossary",
-            "dub": "dub",
             "out": "out",
         }.items():
             label = self._section_labels.get(key)
@@ -512,8 +513,14 @@ class MainWindow(QMainWindow):
         self.lbl_source.setText(tr("source"))
         self.lbl_target.setText(tr("target"))
         self.lbl_mode.setText(tr("mode"))
-        self.mode_combo.setItemText(0, tr("mode_bi"))
-        self.mode_combo.setItemText(1, tr("mode_nf"))
+        for index in range(self.mode_combo.count()):
+            data = self.mode_combo.itemData(index)
+            if data == "bilingual":
+                self.mode_combo.setItemText(index, tr("mode_bi"))
+            elif data == "enzh":
+                self.mode_combo.setItemText(index, tr("mode_enzh"))
+            elif data == "netflix_single":
+                self.mode_combo.setItemText(index, tr("mode_nf"))
         if get_api_key() and not self.key_edit.text().strip():
             self.key_edit.setPlaceholderText(tr("token_kept"))
         else:
@@ -523,7 +530,6 @@ class MainWindow(QMainWindow):
         self.api_portal_btn.setText(tr("api_portal"))
         self.github_btn.setToolTip(tr("github"))
         self.model_combo.setPlaceholderText(tr("model_ph"))
-        self.glossary_edit.setPlaceholderText(tr("glossary_ph"))
         self.out_edit.setPlaceholderText(tr("out_ph"))
         self.fetch_models_btn.setText(tr("fetch_models"))
         self.rec_lab.setText(tr("asr"))
@@ -532,9 +538,8 @@ class MainWindow(QMainWindow):
         self.asr_backend_combo.setItemText(1, tr("engine_whisperx"))
         self.lbl_model.setText(tr("models"))
         self.burn_check.setText(tr("burn"))
+        self.color_check.setText(tr("sub_color"))
         self.refine_check.setText(tr("refine"))
-        self.glossary_gen_check.setText(tr("glossary_gen"))
-        self.glossary_browse_btn.setText(tr("browse"))
         self.dub_check.setText(tr("dub"))
         self.lbl_zh_color.setText(tr("zh_color"))
         self.lbl_en_color.setText(tr("en_color"))
@@ -554,6 +559,11 @@ class MainWindow(QMainWindow):
         self.log.setPlaceholderText(tr("log_ph"))
         self.drop.setAccessibleName(tr("drop"))
 
+    def _toggle_color(self, checked: bool) -> None:
+        self.color_box.setVisible(checked)
+        if self.more_box.isVisible():
+            self._relayout_deck()
+
     def _toggle_dub(self, checked: bool) -> None:
         self.dub_box.setVisible(checked)
         self._sync_tts_fields()
@@ -568,11 +578,6 @@ class MainWindow(QMainWindow):
         self._slot_endpoint.setVisible(on and sovits)
         if self.more_box.isVisible():
             self._toggle_more(True)
-
-    def _browse_glossary(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, tr("glossary"), "", "YAML/JSON (*.yaml *.yml *.json)")
-        if path:
-            self.glossary_edit.setText(path)
 
     def _job_busy(self) -> bool:
         return bool(self._worker is not None and self._worker.isRunning())
@@ -638,17 +643,27 @@ class MainWindow(QMainWindow):
         if (not self._video or not self._video.is_file()) and not url:
             QMessageBox.warning(self, PRODUCT_ZH, tr("need_video"))
             return
-        if not get_api_key() and not self.key_edit.text().strip():
+        source_lang = str(self.source_lang_combo.currentData() or "zh")
+        subtitle_mode = str(self.mode_combo.currentData() or "bilingual")
+        target_lang = effective_target_lang(
+            source_lang,
+            str(self.target_lang_combo.currentData() or "zh"),
+            subtitle_mode,
+        )
+        need_xl8 = translation_needed(source_lang, target_lang, subtitle_mode)
+        need_dub = self.dub_check.isChecked() and str(self.tts_combo.currentData() or "openai") != "none"
+        if (need_xl8 or need_dub) and not get_api_key() and not self.key_edit.text().strip():
             QMessageBox.warning(self, PRODUCT_ZH, tr("need_token"))
             return
         if self.key_edit.text().strip():
             set_api_key(self.key_edit.text().strip())
 
         model = self.model_combo.currentText().strip()
-        if not model:
+        if need_xl8 and not model:
             QMessageBox.warning(self, PRODUCT_ZH, tr("need_model"))
             return
-        save_user_overrides({"translate": {"model": model}})
+        if model:
+            save_user_overrides({"translate": {"model": model}})
 
         if not self.out_edit.text().strip() and url and not self._video:
             self.out_edit.setText(str(Path.home() / "Downloads" / f"source{DEFAULT_STEM_SUFFIX}.mp4"))
@@ -669,8 +684,14 @@ class MainWindow(QMainWindow):
         if self._try_relocate_outputs(out_mp4, log=True):
             return
         self._last_log_stage = None
-        gloss = self.glossary_edit.text().strip()
         tts = str(self.tts_combo.currentData() or "openai") if self.dub_check.isChecked() else "none"
+        subtitle_mode = str(self.mode_combo.currentData() or "bilingual")
+        source_lang = str(self.source_lang_combo.currentData() or "zh")
+        target_lang = effective_target_lang(
+            source_lang,
+            str(self.target_lang_combo.currentData() or "zh"),
+            subtitle_mode,
+        )
         cfg = JobConfig(
             input_video=self._video or Path(url),
             output_video=out_mp4 if self.burn_check.isChecked() else None,
@@ -679,14 +700,14 @@ class MainWindow(QMainWindow):
             whisper_model=self.whisper_combo.currentText(),
             translate_model=model,
             burn=self.burn_check.isChecked(),
-            source_lang=str(self.source_lang_combo.currentData() or "zh"),
-            target_lang=str(self.target_lang_combo.currentData() or "en"),
-            subtitle_mode=str(self.mode_combo.currentData() or "bilingual"),
+            source_lang=source_lang,
+            target_lang=target_lang,
+            subtitle_mode=subtitle_mode,
             asr_backend=str(self.asr_backend_combo.currentData() or "whisper"),
             refine_translate=self.refine_check.isChecked(),
             source_url=url or None,
-            glossary_path=Path(gloss) if gloss else None,
-            glossary_generate=self.glossary_gen_check.isChecked(),
+            glossary_path=None,
+            glossary_generate=False,
             enable_dub=self.dub_check.isChecked() and tts != "none",
             tts_provider=tts,  # type: ignore[arg-type]
             tts_voice="" if tts != "openai" else str(self.tts_voice_edit.currentData() or "alloy"),
@@ -700,6 +721,7 @@ class MainWindow(QMainWindow):
         self.log.clear()
         self.progress.setValue(0)
         self.pct_label.setText(format_pct(0))
+        self._bar_floor = 0
         self.stage_label.setText(tr("starting"))
         self._set_stage_failed(False)
         self._control = JobControl()
@@ -713,7 +735,8 @@ class MainWindow(QMainWindow):
 
     def _on_progress(self, stage: str, pct: float) -> None:
         label = stage_text(stage)
-        shown = max(0, min(100, int(pct * 100)))
+        shown = max(self._bar_floor, max(0, min(100, int(pct * 100))))
+        self._bar_floor = shown
         self.progress.setValue(shown)
         self.pct_label.setText(format_pct(shown))
         self.stage_label.setText(label)
@@ -790,6 +813,7 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName(PRODUCT_EN)
     app.setOrganizationName(COMPANY_ZH)
+    set_locale(DEFAULT_LOCALE)
     icon = _install_app_icon(app)
     app.setFont(type_font(size=14))
     app.setStyleSheet(app_qss(load_ui_theme()))

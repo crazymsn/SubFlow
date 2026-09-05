@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -85,6 +86,48 @@ def parse_model_ids(payload: Any) -> list[str]:
     return out
 
 
+_FENCE = re.compile(r"^```(?:json)?\s*([\s\S]*?)\s*```$", re.IGNORECASE)
+
+
+def parse_model_json(content: str) -> dict:
+    """Parse a chat completion that should be a JSON object, including fenced replies."""
+    text = (content or "").strip()
+    if not text:
+        raise MedingError("chat_json empty response")
+    candidates: list[str] = []
+    fenced = _FENCE.match(text)
+    if fenced:
+        candidates.append(fenced.group(1).strip())
+    candidates.append(text)
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        snippet = text[start : end + 1]
+        if snippet not in candidates:
+            candidates.append(snippet)
+    last_err: Exception | None = None
+    for cand in candidates:
+        if not cand:
+            continue
+        data = _loads_object(cand)
+        if data is not None:
+            return data
+        last_err = MedingError("not an object")
+    raise MedingError(f"chat_json did not return an object: {last_err}")
+
+
+def _loads_object(cand: str) -> dict | None:
+    try:
+        data = json.loads(cand)
+    except json.JSONDecodeError:
+        if json_repair is None:
+            return None
+        try:
+            data = json_repair.loads(cand)
+        except Exception:
+            return None
+    return data if isinstance(data, dict) else None
+
+
 SYSTEM_PROMPT = """You translate {source_name} spoken subtitles to {target_name}. Rules:
 - One line only, no quotes
 - Spoken/casual tone, not literary
@@ -128,24 +171,36 @@ class OpenAIMedingClient:
         return []
 
     def chat_json(self, *, model: str, system: str, user: str) -> dict:
-        resp = self._client.chat.completions.create(
-            model=model,
-            messages=[
+        content = self._chat_content(model, system, user, json_mode=True)
+        try:
+            return parse_model_json(content)
+        except MedingError:
+            content = self._chat_content(model, system, user, json_mode=False)
+            return parse_model_json(content)
+
+    def _chat_content(self, model: str, system: str, user: str, *, json_mode: bool) -> str:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=0.2,
-        )
-        content = (resp.choices[0].message.content or "").strip()
+            "temperature": 0.2,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
         try:
-            data = json.loads(content)
-        except json.JSONDecodeError:
-            if json_repair is None:
-                raise MedingError("JSON parse failed and json_repair is not installed")
-            data = json_repair.loads(content)
-        if not isinstance(data, dict):
-            raise MedingError("chat_json did not return an object")
-        return data
+            resp = self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if not json_mode:
+                raise
+            logger.info("json_object mode unavailable: %s", exc)
+            resp = self._client.chat.completions.create(
+                model=model,
+                messages=kwargs["messages"],
+                temperature=0.2,
+            )
+        return (resp.choices[0].message.content or "").strip()
 
     def translate_batch(
         self,

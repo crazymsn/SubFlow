@@ -99,8 +99,8 @@ class JobConfig:
     translate_model: str = "gpt-4o-mini"
     translate_batch_size: int = 30
     source_lang: str = "zh"
-    target_lang: str = "en"
-    subtitle_mode: Literal["bilingual", "netflix_single"] = "bilingual"
+    target_lang: str = "zh"
+    subtitle_mode: str = "bilingual"
     asr_backend: Literal["whisper", "whisperx"] = "whisper"
     refine_translate: bool = False
     source_url: str | None = None
@@ -128,6 +128,7 @@ class JobResult:
     stages: dict[str, float] = field(default_factory=dict)
     reused: bool = False
     output_dub: Path | None = None
+    translated: bool = False
 
 
 STAGES = (

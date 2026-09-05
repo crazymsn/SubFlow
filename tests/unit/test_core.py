@@ -59,3 +59,33 @@ def test_build_cues_basic():
     cues = build_cues(segs, [], g)
     assert len(cues) >= 1
     assert "Prefill" in cues[0].zh or "prefill" in cues[0].zh.lower()
+
+
+def test_build_cues_clamps_overlap_without_cascade():
+    g = Glossary()
+    segs = [
+        Segment(0.0, 2.0, "第一句"),
+        Segment(1.5, 3.0, "第二句"),
+        Segment(2.8, 4.0, "第三句"),
+    ]
+    cues = build_cues(segs, [], g)
+    assert len(cues) == 3
+    assert cues[1].start >= cues[0].end
+    assert cues[2].start >= cues[1].end
+    assert cues[2].end <= 4.2
+
+
+def test_render_skips_empty_or_duplicate_en():
+    preset = StylePreset(
+        name="test",
+        style={
+            "zh": {"size": 80, "font": "Arial", "bold": True, "color": "#FFFFFF", "outline": 3},
+            "en": {"size": 56, "font": "Arial", "color": "#F2F2F2", "outline": 2},
+            "layout": {"cn_y": 100, "en_y": 200, "margin_lr": 10},
+            "scale_to_fit_width": 2000,
+        },
+    )
+    ass, srt = render_ass_srt([Cue(1.0, 2.0, "大家好", None)], preset, play_res=(1920, 1080))
+    assert ass.count("Dialogue:") == 1
+    assert "大家好" in srt
+    assert "Hello" not in srt

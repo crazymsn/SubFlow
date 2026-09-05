@@ -16,13 +16,18 @@ from PySide6.QtWidgets import (
 )
 
 from bilingual_sub.adapters.whisper_backend import default_whisper_model
-from bilingual_sub.core.langs import SOURCE_LANGS, SUB_LANGS
+from bilingual_sub.core.langs import SINGLE_SUB_MODES, SOURCE_LANGS, SUB_LANGS
 from bilingual_sub.gui.widgets.brand_check import BrandCheck
 from bilingual_sub.gui.widgets.color_chip import ColorChip
-from bilingual_sub.gui.widgets.field import FitScroll, expanding, field_col, path_row
+from bilingual_sub.gui.widgets.field import FitScroll, expanding, field_col
 from bilingual_sub.i18n import tr
 
 OPENAI_VOICES = ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
+
+
+def _select_combo(combo: QComboBox, code: str) -> None:
+    index = combo.findData(code)
+    combo.setCurrentIndex(index if index >= 0 else 0)
 
 
 def build_deck(win) -> QWidget:
@@ -59,14 +64,18 @@ def build_deck(win) -> QWidget:
     win.source_lang_combo = QComboBox()
     for code, label in SOURCE_LANGS:
         win.source_lang_combo.addItem(label, code)
-    win.source_lang_combo.setCurrentIndex(1)
+    _select_combo(win.source_lang_combo, "zh")
     win.target_lang_combo = QComboBox()
     for code, label in SUB_LANGS:
         win.target_lang_combo.addItem(label, code)
-    win.target_lang_combo.setCurrentIndex(2)
+    _select_combo(win.target_lang_combo, "zh")
     win.mode_combo = QComboBox()
     win.mode_combo.addItem(tr("mode_bi"), "bilingual")
+    win.mode_combo.addItem(tr("mode_enzh"), "enzh")
+    for code, label in SINGLE_SUB_MODES:
+        win.mode_combo.addItem(label, code)
     win.mode_combo.addItem(tr("mode_nf"), "netflix_single")
+    win.mode_combo.setCurrentIndex(0)
 
     win.lbl_asr = win._field_label(tr("engine"))
     win.asr_backend_combo = QComboBox()
@@ -164,16 +173,6 @@ def build_deck(win) -> QWidget:
     win.asr_help.setObjectName("help")
     win.asr_help.hide()
 
-    scroll.setWidget(inner)
-    shell.addWidget(scroll, 1)
-
-    foot = QWidget()
-    foot.setObjectName("formInner")
-    foot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    foot_l = QVBoxLayout(foot)
-    foot_l.setContentsMargins(18, 0, 18, 10)
-    foot_l.setSpacing(8)
-
     win.more_btn = QToolButton()
     win.more_btn.setObjectName("moreToggle")
     win.more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -182,9 +181,11 @@ def build_deck(win) -> QWidget:
     win.more_btn.setArrowType(Qt.ArrowType.RightArrow)
     win.more_btn.setText(tr("more"))
     win.more_btn.toggled.connect(win._toggle_more)
-    foot_l.addWidget(win.more_btn)
-    foot_l.addWidget(build_more_drawer(win))
-    shell.addWidget(foot, 0)
+    layout.addWidget(win.more_btn, 0, Qt.AlignmentFlag.AlignLeft)
+    layout.addWidget(build_more_drawer(win))
+
+    scroll.setWidget(inner)
+    shell.addWidget(scroll, 1)
     win.form_scroll = scroll
     return frame
 
@@ -225,33 +226,38 @@ def build_more_drawer(win) -> QFrame:
     rule.setFixedHeight(1)
     more.addWidget(rule, 0, 0, 1, 6)
 
-    win.refine_check = BrandCheck(tr("refine"))
-    win.refine_check.setChecked(False)
-    win.glossary_gen_check = BrandCheck(tr("glossary_gen"))
-    win.glossary_gen_check.setChecked(False)
+    win.color_check = BrandCheck(tr("sub_color"))
+    win.color_check.setChecked(False)
+    win.color_check.toggled.connect(win._toggle_color)
     win.dub_check = BrandCheck(tr("dub"))
     win.dub_check.setChecked(False)
     win.dub_check.toggled.connect(win._toggle_dub)
-    more.addWidget(win.refine_check, 1, 0, 1, 2)
-    more.addWidget(win.glossary_gen_check, 1, 2, 1, 2)
-    more.addWidget(win.dub_check, 1, 4, 1, 2)
+    win.refine_check = BrandCheck(tr("refine"))
+    win.refine_check.setChecked(False)
+    checks = QHBoxLayout()
+    checks.setContentsMargins(0, 0, 0, 0)
+    checks.setSpacing(20)
+    checks.addWidget(win.color_check, 0)
+    checks.addWidget(win.dub_check, 0)
+    checks.addWidget(win.refine_check, 0)
+    checks.addStretch(1)
+    more.addLayout(checks, 1, 0, 1, 6)
 
+    win.color_box = QWidget()
+    win.color_box.setObjectName("moreTrack")
+    color_row = QHBoxLayout(win.color_box)
+    color_row.setContentsMargins(0, 2, 0, 0)
+    color_row.setSpacing(12)
     win.lbl_zh_color = win._field_label(tr("zh_color"))
     win.lbl_en_color = win._field_label(tr("en_color"))
     win.zh_color_btn = ColorChip("#FFFFFF", object_name="zhColorBtn")
     win.en_color_btn = ColorChip("#F2F2F2", object_name="enColorBtn")
-    win.zh_color_btn.color_changed.connect(lambda color: win._persist_sub_color("zh", color))
-    win.en_color_btn.color_changed.connect(lambda color: win._persist_sub_color("en", color))
-    more.addWidget(field_col(win.lbl_zh_color, expanding(win.zh_color_btn)), 2, 0, 1, 3)
-    more.addWidget(field_col(win.lbl_en_color, expanding(win.en_color_btn)), 2, 3, 1, 3)
-
-    win.glossary_edit = QLineEdit()
-    win.glossary_edit.setPlaceholderText(tr("glossary_ph"))
-    win.glossary_browse_btn = QPushButton(tr("browse"))
-    win.glossary_browse_btn.setObjectName("ghost")
-    win.glossary_browse_btn.setMinimumHeight(36)
-    win.glossary_browse_btn.clicked.connect(win._browse_glossary)
-    more.addWidget(field_col(win._section("glossary", tr("glossary")), path_row(win.glossary_edit, win.glossary_browse_btn)), 3, 0, 1, 6)
+    win.zh_color_btn.color_changed.connect(lambda hex_color: win._persist_sub_color("zh", hex_color))
+    win.en_color_btn.color_changed.connect(lambda hex_color: win._persist_sub_color("en", hex_color))
+    color_row.addWidget(field_col(win.lbl_zh_color, expanding(win.zh_color_btn)), 1)
+    color_row.addWidget(field_col(win.lbl_en_color, expanding(win.en_color_btn)), 1)
+    win.color_box.setVisible(False)
+    more.addWidget(win.color_box, 2, 0, 1, 6)
 
     win.dub_box = QWidget()
     win.dub_box.setObjectName("moreTrack")
@@ -265,8 +271,6 @@ def build_more_drawer(win) -> QFrame:
     win.lbl_tts = win._field_label(tr("tts_provider"))
     win.lbl_voice = win._field_label(tr("tts_voice"))
     win.lbl_endpoint = win._field_label(tr("tts_endpoint"))
-    hidden_dub = win._section("dub", tr("dub"))
-    hidden_dub.hide()
     win.tts_combo = QComboBox()
     win.tts_combo.addItem("OpenAI", "openai")
     win.tts_combo.addItem("GPT-SoVITS", "gptsovits")

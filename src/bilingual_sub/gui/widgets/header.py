@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QToolButton, QWidget
 
 from bilingual_sub.brand import PRODUCT_FULL, WINDOW_TITLE
 from bilingual_sub.core.langs import UI_LOCALES
 from bilingual_sub.gui.assets import HEADER_MARK_PX
-from bilingual_sub.i18n import tr
+from bilingual_sub.i18n import DEFAULT_LOCALE, set_locale, tr
 
 
 def build_header(win) -> QHBoxLayout:
     header = QHBoxLayout()
-    header.setSpacing(16)
+    header.setSpacing(12)
     header.setContentsMargins(0, 0, 0, 0)
 
     win.logo_mark = QLabel()
@@ -30,11 +30,7 @@ def build_header(win) -> QHBoxLayout:
     title.setObjectName("brandTitle")
     title_col.addWidget(title)
     header.addWidget(titles, alignment=Qt.AlignmentFlag.AlignVCenter)
-    header.addStretch()
-
-    win.lbl_ui_lang = QLabel()
-    win.lbl_ui_lang.setObjectName("fieldLabel")
-    win.lbl_ui_lang.hide()
+    header.addStretch(1)
 
     win.theme_combo = QComboBox()
     win.theme_combo.setObjectName("themeCombo")
@@ -50,13 +46,27 @@ def build_header(win) -> QHBoxLayout:
     win.locale_combo.setAccessibleName(tr("ui_lang"))
     for code, label in UI_LOCALES:
         win.locale_combo.addItem(label, code)
-    win.locale_combo.setCurrentIndex(1)
+    index = win.locale_combo.findData(DEFAULT_LOCALE)
+    win.locale_combo.setCurrentIndex(index if index >= 0 else 0)
+    set_locale(str(win.locale_combo.currentData() or DEFAULT_LOCALE))
     win.locale_combo.currentIndexChanged.connect(win._on_locale)
 
-    tools = QHBoxLayout()
+    cluster = QWidget()
+    cluster.setObjectName("localeCluster")
+    tools = QHBoxLayout(cluster)
     tools.setSpacing(8)
     tools.setContentsMargins(0, 0, 0, 0)
     tools.addWidget(win.theme_combo)
     tools.addWidget(win.locale_combo)
-    header.addLayout(tools)
+    header.addWidget(cluster, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    win.github_btn = QToolButton()
+    win.github_btn.setObjectName("githubBtn")
+    win.github_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    win.github_btn.setAutoRaise(True)
+    win.github_btn.setFixedSize(40, 40)
+    win.github_btn.setToolTip("GitHub")
+    win.github_btn.setAccessibleName("GitHub")
+    win.github_btn.clicked.connect(win._open_github)
+    header.addWidget(win.github_btn, 0, Qt.AlignmentFlag.AlignVCenter)
     return header

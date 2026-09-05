@@ -174,7 +174,7 @@ QMainWindow, QWidget#root {
     font-family: $uiFamily;
     font-size: $ui;
 }
-QWidget#formInner, QWidget#formViewport, QWidget#fieldCol, QWidget#headerTitles, QWidget#localeCluster, QWidget#moreBox, QWidget#sourceStrip, QWidget#sourceLink, QWidget#sourceStation, QWidget#pathRow, QWidget#moreTrack, QWidget#outCluster, QWidget#deck, QWidget#stage {
+QWidget#formInner, QWidget#formViewport, QWidget#fieldCol, QWidget#headerTitles, QWidget#localeCluster, QWidget#moreBox, QWidget#sourceStrip, QWidget#sourceLink, QWidget#sourceStation, QWidget#moreTrack, QWidget#outCluster, QWidget#deck, QWidget#stage, QWidget#stageFoot {
     background: transparent;
 }
 QLabel {
@@ -213,7 +213,15 @@ QLabel#outLabel {
     letter-spacing: 0.2px;
     padding: 0 4px 0 0;
 }
-QLabel#hint, QLabel#videoChip, QLabel#help {
+QLabel#company {
+    color: $muted;
+    font-family: $uiFamily;
+    font-size: $caption;
+    font-weight: 500;
+    letter-spacing: 1.2px;
+    padding: 0;
+}
+QLabel#hint, QLabel#help {
     color: $muted;
     font-family: $uiFamily;
     font-size: $body;
@@ -298,10 +306,15 @@ QLabel#drop[active="true"] {
 QFrame#actionBar QLineEdit#outEdit {
     min-height: 36px;
     max-height: 36px;
-    padding: 8px 12px;
+    padding: 0 12px;
     font-size: $ui;
     font-weight: 400;
     font-family: $uiFamily;
+}
+QFrame#actionBar QPushButton#ghost {
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0 14px;
 }
 QFrame#urlCompose QLineEdit#urlEdit {
     background: $sheet;

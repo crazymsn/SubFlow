@@ -14,7 +14,7 @@ CLI / GUI / Docker
         ├── core.cues + glossary / glossary_ai
         ├── core.translate → adapters.meding + secrets
         ├── core.translate_refine   （可选电影级润色）
-        ├── core.render     ASS / SRT（subtitle_zh_color / subtitle_en_color）
+        ├── core.render     ASS / SRT（中英各 1 行；简繁；subtitle_zh_color / subtitle_en_color）
         ├── core.burn       adapters.ffmpeg
         └── core.dub        OpenAI TTS / GPT-SoVITS
 ```
@@ -35,11 +35,11 @@ CLI / GUI / Docker
 | `whisper_model` | Whisper 模型名 |
 | `asr_backend` | `whisper` / `whisperx` |
 | `device` | `auto` / `cuda` / `cpu` |
-| `source_lang` / `target_lang` | 识别语言与翻译方向 |
-| `subtitle_mode` | `bilingual` / `netflix_single` |
+| `source_lang` / `target_lang` | 识别语言；目标语种管配音与中文简繁 |
+| `subtitle_mode` | `bilingual` / `enzh` / `single:<lang>` / `netflix_single` |
 | `translate_model` | meding 模型 id |
 | `refine_translate` | 电影级润色 |
-| `glossary_path` / `glossary_generate` | 术语表 / 从视频抽术语 |
+| `glossary_path` / `glossary_generate` | 术语表 / 从视频抽术语（CLI；桌面端不暴露） |
 | `burn` | 是否烧录 |
 | `enable_dub` / `tts_provider` / `tts_voice` / `tts_endpoint` | 配音 |
 | `resume_from` | 从某阶段继续 |
@@ -61,7 +61,10 @@ CLI / GUI / Docker
 - `adapters/*` 不 import `core/cues`
 - `secrets.store` 不写明文 Key 到日志
 - 新增外部命令一律走 `adapters/ffmpeg.py`
-- 样式按 2560×1600 设计稿，渲染时按实际分辨率缩放字号与 `cn_y` / `en_y`
+- 样式按 2560×1600 设计稿，渲染时按实际分辨率缩放字号
+- 中英 / 英中每种语言最多 1 行，超长句 `\\fscx` / `\\fscy` 缩进安全框
+- 中文轨按 `screen_han_lang` 做简繁（目标简体则 t2s）
+- YouTube / B 站下载优先 `original` 音轨，避免英文自动配音
 
 ## 桌面字体
 

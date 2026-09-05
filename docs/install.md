@@ -4,13 +4,13 @@
 
 ## 1. Windows 发布包
 
-从 [Releases](https://github.com/crazymsn/SubFlow/releases/latest) 下载 `SubFlow-Windows-1.2.1.zip`，整夹解压后运行 `SubFlow\SubFlow.exe`。
+从 [Releases](https://github.com/crazymsn/SubFlow/releases/latest) 下载 `SubFlow-Windows-1.2.2.zip`，整夹解压后运行 `SubFlow\SubFlow.exe`。
 
 包内已带 FFmpeg。若启动报 Qt / VCRUNTIME 缺失，安装 [VC++ 2015–2022 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。
 
 ## 2. macOS 发布包
 
-从 Releases 下载 `SubFlow-macOS-1.2.1.zip`，解压后把 `SubFlow.app` 拖到「应用程序」。该包由 GitHub Actions 用 `scripts/build-macos.sh` 从同一仓库源码构建（Apple Silicon）。若 Gatekeeper 拦截，按住 Control 点击后选择打开。
+从 Releases 下载 `SubFlow-macOS-1.2.2.zip`，解压后把 `SubFlow.app` 拖到「应用程序」。该包由 GitHub Actions 用 `scripts/build-macos.sh` 从同一仓库源码构建（Apple Silicon）。若 Gatekeeper 拦截，按住 Control 点击后选择打开。
 
 ## 3. Docker Hub
 
@@ -18,14 +18,14 @@
 
 ```bash
 cp .env.example .env
-# SUBFLOW_API_KEY=你的key
+# SUBFLOW_API_KEY=你的key   ← 只放本机 .env，不要提交
 docker compose pull
 docker compose run --rm subflow doctor
 docker compose run --rm subflow models
-docker compose run --rm subflow run /data/in.mp4 -o /data/out.mp4 --model <模型id> --zh-color "#FFFFFF" --en-color "#F2F2F2"
+docker compose run --rm subflow run /data/in.mp4 -o /data/out.mp4 --model <模型id>
 ```
 
-`docker-compose.yml` 默认使用 Hub 镜像；本机没有该标签时才会按 `Dockerfile` 构建。输入输出都在 `./data`。Whisper 权重缓存在 named volume `whisper-cache`。
+`docker-compose.yml` 默认使用 Hub 镜像。输入输出都在 `./data`。Whisper 权重缓存在 named volume `whisper-cache`。
 
 不要把 API 令牌写进镜像。令牌只放 `.env` 或运行时环境变量。
 
@@ -87,8 +87,13 @@ bash scripts/build-macos.sh
 # 产物：dist/SubFlow.app
 ```
 
-GitHub Actions 工作流 `.github/workflows/release-clients.yml` 在推送 `main` 或 `v*` 标签时打 Win / Mac 包。打 `v*` 标签时会自动发布到 GitHub Releases。
+GitHub Actions 工作流 `.github/workflows/release-clients.yml`：
+
+- 推送 `main`：跑测试并打 Win / Mac 工件
+- 推送 `v*` 标签：额外发布到 GitHub Releases
+
+发布包不含 API Key、Cookie、`.env`。
 
 ## 离线
 
-无网时不能拉翻译模型、不能调用翻译接口；可对已经完成翻译的作业 `--resume-from render` 继续烧录（含改颜色后重烧）。识别权重若已缓存在本机，断网仍可转写。
+无网时不能拉翻译模型、不能调用翻译接口；可对已经完成翻译的作业 `--resume-from render` 继续烧录。识别权重若已缓存在本机，断网仍可转写。

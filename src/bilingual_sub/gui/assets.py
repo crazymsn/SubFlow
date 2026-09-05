@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from bilingual_sub.brand import brand_dir, icon_path, mark_path
+from bilingual_sub.brand import brand_dir, icon_path, logo_path, mark_path
 from bilingual_sub.gui.theme import tokens_for
 
 HEADER_MARK_PX = 48
@@ -72,6 +72,8 @@ def _prepared_mark(theme: str) -> QImage:
     if cached is not None and not cached.isNull():
         return cached
     img = QImage(str(mark_path()))
+    if img.isNull():
+        img = QImage(str(logo_path()))
     if img.isNull():
         return img
     prepared = _knockout_mark(img, theme)

@@ -188,8 +188,8 @@ def default_glossary_path() -> Path:
 def load_ui_theme() -> str:
     data = _load_yaml(_user_config_path())
     ui = data.get("ui") if isinstance(data.get("ui"), dict) else {}
-    theme = str(ui.get("theme") or "light")
-    return theme if theme in {"light", "dark"} else "light"
+    theme = str(ui.get("theme") or "dark")
+    return theme if theme in {"light", "dark"} else "dark"
 
 
 def save_user_overrides(overrides: dict[str, Any]) -> Path:
