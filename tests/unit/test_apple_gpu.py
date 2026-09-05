@@ -110,3 +110,40 @@ def test_cached_source_upgrade_preserves_custom_install(monkeypatch, tmp_path):
     (tmp_path / ".subflow-source-version").write_text("old", encoding="utf-8")
     monkeypatch.setenv("SUBFLOW_GPTSOVITS_HOME", str(tmp_path))
     assert not rt.source_update_needed(tmp_path)
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_apple_upgrade_ignores_legacy_python_unless_explicit(monkeypatch, tmp_path, override):
+    from bilingual_sub.adapters import whisper_backend as wb
+
+    legacy = tmp_path / "intel-python"
+    monkeypatch.delenv("SUBFLOW_PYTHON", raising=False)
+    monkeypatch.delenv("SUBFLOW_WHISPER_PYTHON", raising=False)
+    if override:
+        monkeypatch.setenv("SUBFLOW_PYTHON", str(legacy))
+    monkeypatch.setattr(rt, "torch_backend", lambda: "mps")
+    monkeypatch.setattr(rt, "auto_install_enabled", lambda: True)
+    monkeypatch.setattr(rt, "managed_python", lambda kind: tmp_path / "native-python")
+    monkeypatch.setattr(wb, "_python_candidates", lambda: [legacy])
+    monkeypatch.setattr(wb, "_python_has_whisper", lambda p: p == legacy)
+    monkeypatch.setattr(wb, "_cache_path", lambda: tmp_path / "cache")
+    assert wb.find_whisper_python() == (legacy if override else None)
+
+
+def test_diagnostic_probe_handles_whisper_sparse_mps_buffer(monkeypatch):
+    from bilingual_sub.adapters import whisper_backend as wb
+
+    sparse = Mock()
+    model = SimpleNamespace(alignment_heads=sparse)
+
+    def move(device):
+        assert device == "mps"
+        if model.alignment_heads is sparse:
+            raise RuntimeError("SparseMPS is not supported")
+
+    model.to = move
+    whisper = SimpleNamespace(load_model=Mock(return_value=model))
+    monkeypatch.setitem(sys.modules, "whisper", whisper)
+    monkeypatch.setattr(wb, "resolve_device", lambda req: "mps")
+    assert wb.probe_whisper(device="mps")
+    whisper.load_model.assert_called_once_with("tiny", device="cpu")

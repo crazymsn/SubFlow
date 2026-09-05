@@ -211,7 +211,20 @@ def _python_has_whisper(python: Path) -> bool:
 
 
 def find_whisper_python() -> Path | None:
-    for cand in _python_candidates():
+    from bilingual_sub.adapters.runtime_bootstrap import (
+        auto_install_enabled,
+        managed_python,
+        torch_backend,
+    )
+
+    explicit = os.environ.get("SUBFLOW_PYTHON") or os.environ.get("SUBFLOW_WHISPER_PYTHON")
+    # An Intel interpreter cached by an older app can run under Rosetta but
+    # cannot use Apple GPU. Prepare the native managed environment on upgrade.
+    if torch_backend() == "mps" and auto_install_enabled() and not explicit:
+        candidates = [managed_python("asr")]
+    else:
+        candidates = _python_candidates()
+    for cand in candidates:
         if _python_has_whisper(cand):
             try:
                 cache = _cache_path()
@@ -408,10 +421,7 @@ def load_transcript(path: Path) -> list[Segment]:
 
 def probe_whisper(model_name: str = "tiny", device: str = "auto") -> bool:
     try:
-        import whisper
-
-        dev = resolve_device(device)
-        whisper.load_model(model_name, device=dev)
+        load_whisper_model(model_name, device)
         return True
     except ImportError:
         return find_whisper_python() is not None
