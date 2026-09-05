@@ -11,6 +11,8 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from filelock import FileLock, Timeout
+
 from bilingual_sub.adapters.ffmpeg import FfmpegError, copy_to_ascii_workdir, probe_video
 from bilingual_sub.adapters.whisper_backend import load_transcript, transcribe
 from bilingual_sub.adapters.whisperx_backend import WhisperXBackend, ensure_whisperx_runtime
@@ -28,6 +30,7 @@ from bilingual_sub.core.cues import build_cues
 from bilingual_sub.core.dub import dub_cues
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.core.glossary_ai import extract_glossary
+from bilingual_sub.core.job_profile import processing_profile, render_profile
 from bilingual_sub.core.langs import (
     apply_han_to_cues,
     assign_pair_fields,
@@ -234,8 +237,10 @@ def _job_profile_matches(report: dict, config: JobConfig) -> bool:
     )
 
 
-def _resume_dir_matches(config: JobConfig, work: Path) -> bool:
+def _resume_dir_matches(config: JobConfig, work: Path, settings: AppSettings | None = None) -> bool:
     report = _load_json(work / "job_input.json") or _load_json(work / "report.json")
+    if report.get("processing_profile") != processing_profile(config, settings or load_settings()):
+        return False
     if report and not _job_profile_matches(report, config):
         return False
     if report:
@@ -262,7 +267,7 @@ def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
     if explicit:
         wd = config.work_dir
         if (config.resume_from and _stage_index(config.resume_from) > _stage_index("ingest")
-                and not _resume_dir_matches(config, wd)):
+                and not _resume_dir_matches(config, wd, settings)):
             raise FileNotFoundError("工作目录不是这部片子或字幕/识别设置不同；请从 ingest 重新处理")
     elif config.resume_from:
         last = load_last_job()
@@ -270,7 +275,7 @@ def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
             raise FileNotFoundError(
                 "resume requested but no last job found; pass --work-dir to the previous work folder"
             )
-        if not _resume_dir_matches(config, last):
+        if not _resume_dir_matches(config, last, settings):
             raise FileNotFoundError(
                 "上次作业不是这部片子或字幕/识别设置不同；请传 --work-dir 指向对应工作目录"
             )
@@ -291,7 +296,7 @@ def _load_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _can_reexport(config: JobConfig, work: Path) -> bool:
+def _can_reexport(config: JobConfig, work: Path, settings: AppSettings | None = None) -> bool:
     if config.resume_from or not _auto_work_dir(config):
         return False
     cues_path = work / "cues.bilingual.json"
@@ -301,6 +306,9 @@ def _can_reexport(config: JobConfig, work: Path) -> bool:
     if state.get("stage") not in {"render", "burn", "done"}:
         return False
     report = _load_json(work / "report.json")
+    settings = settings or load_settings()
+    if report.get("processing_profile") != processing_profile(config, settings):
+        return False
     if not _same_fingerprint(report.get("input_fingerprint"), config, work):
         return False
     if str(report.get("whisper_model") or config.whisper_model) != config.whisper_model:
@@ -352,7 +360,7 @@ def _can_reexport(config: JobConfig, work: Path) -> bool:
         saved_tts = report.get("tts_fingerprint")
         if saved_tts and saved_tts != _tts_fingerprint(config, detected_spoken=heard, cues=cues):
             return False
-        if not _style_same(report, config):
+        if config.burn and not _style_same(report, config, settings):
             return False
     return True
 
@@ -365,15 +373,8 @@ def _styled_preset(config: JobConfig):
     )
 
 
-def _style_same(report: dict, config: JobConfig) -> bool:
-    from bilingual_sub.core.render import DEFAULT_EN_COLOR, DEFAULT_ZH_COLOR
-
-    return (
-        str(report.get("style_preset") or config.style_preset) == config.style_preset
-        and str(report.get("subtitle_zh_color") or DEFAULT_ZH_COLOR) == config.subtitle_zh_color
-        and str(report.get("subtitle_en_color") or DEFAULT_EN_COLOR) == config.subtitle_en_color
-        and str(report.get("subtitle_pack") or "") == SUBTITLE_PACK
-    )
+def _style_same(report: dict, config: JobConfig, settings: AppSettings) -> bool:
+    return report.get("render_profile") == render_profile(config, settings)
 
 
 def _export_subs(
@@ -442,7 +443,7 @@ def _copy_or_burn(
             shutil.copy2(dubbed, dest)
         return dest
     prev = Path(str(report["output_mp4"])) if report.get("output_mp4") else None
-    style_same = _style_same(report, config)
+    style_same = _style_same(report, config, settings)
     if prev and prev.is_file() and style_same and not report.get("dubbed"):
         if prev.resolve() != dest.resolve():
             shutil.copy2(prev, dest)
@@ -477,6 +478,7 @@ def _result_from_work(
     *,
     job_id: str,
     config: JobConfig,
+    settings: AppSettings,
     work: Path,
     output_mp4: Path | None,
     output_dub: Path | None,
@@ -534,6 +536,8 @@ def _result_from_work(
         "last_stage": "done",
         "stopped": False,
         "reused": reused,
+        "processing_profile": processing_profile(config, settings),
+        "render_profile": render_profile(config, settings),
     }
     report_path = work / "report.json"
     report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -566,7 +570,7 @@ def _reexport_if_possible(
     t0: float,
     control: JobControl | None = None,
 ) -> JobResult | None:
-    if not _can_reexport(config, work):
+    if not _can_reexport(config, work, settings):
         return None
     report = _load_json(work / "report.json")
     state = _load_json(work / "job_state.json")
@@ -599,6 +603,7 @@ def _reexport_if_possible(
     return _result_from_work(
         job_id=job_id,
         config=config,
+        settings=settings,
         work=work,
         output_mp4=output_mp4 if config.burn else None,
         output_dub=output_mp4 if not config.burn else None,
@@ -635,6 +640,7 @@ def _validate_output_paths(config: JobConfig, work: Path | None = None, *, inclu
             "source.mp4", "speech.wav", "transcript.json", "silences.json",
             "cues.zh.json", "cues.source.json", "cues.bilingual.json", "cues.fitted.json",
             "report.json", "job_state.json", "job_input.json", "source.url.txt",
+            ".job.lock",
         ))
     validate_outputs(outputs, protected)
 
@@ -679,10 +685,24 @@ def run(
     setup_logging(api_key=get_api_key())
     settings = settings or load_settings()
     t0 = time.time()
-    stages: dict[str, float] = {}
 
     work = _work_dir(config, settings)
     _validate_output_paths(config, work)
+    lock = FileLock(str(work / ".job.lock"))
+    try:
+        lock.acquire(timeout=0)
+    except Timeout as exc:
+        raise RuntimeError(f"工作目录正在被另一任务使用：{work}；请等待该任务结束或选择其他目录") from exc
+    try:
+        _gate(control)
+        return _run_in_work(config, settings, work, on_progress, control, t0)
+    finally:
+        lock.release()
+
+
+def _run_in_work(config: JobConfig, settings: AppSettings, work: Path,
+                 on_progress: ProgressCb, control: JobControl | None, t0: float) -> JobResult:
+    stages: dict[str, float] = {}
     reused = _reexport_if_possible(config, settings, work, on_progress, t0, control=control)
     if reused:
         return reused
@@ -735,7 +755,7 @@ def _run_job(
     input_video = config.input_video
     if not input_video.is_file():
         fallback = work / "source.mp4"
-        if fallback.is_file() and config.resume_from and _resume_dir_matches(config, work):
+        if fallback.is_file() and config.resume_from and _resume_dir_matches(config, work, settings):
             input_video = fallback
             config.input_video = fallback
         elif config.source_url:
@@ -762,6 +782,7 @@ def _run_job(
     if not meta.get("has_audio"):
         raise FfmpegError(f"no audio stream in {input_video}")
     identity = {"input_fingerprint": video_fingerprint(config.input_video),
+                "processing_profile": processing_profile(config, settings),
                 "source_url": config.source_url,
                 "source_lang": config.source_lang, "target_lang": config.target_lang,
                 "subtitle_mode": config.subtitle_mode, "whisper_model": config.whisper_model,
@@ -1257,6 +1278,8 @@ def _run_job(
         "stopped": False,
         "output_dub": str(output_dub) if output_dub else None,
         "reused": False,
+        "processing_profile": processing_profile(config, settings),
+        "render_profile": render_profile(config, settings),
     }
     report_path = work / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

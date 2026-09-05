@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from dataclasses import replace
@@ -32,7 +33,10 @@ from bilingual_sub.brand import (
     WINDOW_TITLE,
 )
 from bilingual_sub.config import (
+    default_glossary_path,
     load_gptsovits_settings,
+    load_settings,
+    load_style_preset,
     load_subtitle_colors,
     load_ui_theme,
     save_gptsovits_settings,
@@ -225,6 +229,7 @@ class MainWindow(QMainWindow):
         self._last_output: Path | None = None
         self._last_result: JobResult | None = None
         self._last_signature: tuple | None = None
+        self._running_signature: tuple | None = None
         self._last_log_stage: str | None = None
         self._bar_floor = 0
         self._video: Path | None = None
@@ -482,17 +487,36 @@ class MainWindow(QMainWindow):
 
     def _job_signature(self) -> tuple:
         video = ""
+        video_revision: tuple = ()
         if self._video is not None:
             try:
                 video = str(self._video.resolve())
+                if self._video.is_file():
+                    stat = self._video.stat()
+                    video_revision = (stat.st_size, stat.st_mtime_ns)
             except OSError:
                 video = str(self._video)
         url = ""
         if not (self._video and self._video.is_file()):
             url = self.url_edit.text().strip()
         dubbing = bool(self.dub_check.isChecked() or self._target_requires_dub())
+        assets: tuple
+        try:
+            glossary = default_glossary_path()
+            ref = Path(self.tts_ref_edit.text().strip())
+            assets = (
+                load_settings().model_dump(), load_style_preset("no-plate-large").model_dump(),
+                hashlib.sha256(glossary.read_bytes()).hexdigest() if glossary.is_file() else "",
+                hashlib.sha256(ref.read_bytes()).hexdigest() if dubbing and ref.is_file() else "",
+            )
+        except Exception:
+            # A broken or concurrently edited configuration cannot authorize reuse.
+            # The processing worker will report its actual configuration error.
+            assets = (object(),)
         return (
             video,
+            video_revision,
+            assets,
             url,
             self.whisper_combo.currentText(),
             self.model_combo.currentText().strip(),
@@ -1160,6 +1184,7 @@ class MainWindow(QMainWindow):
         self._control = JobControl()
         self._set_running_ui(True, paused=False)
         self._worker = PipelineWorker(cfg, self._control)
+        self._running_signature = self._job_signature()
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_done)
         self._worker.failed.connect(self._on_fail)
@@ -1190,7 +1215,7 @@ class MainWindow(QMainWindow):
         folder = result.output_mp4 or result.output_srt
         self._last_output = folder
         self._last_result = result
-        self._last_signature = self._job_signature()
+        self._last_signature = self._running_signature or self._job_signature()
         self.open_btn.setEnabled(True)
         if result.reused:
             self._log_line(tr("reused_log").format(n=result.cue_count))

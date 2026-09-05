@@ -10,6 +10,7 @@ import pytest
 from bilingual_sub import pipeline as p
 from bilingual_sub.config import AppSettings
 from bilingual_sub.core.control import JobControl, JobStopped
+from bilingual_sub.core.job_profile import processing_profile
 from bilingual_sub.gui.output_path import copy_finished_outputs
 from bilingual_sub.models import JobConfig
 
@@ -57,7 +58,8 @@ def test_gui_relocation_protects_original_video(tmp_path):
 def test_resume_rejects_same_size_different_video_even_with_explicit_work(tmp_path):
     cfg = config(tmp_path)
     cfg.work_dir.mkdir()
-    identity = {"input_fingerprint": p.video_fingerprint(cfg.input_video)}
+    identity = {"input_fingerprint": p.video_fingerprint(cfg.input_video),
+                "processing_profile": processing_profile(cfg, AppSettings())}
     (cfg.work_dir / "report.json").write_text(json.dumps(identity))
     other = tmp_path / "different.mp4"
     other.write_bytes(b"different film")
@@ -130,6 +132,7 @@ def test_corrupt_cached_url_video_cannot_resume_by_size_only(tmp_path):
     (cfg.work_dir / "source.url.txt").write_text(cfg.source_url)
     (cfg.work_dir / "report.json").write_text(json.dumps({
         "source_url": cfg.source_url, "input_fingerprint": p.video_fingerprint(source),
+        "processing_profile": processing_profile(cfg, AppSettings()),
     }))
     assert p._resume_dir_matches(cfg, cfg.work_dir)
     stat = source.stat()
@@ -163,3 +166,23 @@ def test_gui_no_burn_relocation_ignores_unrelated_existing_mp4(tmp_path):
     assert window._last_output == sidecar_dub(dest)
     saved = json.loads(report.read_text())
     assert saved["output_mp4"] is None and saved["output_dub"] == str(sidecar_dub(dest))
+
+
+def test_shared_work_directory_is_locked_and_released_after_failure(tmp_path, monkeypatch):
+    from filelock import FileLock
+
+    cfg = config(tmp_path)
+    cfg.work_dir.mkdir()
+    state = cfg.work_dir / "job_state.json"
+    state.write_text('{"job_id":"existing"}')
+    lock = FileLock(str(cfg.work_dir / ".job.lock"))
+    with lock:
+        with pytest.raises(RuntimeError, match="另一任务"):
+            p.run(cfg, AppSettings())
+        assert state.read_text() == '{"job_id":"existing"}'
+    monkeypatch.setattr(p, "_run_job", lambda *a: (_ for _ in ()).throw(ValueError("failure")))
+    with pytest.raises(ValueError, match="failure"):
+        p.run(cfg, AppSettings())
+    # An exception must release the OS lock for a subsequent job.
+    with lock.acquire(timeout=0):
+        pass

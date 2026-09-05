@@ -541,6 +541,8 @@ def start_server(
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             kwargs["startupinfo"] = subprocess.STARTUPINFO()
             kwargs["startupinfo"].dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    else:
+        kwargs["start_new_session"] = True
     logger.info("starting GPT-SoVITS: %s (cwd=%s)", args, root)
     try:
         return subprocess.Popen(args, **kwargs)

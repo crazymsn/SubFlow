@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 
 def hidden_run_kwargs() -> dict:
     if os.name != "nt":
-        return {}
+        return {"start_new_session": True}
     info = subprocess.STARTUPINFO()
     info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
@@ -31,6 +32,9 @@ def terminate_process_tree(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
     pid = getattr(proc, "pid", None)
+    if sys.platform != "win32" and isinstance(pid, int):
+        signal_posix_process(proc, signal.SIGKILL)
+        return
     if os.name == "nt" and pid:
         killer = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32" / "taskkill.exe"
         subprocess.run(
@@ -39,6 +43,20 @@ def terminate_process_tree(proc: subprocess.Popen) -> None:
         )
     if proc.poll() is None and hasattr(proc, "terminate"):
         proc.terminate()
+
+
+def signal_posix_process(proc: subprocess.Popen, sig: int) -> None:
+    """Signal an owned session's children; never signal a shared shell group."""
+    if sys.platform == "win32":
+        raise NotImplementedError("POSIX process signals are unavailable on Windows")
+    pid = proc.pid
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, sig)
+        else:
+            os.kill(pid, sig)
+    except ProcessLookupError:
+        pass
 
 
 def is_hidden_kwargs(kwargs: dict) -> bool:

@@ -18,7 +18,7 @@ from bilingual_sub.adapters.torch_device import (
     select_device,
     transcribe_with_fallback,
 )
-from bilingual_sub.core.control import JobStopped
+from bilingual_sub.core.control import wait_for_process
 from bilingual_sub.models import Segment, WordSpan
 
 logger = logging.getLogger(__name__)
@@ -316,19 +316,15 @@ def _transcribe_external(
             env=env,
             **hidden_run_kwargs(),
         )
-    if control:
-        control.attach_proc(proc)
     started = time.time()
-    while proc.poll() is None:
-        if control:
-            control.wait_if_paused()
+
+    def tick():
         elapsed = time.time() - started
         pct = 0.20 + min(0.24, elapsed / 900.0 * 0.24)
         if on_progress:
             on_progress("transcribe", pct)
-        time.sleep(1.5)
-    if control and control.is_stopped():
-        raise JobStopped()
+
+    wait_for_process(proc, control=control, on_tick=tick)
     if proc.returncode != 0:
         detail = ""
         if log_path.is_file():

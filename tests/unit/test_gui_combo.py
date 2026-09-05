@@ -875,11 +875,18 @@ def test_job_signature_includes_url_and_tts_ref(tmp_path):
     local = win._job_signature()
     win.url_edit.setText("https://youtu.be/ignored")
     assert win._job_signature() == local
+    video.write_bytes(b"new video contents")
+    assert win._job_signature() != local
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
     win.dub_check.setChecked(True)
     with_ref = win._job_signature()
     win.tts_ref_edit.setText(str(tmp_path / "voice.wav"))
     assert win._job_signature() != with_ref
+    ref = tmp_path / "voice.wav"
+    ref.write_bytes(b"reference one")
+    before = win._job_signature()
+    ref.write_bytes(b"reference two")
+    assert win._job_signature() != before
     win.close()
     _ = app
 

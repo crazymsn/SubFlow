@@ -6,11 +6,12 @@ from pathlib import Path
 import pytest
 
 from bilingual_sub.config import AppSettings
+from bilingual_sub.core.job_profile import processing_profile, render_profile
 from bilingual_sub.models import JobConfig
 from bilingual_sub.pipeline import artifact_key, run, video_fingerprint
 
 
-def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, translate: str) -> None:
+def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, translate: str, cfg: JobConfig) -> None:
     work.mkdir(parents=True, exist_ok=True)
     (work / "cues.bilingual.json").write_text(
         json.dumps([{"start": 0.0, "end": 1.0, "zh": "你好", "en": "Hello"}], ensure_ascii=False),
@@ -43,6 +44,8 @@ def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, transla
                 "subtitle_mode": "bilingual",
                 "translated": True,
                 "burn": True,
+                "processing_profile": processing_profile(cfg, AppSettings()),
+                "render_profile": render_profile(cfg, AppSettings()),
             },
             ensure_ascii=False,
         ),
@@ -80,7 +83,7 @@ def test_same_video_new_path_copies_without_pipeline(tmp_path: Path, video: Path
     work = tmp_path / "bilingual-sub" / artifact_key(cfg)
     prev = tmp_path / "old" / "out.mp4"
     prev.parent.mkdir(parents=True)
-    _plant_job(work, video, prev, whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, video, prev, whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
 
     dest = tmp_path / "exports" / "final.mp4"
     srt = tmp_path / "exports" / "final.bilingual.srt"
@@ -116,7 +119,7 @@ def test_different_video_or_model_skips_reuse(tmp_path: Path, video: Path):
         burn=True,
     )
     work = tmp_path / "work"
-    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     assert _can_reexport(cfg, work) is True
 
     other = tmp_path / "other.mp4"
@@ -182,7 +185,7 @@ def test_stale_english_cues_block_single_chinese_reuse(tmp_path: Path, video: Pa
         subtitle_mode="single:zh",
     )
     work = tmp_path / "stale"
-    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     report = json.loads((work / "report.json").read_text(encoding="utf-8"))
     report["subtitle_mode"] = "single:zh"
     report["translated"] = False
@@ -211,7 +214,7 @@ def test_single_zh_with_en_dub_line_can_reexport(tmp_path: Path, video: Path):
         tts_provider="gptsovits",
     )
     work = tmp_path / "dub-ok"
-    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     (work / "dubbed.mp4").write_bytes(b"dubbed")
     report = json.loads((work / "report.json").read_text(encoding="utf-8"))
     report["subtitle_mode"] = "single:zh"
@@ -237,7 +240,7 @@ def test_english_in_chinese_field_blocks_bilingual_reuse(tmp_path: Path, video: 
         subtitle_mode="bilingual",
     )
     work = tmp_path / "polluted"
-    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     (work / "cues.bilingual.json").write_text(
         json.dumps([{"start": 0.0, "end": 1.0, "zh": "Hello everyone", "en": "Hello everyone"}], ensure_ascii=False),
         encoding="utf-8",
@@ -261,7 +264,7 @@ def test_english_target_without_dubbed_file_blocks_reuse(tmp_path: Path, video: 
         subtitle_mode="bilingual",
     )
     work = tmp_path / "undubbed"
-    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     report = json.loads((work / "report.json").read_text(encoding="utf-8"))
     report["target_lang"] = "en"
     report["detected_spoken"] = "zh"
@@ -308,7 +311,7 @@ def test_reexport_uses_fitted_cues_for_netflix(tmp_path: Path, video: Path, monk
     )
     work = tmp_path / "bilingual-sub" / artifact_key(cfg)
     prev = tmp_path / "old-nf.mp4"
-    _plant_job(work, video, prev, whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, video, prev, whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     report = json.loads((work / "report.json").read_text(encoding="utf-8"))
     report["subtitle_mode"] = "netflix_single"
     report["translated"] = False
@@ -343,7 +346,7 @@ def test_url_job_reexport_matches_work_copy(tmp_path: Path, monkeypatch):
         translate_model="gpt-4o-mini",
         burn=True,
     )
-    _plant_job(work, source, prev, whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, source, prev, whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     source.write_bytes(b"downloaded-source")
     (work / "source.url.txt").write_text(cfg.source_url, encoding="utf-8")
     report = json.loads((work / "report.json").read_text(encoding="utf-8"))
@@ -365,7 +368,7 @@ def test_no_burn_dub_reexport_reports_new_sidecar_on_every_relocation(tmp_path, 
     cfg = JobConfig(video, None, tmp_path / "new.srt", Path("auto"), burn=False,
                     source_lang="zh", target_lang="en", subtitle_mode="single:zh")
     work = tmp_path / "bilingual-sub" / artifact_key(cfg)
-    _plant_job(work, video, tmp_path / "old.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    _plant_job(work, video, tmp_path / "old.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     (work / "dubbed.mp4").write_bytes(b"dubbed video")
     report = json.loads((work / "report.json").read_text())
     report.update(burn=False, target_lang="en", subtitle_mode="single:zh", translated=False,
@@ -380,3 +383,75 @@ def test_no_burn_dub_reexport_reports_new_sidecar_on_every_relocation(tmp_path, 
         assert expected.read_bytes() == b"dubbed video"
         saved = json.loads(result.report_path.read_text(encoding="utf-8"))
         assert saved["output_dub"] == str(expected) and saved["output_mp4"] is None
+
+
+def test_changed_processing_settings_invalidates_reexport_and_resume(tmp_path, video):
+    from bilingual_sub.pipeline import _can_reexport, _resume_dir_matches
+
+    cfg = JobConfig(video, tmp_path / "old.mp4", tmp_path / "out.srt", Path("auto"))
+    work = tmp_path / "cache"
+    _plant_job(work, video, cfg.output_video, whisper=cfg.whisper_model,
+               translate=cfg.translate_model, cfg=cfg)
+    settings = AppSettings()
+    assert _can_reexport(cfg, work, settings)
+    assert _resume_dir_matches(cfg, work, settings)
+    settings.cues.max_duration = 2.0
+    assert not _can_reexport(cfg, work, settings)
+    assert not _resume_dir_matches(cfg, work, settings)
+
+
+def test_changed_burn_quality_reencodes_without_recognition(tmp_path, video, monkeypatch):
+    monkeypatch.setattr("bilingual_sub.pipeline.tempfile.gettempdir", lambda: str(tmp_path))
+    cfg = JobConfig(video, tmp_path / "new.mp4", tmp_path / "new.srt", Path("auto"))
+    work = tmp_path / "bilingual-sub" / artifact_key(cfg)
+    _plant_job(work, video, tmp_path / "old.mp4", whisper=cfg.whisper_model,
+               translate=cfg.translate_model, cfg=cfg)
+    (work / "source.mp4").write_bytes(video.read_bytes())
+    seen = []
+
+    def burn(source, ass, output, **kwargs):
+        seen.append(kwargs["cq"])
+        output.write_bytes(b"new encoding")
+
+    monkeypatch.setattr("bilingual_sub.pipeline.burn_subtitles", burn)
+    monkeypatch.setattr("bilingual_sub.pipeline.transcribe", lambda *a, **kw: pytest.fail("ASR should be reused"))
+    settings = AppSettings()
+    settings.burn.cq = 25
+    result = run(cfg, settings)
+    assert result.reused and seen == [25]
+    assert cfg.output_video.read_bytes() == b"new encoding"
+    # A second export under the same settings can copy the reencoded result.
+    run(cfg, settings)
+    assert seen == [25]
+
+
+def test_changed_style_file_content_reencodes_same_named_preset(tmp_path, video, monkeypatch):
+    import shutil
+
+    from bilingual_sub.config import _bundled_config_dir
+
+    preset_root = tmp_path / "config"
+    shutil.copytree(_bundled_config_dir() / "presets", preset_root / "presets")
+    monkeypatch.setattr("bilingual_sub.config._bundled_config_dir", lambda: preset_root)
+    monkeypatch.setattr("bilingual_sub.pipeline.tempfile.gettempdir", lambda: str(tmp_path))
+    cfg = JobConfig(video, tmp_path / "new.mp4", tmp_path / "new.srt", Path("auto"))
+    work = tmp_path / "bilingual-sub" / artifact_key(cfg)
+    _plant_job(work, video, tmp_path / "old.mp4", whisper=cfg.whisper_model,
+               translate=cfg.translate_model, cfg=cfg)
+    (work / "source.mp4").write_bytes(video.read_bytes())
+    path = preset_root / "presets" / f"{cfg.style_preset}.yaml"
+    import yaml
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["style"]["layout"]["margin_lr"] = 220
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    burns = []
+
+    def burn(source, ass, output, **kwargs):
+        burns.append(ass.read_text(encoding="utf-8"))
+        output.write_bytes(b"new style")
+
+    monkeypatch.setattr("bilingual_sub.pipeline.burn_subtitles", burn)
+    result = run(cfg, AppSettings())
+    assert result.reused and len(burns) == 1
+    assert cfg.output_video.read_bytes() == b"new style"

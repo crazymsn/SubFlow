@@ -16,7 +16,7 @@ from bilingual_sub.adapters.whisper_backend import (
     _python_has_module,
     load_transcript,
 )
-from bilingual_sub.core.control import JobControl, JobStopped
+from bilingual_sub.core.control import JobControl, JobStopped, wait_for_process
 from bilingual_sub.core.langs import whisper_language
 
 logger = logging.getLogger(__name__)
@@ -135,18 +135,14 @@ class WhisperXBackend:
                 env=env,
                 **hidden_run_kwargs(),
             )
-        if control:
-            control.attach_proc(proc)
         started = time.time()
-        while proc.poll() is None:
-            if control:
-                control.wait_if_paused()
+
+        def tick():
             if on_progress:
                 elapsed = time.time() - started
                 on_progress("transcribe", 0.20 + min(0.24, elapsed / 900.0 * 0.24))
-            time.sleep(1.5)
-        if control and control.is_stopped():
-            raise JobStopped()
+
+        wait_for_process(proc, control=control, on_tick=tick)
         if proc.returncode != 0:
             detail = log_path.read_text(encoding="utf-8", errors="replace")[-2000:] if log_path.is_file() else ""
             raise RuntimeError(f"WhisperX 失败：{detail or proc.returncode}")

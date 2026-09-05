@@ -11,7 +11,7 @@ def test_hidden_kwargs_hide_console_on_windows():
         assert kwargs["startupinfo"].dwFlags & subprocess.STARTF_USESHOWWINDOW
         assert is_hidden_kwargs(kwargs)
     else:
-        assert kwargs == {}
+        assert kwargs == {"start_new_session": True}
 
 
 def test_gui_python_keeps_console_python(tmp_path):

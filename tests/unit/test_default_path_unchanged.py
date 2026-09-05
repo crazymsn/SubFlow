@@ -1093,6 +1093,14 @@ def test_resume_uses_cached_source_when_url_input_missing(tmp_path: Path, monkey
         target_lang="zh",
         subtitle_mode="single:zh",
     )
+    from bilingual_sub.config import load_settings
+    from bilingual_sub.core.job_profile import processing_profile
+    from bilingual_sub.pipeline import video_fingerprint
+
+    (work / "job_input.json").write_text(json.dumps({
+        "input_fingerprint": video_fingerprint(cached), "source_url": cfg.source_url,
+        "subtitle_mode": cfg.subtitle_mode, "processing_profile": processing_profile(cfg, load_settings()),
+    }), encoding="utf-8")
     result = run(cfg)
     assert dest.read_bytes() == b"ok"
     assert result.output_mp4 == dest
