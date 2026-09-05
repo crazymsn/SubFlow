@@ -19,6 +19,25 @@ class ModelStreamingResponse(StreamingResponse):
                 await self.body_iterator.aclose()
 
 
+class _PrefetchedStream:
+    def __init__(self, first, iterator):
+        self.first = first
+        self.iterator = iterator
+        self.started = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self.started:
+            self.started = True
+            return self.first
+        return await anext(self.iterator)
+
+    async def aclose(self):
+        await self.iterator.aclose()
+
+
 async def _worker(operation):
     task = asyncio.create_task(asyncio.to_thread(operation))
     try:
@@ -42,6 +61,18 @@ class SerializedModel:
     async def call(self, operation):
         async with self.lock:
             return await _worker(operation)
+
+    async def open_stream(self, factory):
+        iterator = self.stream(factory)
+        try:
+            first = await anext(iterator)
+        except BaseException as exc:
+            with anyio.CancelScope(shield=True):
+                await iterator.aclose()
+            if isinstance(exc, StopAsyncIteration):
+                raise ValueError("Synthesis produced no audio chunks") from exc
+            raise
+        return _PrefetchedStream(first, iterator)
 
     async def stream(self, factory):
         async with self.lock:

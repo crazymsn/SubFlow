@@ -180,7 +180,7 @@ def logits_to_probs(
 
     logits = logits / max(temperature, 1e-5)
 
-    if top_k is not None:
+    if top_k is not None and top_k > 0:
         v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
         pivot = v[:, -1].unsqueeze(-1)
         logits = torch.where(logits < pivot, -float("Inf"), logits)

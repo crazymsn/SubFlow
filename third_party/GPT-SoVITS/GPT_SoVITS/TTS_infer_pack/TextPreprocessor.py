@@ -64,7 +64,7 @@ class TextPreprocessor:
         print(f"############ {i18n('提取文本Bert特征')} ############")
         for text in tqdm(texts):
             phones, bert_features, norm_text = self.segment_and_extract_feature_for_text(text, lang, version)
-            if phones is None or norm_text == "":
+            if not phones or not norm_text:
                 continue
             res = {
                 "phones": phones,

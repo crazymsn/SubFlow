@@ -3,5 +3,6 @@ Vendored source snapshot; see Git history for SubFlow compatibility patches.
 SubFlow adds pure-Python jieba fallback and isolated CPU environment installation.
 SubFlow serializes API model operations in workers, preserving responsive health checks and cancellation ownership.
 Reference features are keyed by file content and prompt language, with preprocessing rollback and model-change invalidation.
+Inference validates numeric inputs and reports empty speech or cancellation instead of fabricating silence.
 Original license and authorship notices are retained.
 Large model weights and Python environments are downloaded separately, not committed.

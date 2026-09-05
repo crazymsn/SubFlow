@@ -31,6 +31,7 @@ from process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 from tools.audio_sr import AP_BWE
+from tools.subflow_validation import NoSpeechError, SynthesisStopped, require_speech_segments, validate_request
 from tools.i18n.i18n import I18nAuto, scan_language_list
 from TTS_infer_pack.text_segmentation_method import splits
 from TTS_infer_pack.TextPreprocessor import TextPreprocessor
@@ -1038,6 +1039,7 @@ class TTS:
             Tuple[int, np.ndarray]: sampling rate and audio data.
         """
         ########## variables initialization ###########
+        validate_request(inputs)
         self.stop_flag: bool = False
         text: str = inputs.get("text", "")
         text_lang: str = (inputs.get("text_lang", "") or "").lower()
@@ -1137,9 +1139,7 @@ class TTS:
         data: list = None
         if not (return_fragment or streaming_mode):
             data = self.text_preprocessor.preprocess(text, text_lang, text_split_method, self.configs.version)
-            if len(data) == 0:
-                yield 16000, np.zeros(int(16000), dtype=np.int16)
-                return
+            require_speech_segments(data)
 
             batch_index_list: list = None
             data, batch_index_list = self.to_batch(
@@ -1154,6 +1154,7 @@ class TTS:
         else:
             print(f"############ {i18n('切分文本')} ############")
             texts = self.text_preprocessor.pre_seg_text(text, text_lang, text_split_method)
+            require_speech_segments(texts)
             data = []
             for i in range(len(texts)):
                 if i % batch_size == 0:
@@ -1167,7 +1168,7 @@ class TTS:
                     phones, bert_features, norm_text = self.text_preprocessor.segment_and_extract_feature_for_text(
                         text, text_lang, self.configs.version
                     )
-                    if phones is None:
+                    if not phones or not norm_text:
                         continue
                     res = {
                         "phones": phones,
@@ -1196,13 +1197,17 @@ class TTS:
             t_45 = 0.0
             audio = []
             is_first_package = True
+            produced_audio = False
             output_sr = self.configs.sampling_rate if not self.configs.use_vocoder else self.vocoder_configs["sr"]
             for item in data:
+                if self.stop_flag:
+                    raise SynthesisStopped("Synthesis was stopped")
                 t3 = time.perf_counter()
                 if return_fragment or streaming_mode:
                     item = make_batch(item)
                     if item is None:
                         continue
+                produced_audio = True
 
                 batch_phones: List[torch.LongTensor] = item["phones"]
                 # batch_phones:torch.LongTensor = item["phones"]
@@ -1462,14 +1467,14 @@ class TTS:
                     audio.append(batch_audio_fragment)
 
                 if self.stop_flag:
-                    yield output_sr, np.zeros(int(output_sr), dtype=np.int16)
-                    return
+                    raise SynthesisStopped("Synthesis was stopped")
 
+            if not produced_audio:
+                raise NoSpeechError("Text preprocessing produced no speakable segments")
             if not (return_fragment or streaming_mode):
                 print("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t_34, t_45))
                 if len(audio) == 0:
-                    yield output_sr, np.zeros(int(output_sr), dtype=np.int16)
-                    return
+                    raise NoSpeechError("Synthesis produced no audio fragments")
                 yield self.audio_postprocess(
                     audio,
                     output_sr,
@@ -1480,6 +1485,8 @@ class TTS:
                     super_sampling if self.configs.use_vocoder and self.configs.version == "v3" else False,
                 )
 
+        except (NoSpeechError, SynthesisStopped):
+            raise
         except Exception as e:
             traceback.print_exc()
             if (str(self.configs.device) == "mps" and isinstance(e, (RuntimeError, NotImplementedError))

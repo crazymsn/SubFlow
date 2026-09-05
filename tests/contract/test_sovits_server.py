@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import sys
 import threading
 from pathlib import Path
@@ -46,6 +47,63 @@ def api(monkeypatch):
 
 def payload(**kwargs):
     return dict(text="hello", text_lang="en", ref_audio_path="ref.wav", prompt_lang="auto", **kwargs)
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+@pytest.mark.parametrize("field,value", [
+    ("text", "\n  "), ("batch_size", 0), ("top_k", -1), ("top_p", 1.1), ("top_p", -0.1),
+    ("temperature", 0), ("speed_factor", 0), ("speed_factor", float("nan")),
+    ("fragment_interval", -1), ("repetition_penalty", 0), ("batch_threshold", 2),
+    ("sample_steps", 0), ("overlap_length", 0), ("min_chunk_length", 0), ("seed", 2**32),
+])
+def test_invalid_request_rejected_before_model_execution(api, monkeypatch, method, field, value):
+    monkeypatch.setattr(api.tts_pipeline, "run", lambda req: pytest.fail("invalid input reached model"))
+    request = payload()
+    request[field] = value
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.APP), base_url="http://local") as client:
+            if method == "get":
+                response = await client.get("/tts", params=request)
+            else:
+                response = await client.post("/tts", content=json.dumps(request), headers={"Content-Type": "application/json"})
+            assert response.status_code == 400
+            assert field in response.json()["message"]
+    asyncio.run(scenario())
+
+
+def test_supported_zero_boundaries_are_accepted(api):
+    response = asyncio.run(api.tts_handle(payload(top_k=0, top_p=0, fragment_interval=0, batch_threshold=0)))
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("streaming", [0, 1, 2, 3])
+def test_no_speech_error_is_not_reported_as_audio_or_mps_failure(api, monkeypatch, streaming):
+    from tools.subflow_validation import NoSpeechError
+    api.tts_pipeline.configs.device = "mps"
+    def fail(req):
+        raise NoSpeechError("No speakable segments")
+    monkeypatch.setattr(api.tts_pipeline, "run", fail)
+    response = asyncio.run(api.tts_handle(payload(streaming_mode=streaming)))
+    assert response.status_code == 400
+    assert api.tts_pipeline.configs.device == "mps"
+    assert "No speakable" in json.loads(response.body)["Exception"]
+
+
+def test_prefetched_stream_can_close_before_first_chunk_is_sent(api, monkeypatch):
+    closed = threading.Event()
+    def generate(req):
+        try:
+            yield 16000, b"audio"
+        finally:
+            closed.set()
+    monkeypatch.setattr(api.tts_pipeline, "run", generate)
+    async def scenario():
+        response = await api.tts_handle(payload(streaming_mode=1))
+        assert api.model_operations.lock.locked()
+        await response.body_iterator.aclose()
+        assert closed.is_set()
+        assert not api.model_operations.lock.locked()
+    asyncio.run(scenario())
 
 
 async def reached(event):

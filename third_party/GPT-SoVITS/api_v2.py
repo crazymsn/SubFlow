@@ -122,6 +122,7 @@ import uvicorn
 from io import BytesIO
 from tools.i18n.i18n import I18nAuto
 from tools.subflow_concurrency import ModelStreamingResponse, SerializedModel
+from tools.subflow_validation import validate_request
 from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 from GPT_SoVITS.TTS_infer_pack.text_segmentation_method import get_method_names as get_cut_method_names
 from pydantic import BaseModel
@@ -321,6 +322,10 @@ def handle_control(command: str):
 
 
 def check_params(req: dict):
+    try:
+        validate_request(req)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"message": str(exc)})
     text: str = req.get("text", "")
     text_lang: str = req.get("text_lang", "")
     ref_audio_path: str = req.get("ref_audio_path", "")
@@ -448,8 +453,12 @@ async def tts_handle(req: dict):
                 tts_generator.close()
 
         # _media_type = f"audio/{media_type}" if not (streaming_mode and media_type in ["wav", "raw"]) else f"audio/x-{media_type}"
+        try:
+            stream = await model_operations.open_stream(streaming_generator)
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(exc)})
         return ModelStreamingResponse(
-            model_operations.stream(streaming_generator),
+            stream,
             media_type=f"audio/{media_type}",
         )
 
