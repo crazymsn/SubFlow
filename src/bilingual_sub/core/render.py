@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -23,18 +24,24 @@ _BREAK_AFTER = set("，。；：、？！,.!?;:）)」』】》 的了和与是"
 _WIDE_EXTRA = set("，。；：、？！「」『』（）【】《》")
 
 
+def _time_parts(t: float, scale: int) -> tuple[int, int, int, int]:
+    if not math.isfinite(t) or t < 0:
+        raise ValueError("Subtitle timestamp must be finite and non-negative")
+    ticks = round(t * scale)
+    seconds, fraction = divmod(ticks, scale)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return hours, minutes, seconds, fraction
+
+
 def ass_time(t: float) -> str:
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = t % 60
-    return f"{h}:{m:02d}:{s:05.2f}"
+    h, m, s, fraction = _time_parts(t, 100)
+    return f"{h}:{m:02d}:{s:02d}.{fraction:02d}"
 
 
 def srt_time(t: float) -> str:
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = t % 60
-    return f"{h:02d}:{m:02d}:{s:06.3f}".replace(".", ",")
+    h, m, s, fraction = _time_parts(t, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{fraction:03d}"
 
 
 def ass_esc(text: str) -> str:

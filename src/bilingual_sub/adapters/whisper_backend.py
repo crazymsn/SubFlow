@@ -1,22 +1,27 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
+from bilingual_sub.adapters.owned_process import owned_process
 from bilingual_sub.adapters.procwin import gui_python, hidden_run_kwargs
 from bilingual_sub.adapters.torch_device import (
     load_whisper_on_device,
     mps_available,
     select_device,
     transcribe_with_fallback,
+)
+from bilingual_sub.adapters.transcript_io import (
+    normalize_transcript,
+    read_transcript,
+    write_transcript,
 )
 from bilingual_sub.core.control import wait_for_process
 from bilingual_sub.models import Segment, WordSpan
@@ -243,6 +248,7 @@ def _transcribe_inprocess(
     language: str,
     device: str,
     out_json: Path | None,
+    control=None,
 ) -> list[Segment]:
     model, dev = load_whisper_model(model_name, device)
     logger.info("loading whisper model=%s device=%s", model_name, dev)
@@ -254,24 +260,12 @@ def _transcribe_inprocess(
         condition_on_previous_text=True,
         no_speech_threshold=0.4,
     )
-    segments: list[Segment] = []
-    clean: dict[str, Any] = {"language": result.get("language"), "segments": []}
-    for seg in result.get("segments") or []:
-        text = (seg.get("text") or "").strip()
-        start = float(seg.get("start") or 0)
-        end = float(seg.get("end") or 0)
-        segments.append(Segment(start=start, end=end, text=text))
-        clean["segments"].append(
-            {
-                "start": start,
-                "end": end,
-                "text": text,
-                "words": seg.get("words") or [],
-            }
-        )
+    clean = normalize_transcript(result)
+    if control:
+        control.check()
     if out_json:
-        out_json.parent.mkdir(parents=True, exist_ok=True)
-        out_json.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_transcript(out_json, clean, before_commit=control.check if control else None)
+    segments = _segments_from_payload(clean)
     logger.info("transcribed %d segments", len(segments))
     return segments
 
@@ -287,52 +281,53 @@ def _transcribe_external(
     on_progress: Callable[[str, float], None] | None = None,
     control=None,
 ) -> list[Segment]:
-    script = worker_script()
-    runner = gui_python(python)
-    log_path = out_json.with_name("whisper.log")
-    logger.info("whisper via %s (%s)", runner, script)
+    data = run_asr_worker(python, worker_script(), wav, model_name=model_name,
+        language=_whisper_language(language) or "auto", device=device, out_json=out_json,
+        backend="whisper", on_progress=on_progress, control=control)
+    return _segments_from_payload(data)
+
+
+def run_asr_worker(python: Path, script: Path, wav: Path, *, model_name: str,
+                   language: str, device: str, out_json: Path, backend: str,
+                   on_progress=None, control=None) -> dict:
     from bilingual_sub.adapters.runtime_bootstrap import inference_env
 
+    if control:
+        control.wait_if_paused()
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    log_path = out_json.with_name(f"{backend}.log")
     env = inference_env()
     env["TQDM_DISABLE"] = "1"
-    with log_path.open("w", encoding="utf-8") as log:
-        proc = subprocess.Popen(
-            [
-                str(runner),
-                str(script),
-                "--wav",
-                str(wav),
-                "--out",
-                str(out_json),
-                "--model",
-                model_name,
-                "--language",
-                _whisper_language(language) or "auto",
-                "--device",
-                device,
-            ],
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            env=env,
-            **hidden_run_kwargs(),
-        )
-    started = time.time()
-
+    started = time.monotonic()
     def tick():
-        elapsed = time.time() - started
-        pct = 0.20 + min(0.24, elapsed / 900.0 * 0.24)
         if on_progress:
-            on_progress("transcribe", pct)
-
-    wait_for_process(proc, control=control, on_tick=tick)
-    if proc.returncode != 0:
-        detail = ""
-        if log_path.is_file():
-            detail = log_path.read_text(encoding="utf-8", errors="replace").strip()[-2000:]
-        raise RuntimeError(f"Whisper 外部识别失败：{detail or f'exit {proc.returncode}'}")
-    if on_progress:
-        on_progress("transcribe", 0.44)
-    return load_transcript(out_json)
+            elapsed = time.monotonic() - started
+            on_progress("transcribe", 0.20 + min(0.24, elapsed / 900.0 * 0.24))
+    # Every invocation requires a fresh result, even when a worker exits zero
+    # without producing output. A previous transcript remains untouched.
+    with tempfile.TemporaryDirectory(prefix=".asr-", dir=out_json.parent) as scratch:
+        pending = Path(scratch) / "transcript.json"
+        with log_path.open("wb") as log, owned_process([
+            str(gui_python(python)), str(script), "--wav", str(wav), "--out", str(pending),
+            "--model", model_name, "--language", language, "--device", device,
+        ], stdout=log, stderr=subprocess.STDOUT, env=env) as proc:
+            code = wait_for_process(proc, control=control, on_tick=tick)
+        if code:
+            with log_path.open("rb") as stream:
+                stream.seek(max(0, log_path.stat().st_size - 8192))
+                detail = stream.read().decode("utf-8", "replace")[-2000:]
+            raise RuntimeError(f"{backend} 外部识别失败：{detail or f'exit {code}'}")
+        if not pending.is_file():
+            raise RuntimeError(f"{backend} 识别进程未生成本次结果")
+        data = read_transcript(pending)
+        if control:
+            control.check()
+        if on_progress:
+            on_progress("transcribe", 0.44)
+        if control:
+            control.check()
+        write_transcript(out_json, data, before_commit=control.check if control else None)
+        return data
 
 
 def transcribe(
@@ -358,6 +353,7 @@ def transcribe(
             language=language,
             device=device,
             out_json=out_json,
+            control=control,
         )
         if control:
             control.check()
@@ -387,32 +383,14 @@ def transcribe(
         )
 
 
+def _segments_from_payload(data: dict) -> list[Segment]:
+    return [Segment(start=seg["start"], end=seg["end"], text=seg["text"],
+                    words=tuple(WordSpan(**word) for word in seg["words"]))
+            for seg in data["segments"]]
+
+
 def load_transcript(path: Path) -> list[Segment]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    segs = []
-    for seg in data.get("segments") or []:
-        words = []
-        for raw in seg.get("words") or []:
-            try:
-                words.append(
-                    WordSpan(
-                        start=float(raw.get("start") or 0),
-                        end=float(raw.get("end") or 0),
-                        text=str(raw.get("word") or raw.get("text") or "").strip(),
-                        score=float(raw["score"]) if raw.get("score") is not None else None,
-                    )
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-        segs.append(
-            Segment(
-                start=float(seg["start"]),
-                end=float(seg["end"]),
-                text=str(seg.get("text") or "").strip(),
-                words=tuple(w for w in words if w.text),
-            )
-        )
-    return segs
+    return _segments_from_payload(read_transcript(path))
 
 
 def probe_whisper(model_name: str = "tiny", device: str = "auto") -> bool:

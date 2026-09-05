@@ -25,7 +25,13 @@ def run(report: Path) -> None:
     source = bundled_src()
     assert source is not None and (source / "api_v2.py").is_file()
     assert (bootstrap_assets() / "download_assets.py").is_file()
-    checks = {}
+    checks: dict[str, object] = {}
+    from bilingual_sub.adapters.whisper_backend import worker_script as whisper_script
+    from bilingual_sub.adapters.whisperx_backend import worker_script as whisperx_script
+
+    workers = [whisper_script(), whisperx_script()]
+    assert all(path.with_name("transcript_io.py").is_file() for path in workers)
+    checks["asr_worker_scripts"] = [str(path) for path in workers]
     for name, binary in (("ffmpeg", find_ffmpeg()), ("ffprobe", find_ffprobe()), ("uv", str(find_uv()))):
         checks[name] = run_cmd([binary, "--version" if name == "uv" else "-version"]).stdout.splitlines()[0]
     from bilingual_sub.adapters.download_worker import run_download_worker

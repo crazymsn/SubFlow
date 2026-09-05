@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
+
+if __package__:
+    from .transcript_io import write_transcript
+else:
+    from transcript_io import write_transcript  # type: ignore[no-redef]
 
 
 def resolve_device(requested: str) -> str:
@@ -76,27 +80,8 @@ def main() -> None:
         if lang and seg_lang not in {detected, lang}:
             dropped += 1
             continue
-        words = []
-        for raw in seg.get("words") or []:
-            text = str(raw.get("word") or raw.get("text") or "").strip()
-            if not text:
-                continue
-            words.append(
-                {
-                    "start": float(raw.get("start") or seg.get("start") or 0),
-                    "end": float(raw.get("end") or seg.get("end") or 0),
-                    "text": text,
-                    "score": raw.get("score"),
-                }
-            )
-        segments.append(
-            {
-                "start": float(seg.get("start") or 0),
-                "end": float(seg.get("end") or 0),
-                "text": str(seg.get("text") or "").strip(),
-                "words": words,
-            }
-        )
+        segments.append({"start": seg.get("start"), "end": seg.get("end"),
+                         "text": seg.get("text"), "words": seg.get("words") or []})
     if dropped:
         print(f"KEEP_PRIMARY_LANG {detected} dropped={dropped}", flush=True)
     payload = {
@@ -105,8 +90,7 @@ def main() -> None:
         "detected_language": detected,
         "segments": segments,
     }
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_transcript(out_json, payload)
     print(f"OK segments={len(segments)}", flush=True)
 
 

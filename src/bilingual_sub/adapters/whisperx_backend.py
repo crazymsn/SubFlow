@@ -3,20 +3,18 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import subprocess
 import sys
-import time
 from collections.abc import Callable
 from pathlib import Path
 
 from bilingual_sub.adapters.asr_protocol import AsrResult
-from bilingual_sub.adapters.procwin import gui_python, hidden_run_kwargs
 from bilingual_sub.adapters.whisper_backend import (
     _python_candidates,
     _python_has_module,
-    load_transcript,
+    _segments_from_payload,
+    run_asr_worker,
 )
-from bilingual_sub.core.control import JobControl, JobStopped, wait_for_process
+from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.langs import whisper_language
 
 logger = logging.getLogger(__name__)
@@ -109,51 +107,8 @@ class WhisperXBackend:
         python = find_whisperx_python()
         if python is None:
             raise RuntimeError("WhisperX 不可用")
-        script = worker_script()
-        log_path = out_json.with_name("whisperx.log")
-        from bilingual_sub.adapters.runtime_bootstrap import inference_env
-
-        env = inference_env()
-        with log_path.open("w", encoding="utf-8") as log:
-            proc = subprocess.Popen(
-                [
-                    str(gui_python(python)),
-                    str(script),
-                    "--wav",
-                    str(wav),
-                    "--out",
-                    str(out_json),
-                    "--model",
-                    model_name,
-                    "--language",
-                    whisper_language(language),
-                    "--device",
-                    device,
-                ],
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                env=env,
-                **hidden_run_kwargs(),
-            )
-        started = time.time()
-
-        def tick():
-            if on_progress:
-                elapsed = time.time() - started
-                on_progress("transcribe", 0.20 + min(0.24, elapsed / 900.0 * 0.24))
-
-        wait_for_process(proc, control=control, on_tick=tick)
-        if proc.returncode != 0:
-            detail = log_path.read_text(encoding="utf-8", errors="replace")[-2000:] if log_path.is_file() else ""
-            raise RuntimeError(f"WhisperX 失败：{detail or proc.returncode}")
-        segments = load_transcript(out_json)
-        lang = whisper_language(language)
-        if out_json.is_file():
-            try:
-                import json
-
-                meta = json.loads(out_json.read_text(encoding="utf-8"))
-                lang = str(meta.get("language") or lang)
-            except (OSError, ValueError):
-                pass
-        return AsrResult(language=lang, segments=segments, detected_language=lang, backend="whisperx")
+        data = run_asr_worker(python, worker_script(), wav, model_name=model_name,
+            language=whisper_language(language), device=device, out_json=out_json,
+            backend="whisperx", on_progress=on_progress, control=control)
+        lang = data.get("language") or whisper_language(language)
+        return AsrResult(language=lang, segments=_segments_from_payload(data), detected_language=lang, backend="whisperx")

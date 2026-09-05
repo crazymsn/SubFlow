@@ -2,6 +2,7 @@
 import argparse
 import json
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -66,6 +67,13 @@ report = Path("client-smoke.json").resolve()
 subprocess.run([str(args.client.resolve()), "--self-test", str(report)], check=True, timeout=120)
 data = json.loads(report.read_text(encoding="utf-8"))
 assert data["ok"]
+for worker_script in data["checks"]["asr_worker_scripts"]:
+    # Run the actual packaged scripts under an external interpreter, where
+    # sibling helpers must exist as files, not only inside PyInstaller's PYZ.
+    result = subprocess.run([sys.executable, worker_script, "--help"], capture_output=True,
+                            text=True, timeout=30, check=True)
+    assert "--out" in result.stdout
+data["checks"]["asr_worker_imports"] = "both packaged workers started with an external Python"
 check_frozen_download_cancel(args.client.resolve())
 data["checks"]["frozen_download_cancel"] = "blocked HTTP cancelled; previous video preserved"
 report.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

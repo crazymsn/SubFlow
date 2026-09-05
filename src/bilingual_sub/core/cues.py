@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable
+from itertools import groupby
 
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.models import Cue, Segment, WordSpan
@@ -116,7 +118,25 @@ def long_internal_silence(
     return hits
 
 
+def _has_complete_alignment(seg: Segment) -> bool:
+    words = seg.words
+    if not words or _norm("".join(w.text for w in words)) != _norm(seg.text):
+        return False
+    previous = seg.start
+    previous_end = seg.start
+    for word in words:
+        if (not math.isfinite(word.start) or not math.isfinite(word.end)
+                or word.start < previous or word.end <= word.start or word.end > seg.end
+                or word.end < previous_end):
+            return False
+        previous = word.start
+        previous_end = word.end
+    return True
+
+
 def cues_from_words(segments: list[Segment], glossary: Glossary) -> list[Cue] | None:
+    if any(seg.text.strip() and not _has_complete_alignment(seg) for seg in segments):
+        return None
     packed: list[WordSpan] = []
     for seg in segments:
         words = list(getattr(seg, "words", ()) or [])
@@ -155,7 +175,7 @@ def cues_from_words(segments: list[Segment], glossary: Glossary) -> list[Cue] | 
     return out or None
 
 
-def build_cues(
+def _build_segment_cues(
     segments: list[Segment],
     silences: list[tuple[float, float]],
     glossary: Glossary,
@@ -165,9 +185,6 @@ def build_cues(
     max_duration: float = 8.0,
     silence_split_threshold: float = 0.55,
 ) -> list[Cue]:
-    word_cues = cues_from_words(segments, glossary)
-    if word_cues:
-        return word_cues
     cues: list[tuple[float, float, str]] = []
     for seg in segments:
         if not seg.text.strip():
@@ -218,4 +235,29 @@ def build_cues(
             continue
         b = min(b, a + max_duration)
         out.append(Cue(start=round(a, 2), end=round(b, 2), zh=zh))
+    return out
+
+
+def build_cues(
+    segments: list[Segment],
+    silences: list[tuple[float, float]],
+    glossary: Glossary,
+    *,
+    snap_tolerance: float = 0.22,
+    min_duration: float = 0.90,
+    max_duration: float = 8.0,
+    silence_split_threshold: float = 0.55,
+) -> list[Cue]:
+    out: list[Cue] = []
+    for aligned, group in groupby(segments, key=_has_complete_alignment):
+        run = list(group)
+        if aligned:
+            chunk = cues_from_words(run, glossary) or []
+        else:
+            chunk = _build_segment_cues(run, silences, glossary,
+                snap_tolerance=snap_tolerance, min_duration=min_duration,
+                max_duration=max_duration, silence_split_threshold=silence_split_threshold)
+        if out and chunk and out[-1].start < chunk[0].start < out[-1].end:
+            out[-1].end = chunk[0].start
+        out.extend(chunk)
     return out

@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
+
+if __package__:
+    from .transcript_io import write_transcript
+else:
+    from transcript_io import write_transcript  # type: ignore[no-redef]
 
 if __package__:
     from .torch_device import (
@@ -74,18 +78,7 @@ def main() -> None:
         condition_on_previous_text=True,
         no_speech_threshold=0.4,
     )
-    clean = {"language": result.get("language"), "segments": []}
-    for seg in result.get("segments") or []:
-        clean["segments"].append(
-            {
-                "start": float(seg.get("start") or 0),
-                "end": float(seg.get("end") or 0),
-                "text": (seg.get("text") or "").strip(),
-                "words": seg.get("words") or [],
-            }
-        )
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
+    clean = write_transcript(out_json, result)
     print(f"OK segments={len(clean['segments'])} device={dev}", flush=True)
 
 
