@@ -161,6 +161,8 @@ class GptSovitsTts:
             "batch_size": 1,
             "speed_factor": 1.0,
         }
+        if req.model_revision:
+            payload["model_revision"] = req.model_revision
         try:
             # Upstream has shared reference/model state. Serialize preview and dubbing.
             while not _synthesis_lock.acquire(timeout=0.1):
@@ -175,6 +177,11 @@ class GptSovitsTts:
         except httpx.HTTPError as exc:
             raise TtsUnavailable(f"请先启动 GPT-SoVITS 服务（{self.endpoint}）：{exc}") from exc
         body = resp.content or b""
+        if req.model_revision and (resp.status_code == 409 or
+                (resp.is_success and resp.headers.get("X-SubFlow-Model-Revision") != req.model_revision)):
+            from bilingual_sub.adapters.tts.model_identity import ModelChanged
+
+            raise ModelChanged()
         ctype = resp.headers.get("content-type", "")
         audio_ok = _is_audio(body)
         if resp.status_code >= 400 or not audio_ok:

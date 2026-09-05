@@ -32,6 +32,7 @@ def api(monkeypatch):
     class Pipeline:
         def __init__(self, configs):
             self.configs = configs
+            self.model_revision = "a" * 32
         def run(self, req):
             yield 16000, b"audio"
         def reset_models(self, *, device=None, is_half=None):
@@ -77,6 +78,57 @@ def test_invalid_request_rejected_before_model_execution(api, monkeypatch, metho
 def test_supported_zero_boundaries_are_accepted(api):
     response = asyncio.run(api.tts_handle(payload(top_k=0, top_p=0, fragment_interval=0, batch_threshold=0)))
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_model_revision_is_checked_after_waiting_for_lock(api, monkeypatch, method):
+    monkeypatch.setattr(api.tts_pipeline, "run", lambda req: pytest.fail("stale request reached inference"))
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.APP), base_url="http://local") as client:
+            await api.model_operations.lock.acquire()
+            try:
+                request = payload(model_revision="a" * 32)
+                pending = asyncio.create_task(client.request(method, "/tts", **{
+                    "params" if method == "get" else "json": request}))
+                await asyncio.sleep(0.02)
+                api.tts_pipeline.model_revision = "b" * 32
+            finally:
+                api.model_operations.lock.release()
+            response = await pending
+            assert response.status_code == 409
+            assert (await client.get("/subflow/runtime")).json()["model_revision"] == "b" * 32
+    asyncio.run(scenario())
+
+
+def test_audio_header_reports_model_after_cpu_fallback(api, monkeypatch):
+    api.tts_pipeline.configs.device = "mps"
+    def generate(req):
+        if api.tts_pipeline.configs.device == "mps":
+            raise RuntimeError("MPS operation unavailable")
+        yield 16000, b"cpu audio"
+    def reset(**kwargs):
+        api.tts_pipeline.configs.device = "cpu"
+        api.tts_pipeline.model_revision = "b" * 32
+    monkeypatch.setattr(api.tts_pipeline, "run", generate)
+    monkeypatch.setattr(api.tts_pipeline, "reset_models", reset)
+    response = asyncio.run(api.tts_handle(payload(model_revision="a" * 32)))
+    assert response.status_code == 200 and response.body == b"cpu audio"
+    assert response.headers["X-SubFlow-Model-Revision"] == "b" * 32
+
+
+def test_language_support_is_rechecked_under_model_lock(api, monkeypatch):
+    monkeypatch.setattr(api.tts_pipeline, "run", lambda req: pytest.fail("unsupported language reached model"))
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.APP), base_url="http://local") as client:
+            await api.model_operations.lock.acquire()
+            try:
+                pending = asyncio.create_task(client.post("/tts", json=payload()))
+                await asyncio.sleep(.02)
+                api.tts_pipeline.configs.languages = ["zh"]
+            finally:
+                api.model_operations.lock.release()
+            assert (await pending).status_code == 400
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("streaming", [0, 1, 2, 3])

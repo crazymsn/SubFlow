@@ -17,6 +17,7 @@ class TtsRequest:
     lang: str
     voice: str
     dest: Path
+    model_revision: str = ""
 
 
 class TtsProvider(Protocol):

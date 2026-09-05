@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 from bilingual_sub.adapters.tts.base import TtsRequest, select_tts
+from bilingual_sub.adapters.tts.model_identity import ModelSnapshot, retry_model_change
 from bilingual_sub.config import user_config_dir
 from bilingual_sub.core.audio_cache import cache_digest, produce_audio
 from bilingual_sub.core.control import JobControl
@@ -50,6 +51,7 @@ def preview_cache_path(voice: str, lang: str, provider: str = "gptsovits", extra
     return preview_cache_dir() / f"{token[:64]}-{digest}.wav"
 
 
+@retry_model_change
 def synth_voice_preview(
     *,
     provider: str,
@@ -79,13 +81,21 @@ def synth_voice_preview(
         prompt_lang=prompt_lang,
     )
     effective_ref = str(getattr(tts, "ref_audio", ref_audio) or "")
+    model = ModelSnapshot(engine, str(getattr(tts, "endpoint", endpoint) or ""))
+    booted = False
+    if engine == "gptsovits" and model.revision is None:
+        from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
+
+        ensure_running(model.endpoint or None, wait_sec=300, control=control)
+        model = ModelSnapshot(engine, model.endpoint)
+        booted = True
     def identity():
         return tts_job_fingerprint(engine, voice=voice,
             **{key: str(getattr(tts, key, fallback) or "") for key, fallback in
                (("endpoint", endpoint), ("ref_audio", ref_audio),
                 ("prompt_text", prompt_text), ("prompt_lang", prompt_lang))})
     initial = identity()
-    key = hashlib.sha256(json.dumps(["preview-v2", initial, text, lang, voice], ensure_ascii=False).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps(["preview-v3", initial, model.cache_id, text, lang, voice], ensure_ascii=False).encode()).hexdigest()
     dest = dest or preview_cache_path(voice, lang, engine, key)
     record = dest.with_suffix(dest.suffix + ".json")
     reads = [Path(effective_ref).expanduser()] if effective_ref else []
@@ -96,13 +106,17 @@ def synth_voice_preview(
             raise RuntimeError("试听准备期间参考音频或设置发生变化，请重试")
         cached = cache_digest(dest, key, control)
         if cached and identity() == initial:
+            model.check()
             return dest
-        if engine == "gptsovits":
+        if engine == "gptsovits" and not booted:
             from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
 
             ensure_running(str(getattr(tts, "endpoint", endpoint) or "") or None, wait_sec=300, control=control)
         def synth(pending):
-            tts.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=pending), control=control)
+            model.check()
+            tts.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=pending,
+                                 model_revision=model.revision or ""), control=control)
+            model.check()
             if identity() != initial:
                 raise RuntimeError("试听合成期间参考音频或设置发生变化，请重试")
         produce_audio(dest, key, synth, control)

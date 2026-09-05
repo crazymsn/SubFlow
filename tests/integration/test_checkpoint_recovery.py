@@ -347,6 +347,39 @@ def test_dub_resume_allows_new_voice_but_requires_matching_burn(dub_job, monkeyp
         p.run(cfg, settings)
 
 
+@pytest.mark.parametrize("revision", ["b" * 32, None])
+def test_done_cannot_export_old_model_but_dub_can_regenerate(dub_job, monkeypatch, revision):
+    cfg, settings, calls = dub_job
+    first = p.run(cfg, settings)
+    assert json.loads(first.report_path.read_text())["tts_model_revision"] == "a" * 32
+    original = cfg.output_video.read_bytes()
+    monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision", lambda _: revision)
+    cfg.resume_from = "done"
+    with pytest.raises(ValueError, match="dub 阶段|配音模型"):
+        p.run(cfg, settings)
+    assert cfg.output_video.read_bytes() == original
+    cfg.resume_from = "dub"
+    result = p.run(cfg, settings)
+    assert json.loads(result.report_path.read_text())["tts_model_revision"] == revision
+    assert calls["asr"] == 1
+
+
+@pytest.mark.parametrize("target", ["zh-Hans", "zh-Hant"])
+def test_chinese_original_audio_does_not_query_model_identity(job, monkeypatch, target):
+    cfg, settings, _, _, _ = job
+    cfg.source_lang, cfg.target_lang, cfg.subtitle_mode = "zh", target, "single:zh"
+    def asr(wav, **kwargs):
+        seg = Segment(0.2, 1.6, "大家好，这是中文视频")
+        kwargs["out_json"].write_text(json.dumps({"language": "zh", "segments": [seg.__dict__]}))
+        return [seg]
+    monkeypatch.setattr(p, "transcribe", asr)
+    monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision",
+                        lambda _: pytest.fail("same-language task must not depend on the TTS server"))
+    result = p.run(cfg, settings)
+    report = json.loads(result.report_path.read_text())
+    assert report["dubbed"] is False and report["tts_model_revision"] is None
+
+
 def test_failed_export_after_burn_can_resume_without_encoding_again(job, monkeypatch):
     cfg, settings, calls, _, _ = job
     cfg.burn, cfg.output_video = True, cfg.output_srt.with_suffix(".mp4")

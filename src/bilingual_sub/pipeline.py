@@ -160,14 +160,22 @@ def _artifact_context(stage: str, config: JobConfig, settings: AppSettings, work
               "ass_sha256": file_digest(work / "subs.ass", checkpoint=lambda: _gate(control)) if config.burn else None}
     if stage == "dub":
         result["tts"] = _tts_fingerprint(config, detected_spoken=detected_spoken, cues=_original_cues(work, control))
+        from bilingual_sub.adapters.tts.model_identity import current_model_revision
+
+        result["model_revision"] = current_model_revision(config.tts_endpoint)
     return result
 
 
 def _verify_artifact_context(work: Path, stage: str, config: JobConfig, settings: AppSettings,
-                             control: JobControl | None = None, detected_spoken: str | None = None) -> None:
+                             control: JobControl | None = None, detected_spoken: str | None = None,
+                             *, allow_unidentified_model: bool = False) -> None:
     if not _verify_cache(work, stage, control):
         raise ValueError(f"缺少 {stage} 阶段产物，请从 {stage} 重新处理")
     contexts = _load_json(work / "job_state.json").get("artifact_contexts", {})
+    saved_context = contexts.get(stage) if isinstance(contexts, dict) else None
+    if stage == "dub" and not allow_unidentified_model and not (
+            isinstance(saved_context, dict) and saved_context.get("model_revision")):
+        raise ValueError("无法核验缓存的配音模型，请从 dub 重新处理")
     if not isinstance(contexts, dict) or contexts.get(stage) != _artifact_context(
         stage, config, settings, work, control, detected_spoken
     ):
@@ -470,6 +478,11 @@ def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings |
         if not (work / "dubbed.mp4").is_file():
             return False
         _verify_cache(work, "dub", control)
+        from bilingual_sub.adapters.tts.model_identity import current_model_revision
+
+        revision = current_model_revision(config.tts_endpoint)
+        if not revision or revision != report.get("tts_model_revision"):
+            return False
         saved_tts = report.get("tts_fingerprint")
         if saved_tts and saved_tts != _tts_fingerprint(config, detected_spoken=heard, cues=cues):
             return False
@@ -678,6 +691,7 @@ def _result_from_work(
             config,
             detected_spoken=str(report.get("detected_spoken") or "") or None,
         ),
+        "tts_model_revision": report.get("tts_model_revision"),
         "last_stage": "done",
         "stopped": False,
         "reused": reused,
@@ -1470,6 +1484,9 @@ def _run_job(
             )
             if dubbed is None or not Path(dubbed).is_file():
                 raise RuntimeError("配音失败，没有生成目标语种音轨")
+            # The audio operation may have restarted after automatic CPU fallback.
+            # Preserve the actual generation that produced all its clips.
+            dub_context["model_revision"] = getattr(provider, "cache_model_revision", dub_context["model_revision"])
             if dub_context != _artifact_context("dub", config, settings, work, control, detected_spoken):
                 raise RuntimeError("配音期间字幕、参考音频或设置发生变化，请重试")
         except JobStopped:
@@ -1482,7 +1499,8 @@ def _run_job(
                     produced={"dub": list(FILES["dub"])},
                     artifact_context=dub_context)
     if need_dub:
-        _verify_artifact_context(work, "dub", config, settings, control, detected_spoken)
+        _verify_artifact_context(work, "dub", config, settings, control, detected_spoken,
+                                 allow_unidentified_model=_should_run(config.resume_from, "dub"))
         from bilingual_sub.gui.output_path import resolve_dub_sidecar
 
         destination = dest_mp4 if config.burn else resolve_dub_sidecar(config.output_video, srt_out)
@@ -1539,6 +1557,8 @@ def _run_job(
         "translated": translation_needed(config.source_lang, config.target_lang, config.subtitle_mode),
         "dubbed": bool(need_dub),
         "tts_provider": _resolved_tts_provider(config, asr_cues, detected_spoken=detected_spoken),
+        "tts_model_revision": (_load_json(work / "job_state.json").get("artifact_contexts", {})
+                               .get("dub", {}).get("model_revision") if need_dub else None),
         "tts_fingerprint": _tts_fingerprint(
             config, detected_spoken=detected_spoken, cues=asr_cues
         ),

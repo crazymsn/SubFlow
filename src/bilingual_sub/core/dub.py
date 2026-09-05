@@ -9,6 +9,7 @@ from pathlib import Path
 
 from bilingual_sub.adapters.ffmpeg import FfmpegError, find_ffmpeg, run_cmd
 from bilingual_sub.adapters.tts.base import TtsProvider, TtsRequest
+from bilingual_sub.adapters.tts.model_identity import ModelSnapshot, retry_model_change
 from bilingual_sub.core.audio_cache import cache_digest, pcm_duration, produce_audio
 from bilingual_sub.core.control import JobControl
 from bilingual_sub.core.file_io import file_digest, staged_path
@@ -172,6 +173,7 @@ def _provider_identity(provider: TtsProvider, voice: str) -> str:
     )
 
 
+@retry_model_change
 def dub_cues(
     cues: list[Cue],
     *,
@@ -186,9 +188,12 @@ def dub_cues(
 ) -> Path:
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("video duration must be positive and finite")
+    reference = str(getattr(provider, "ref_audio", "") or "")
+    validate_outputs({"配音视频": output}, [video, *([Path(reference).expanduser()] if reference else [])])
     tts_dir = work / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
     identity = _provider_identity(provider, voice)
+    model = ModelSnapshot(getattr(provider, "name", ""), getattr(provider, "endpoint", ""))
     clips: list[tuple[float, Path]] = []
     clip_keys: list[tuple[Path, str]] = []
     for i, cue in enumerate(cues):
@@ -206,6 +211,7 @@ def dub_cues(
                 (
                     text,
                     identity,
+                    model.cache_id,
                     lang,
                     voice,
                     str(getattr(provider, "name", "") or ""),
@@ -222,7 +228,10 @@ def dub_cues(
         raw_digest = cache_digest(raw, request_key, control)
         if raw_digest is None:
             def synth_raw(pending):
-                provider.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=pending), control=control)
+                model.check()
+                provider.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=pending,
+                                          model_revision=model.revision or ""), control=control)
+                model.check()
                 if _provider_identity(provider, voice) != identity:
                     raise RuntimeError("合成期间参考音频或配音设置发生变化，请重试")
             raw_digest = produce_audio(raw, request_key, synth_raw, control)
@@ -242,5 +251,12 @@ def dub_cues(
     if _provider_identity(provider, voice) != identity:
         raise RuntimeError("混音前参考音频或配音设置发生变化，请重试")
     output.parent.mkdir(parents=True, exist_ok=True)
-    mix_timeline(video, clips, output, duration, control=control)
+    model.check()
+    validate_outputs({"配音视频": output}, [video, *(path for _, path in clips)])
+    with staged_path(output, suffix=output.suffix or ".mp4") as pending:
+        mix_timeline(video, clips, pending, duration, control=control)
+        model.check()
+        pending.replace(output)
+    if model.enabled:
+        setattr(provider, "cache_model_revision", model.revision)
     return output

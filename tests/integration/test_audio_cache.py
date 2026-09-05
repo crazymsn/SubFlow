@@ -56,6 +56,56 @@ def test_verified_audio_is_reused_and_replaced_raw_rebuilds_fitted(job, tmp_path
     assert pcm_duration(raw) == pytest.approx(0.8)
 
 
+def test_all_clips_restart_after_cpu_fallback_model_reload(job, tmp_path, monkeypatch):
+    _, calls, provider, _ = job
+    provider.name = "gptsovits"
+    revision, seen = ["a" * 32], []
+    monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision", lambda _: revision[0])
+    original = provider.synth
+    def change(req, **kw):
+        seen.append((req.text, req.model_revision))
+        original(req, **kw)
+        if len(seen) == 2:
+            revision[0] = "b" * 32
+    monkeypatch.setattr(provider, "synth", change)
+    d.dub_cues([Cue(0, 1, "一", "one"), Cue(1, 2, "二", "two")], video=tmp_path / "in.mp4",
+               work=tmp_path, output=tmp_path / "out.mp4", provider=provider, lang="en", voice="", duration=3)
+    assert seen == [("one", "a" * 32), ("two", "a" * 32), ("one", "b" * 32), ("two", "b" * 32)]
+    assert provider.cache_model_revision == "b" * 32 and calls["synth"] == 4
+
+
+def test_model_change_during_mix_never_publishes_partial_movie(job, tmp_path, monkeypatch):
+    from bilingual_sub.adapters.tts.model_identity import ModelChanged
+    run, _, provider, _ = job
+    provider.name = "gptsovits"
+    revision = [1]
+    monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision", lambda _: f"{revision[0]:032x}")
+    output = tmp_path / "out.mp4"
+    output.write_bytes(b"previous movie")
+    def mix(video, clips, output, duration, **kw):
+        output.write_bytes(b"mixed using old model")
+        revision[0] += 1
+    monkeypatch.setattr(d, "mix_timeline", mix)
+    with pytest.raises(ModelChanged):
+        run()
+    assert output.read_bytes() == b"previous movie"
+
+
+@pytest.mark.parametrize("target", ["video", "reference"])
+def test_staged_dub_cannot_overwrite_source_or_reference(job, tmp_path, target):
+    _, calls, provider, _ = job
+    video, reference = tmp_path / "input.mp4", tmp_path / "ref.wav"
+    video.write_bytes(b"original movie")
+    reference.write_bytes(b"original voice")
+    provider.ref_audio = str(reference)
+    output = video if target == "video" else reference
+    original = output.read_bytes()
+    with pytest.raises(ValueError, match="覆盖输入"):
+        d.dub_cues([Cue(0, 1, "一", "one")], video=video, work=tmp_path, output=output,
+                   provider=provider, lang="en", voice="", duration=2)
+    assert output.read_bytes() == original and calls["synth"] == 0
+
+
 @pytest.mark.parametrize("damage", ["replace", "missing_record", "bad_record", "wrong_key"])
 def test_damaged_fit_rebuilt_without_resynthesis(job, damage, pcm_wav):
     run, calls, _, mixed = job

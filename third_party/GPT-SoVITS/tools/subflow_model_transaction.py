@@ -2,6 +2,7 @@
 import copy
 import os
 import tempfile
+import uuid
 from functools import wraps
 from pathlib import Path
 
@@ -46,6 +47,7 @@ def model_update(operation):
                                       for key, value in model.prompt_cache.items()}
         result = operation(candidate, *args, **kwargs)
         candidate.configs._defer_save = False
+        candidate.model_revision = uuid.uuid4().hex
         if kwargs.get("save", True):
             candidate.configs.save_configs()
         candidate.__dict__.pop("_model_update_in_progress", None)

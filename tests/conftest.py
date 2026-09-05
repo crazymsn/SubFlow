@@ -33,6 +33,7 @@ def _runtime_lifecycle(monkeypatch):
     monkeypatch.setenv("SUBFLOW_AUTO_INSTALL", "0")
     if os.environ.get("SUBFLOW_SOVITS_LIVE") != "1":
         monkeypatch.setattr(rt, "probe_endpoint", lambda *a, **k: True)
+        monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision", lambda endpoint: "a" * 32)
     rt.reset_boot_state()
     yield
     rt.reset_boot_state()

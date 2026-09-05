@@ -167,10 +167,12 @@ model_operations = SerializedModel()
 async def subflow_runtime():
     return {"device": str(tts_pipeline.configs.device), "is_half": tts_pipeline.configs.is_half,
             "mps_available": torch.backends.mps.is_available(), "torch_version": torch.__version__,
+            "model_revision": tts_pipeline.model_revision,
             "busy": model_operations.lock.locked()}
 
 
 class TTS_Request(BaseModel):
+    model_revision: str | None = None
     text: str = None
     text_lang: str = None
     ref_audio_path: str = None
@@ -439,6 +441,12 @@ async def tts_handle(req: dict):
 
     if streaming_mode:
         def streaming_generator():
+            expected = req.get("model_revision")
+            if expected and expected != tts_pipeline.model_revision:
+                raise ValueError("model_revision changed; retry with the current model")
+            validation = check_params(req)
+            if validation is not None:
+                raise ValueError(validation.body.decode("utf-8"))
             tts_generator = tts_pipeline.run(req)
             stream_media_type = media_type
             if_frist_chunk = True
@@ -460,6 +468,7 @@ async def tts_handle(req: dict):
         return ModelStreamingResponse(
             stream,
             media_type=f"audio/{media_type}",
+            headers={"X-SubFlow-Model-Revision": tts_pipeline.model_revision},
         )
 
     def synthesize_response():
@@ -467,11 +476,18 @@ async def tts_handle(req: dict):
         try:
             sr, audio_data = next(tts_generator)
             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
-            return Response(audio_data, media_type=f"audio/{media_type}")
+            return Response(audio_data, media_type=f"audio/{media_type}",
+                            headers={"X-SubFlow-Model-Revision": tts_pipeline.model_revision})
         finally:
             tts_generator.close()
 
     def synthesize_with_recovery():
+        expected = req.get("model_revision")
+        if expected and expected != tts_pipeline.model_revision:
+            return JSONResponse(status_code=409, content={"message": "model_revision changed; retry with the current model"})
+        validation = check_params(req)
+        if validation is not None:
+            return validation
         try:
             return synthesize_response()
         except Exception as e:
@@ -523,8 +539,10 @@ async def tts_get_endpoint(
     streaming_mode: Union[bool, int] = False,
     overlap_length: int = 2,
     min_chunk_length: int = 16,
+    model_revision: str | None = None,
 ):
     req = {
+        "model_revision": model_revision,
         "text": text,
         "text_lang": (text_lang or "").lower(),
         "ref_audio_path": ref_audio_path,

@@ -127,3 +127,41 @@ def test_old_unrecorded_valid_preview_is_regenerated(preview, pcm_wav):
     p.synth_voice_preview(**kwargs)
     assert calls["synth"] == 1
     assert json.loads(kwargs["dest"].with_suffix(".wav.json").read_text())["schema"] == 1
+
+
+def test_switching_loaded_model_invalidates_preview(preview, monkeypatch):
+    kwargs, calls, _ = preview
+    before = p.synth_voice_preview(**kwargs).read_bytes()
+    monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision", lambda _: "b" * 32)
+    assert p.synth_voice_preview(**kwargs).read_bytes() != before
+    assert calls["synth"] == 2
+
+
+def test_unidentified_service_never_reuses_preview(preview, monkeypatch):
+    kwargs, calls, _ = preview
+    monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision", lambda _: None)
+    p.synth_voice_preview(**kwargs)
+    p.synth_voice_preview(**kwargs)
+    assert calls["synth"] == 2
+
+
+@pytest.mark.parametrize("continuous", [False, True])
+def test_preview_model_change_retries_without_overwriting_old_output(preview, monkeypatch, continuous):
+    from bilingual_sub.adapters.tts.model_identity import ModelChanged
+    kwargs, calls, provider = preview
+    old = p.synth_voice_preview(**kwargs).read_bytes()
+    revision = [1]
+    monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision", lambda _: f"{revision[0]:032x}")
+    original = provider.synth
+    def change(req, **kw):
+        original(req, **kw)
+        if continuous or revision[0] == 1:
+            revision[0] += 1
+    monkeypatch.setattr(provider, "synth", change)
+    if continuous:
+        with pytest.raises(ModelChanged):
+            p.synth_voice_preview(**kwargs)
+        assert kwargs["dest"].read_bytes() == old
+    else:
+        assert p.synth_voice_preview(**kwargs).read_bytes() != old
+    assert calls["synth"] == 3

@@ -44,6 +44,7 @@ def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, transla
         json.dumps(
             {
                 "job_id": "reuse1",
+                "tts_model_revision": "a" * 32,
                 "duration_sec": 1.2,
                 "play_res": [1280, 720],
                 "output_mp4": str(prev_mp4),
@@ -215,7 +216,8 @@ def test_stale_english_cues_block_single_chinese_reuse(tmp_path: Path, video: Pa
     assert _can_reexport(cfg, work) is False
 
 
-def test_single_zh_with_en_dub_line_can_reexport(tmp_path: Path, video: Path):
+@pytest.mark.parametrize("revision", ["a" * 32, "b" * 32, None])
+def test_single_zh_with_en_dub_line_can_reexport(tmp_path: Path, video: Path, monkeypatch, revision):
     from bilingual_sub.pipeline import _can_reexport
 
     cfg = JobConfig(
@@ -241,7 +243,8 @@ def test_single_zh_with_en_dub_line_can_reexport(tmp_path: Path, video: Path):
     report["translated"] = False
     report["tts_fingerprint"] = None
     (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
-    assert _can_reexport(cfg, work) is True
+    monkeypatch.setattr("bilingual_sub.adapters.tts.model_identity.fetch_model_revision", lambda _: revision)
+    assert _can_reexport(cfg, work) is (revision == "a" * 32)
 
 
 def test_english_in_chinese_field_blocks_bilingual_reuse(tmp_path: Path, video: Path):

@@ -35,6 +35,7 @@ def model(transaction, tmp_path):
         def __init__(self):
             self.configs = Config()
             self.network = object()
+            self.model_revision = "original"
             self.prompt_cache = {"refer_spec": ["original"]}
             self.vocoder_configs = {"rates": [1]}
         @transaction.model_update
@@ -64,6 +65,7 @@ def test_model_failure_preserves_all_serving_state_and_file(model):
     with pytest.raises(ValueError):
         instance.update("broken", True)
     assert instance.__dict__ is original
+    assert instance.model_revision == "original"
     assert instance.configs.weights == "original"
     assert instance.configs.defaults == {"nested": [1]}
     assert instance.prompt_cache == {"refer_spec": ["original"]}
@@ -104,6 +106,7 @@ def test_nested_model_loads_publish_once_or_roll_back_together(model, failure):
         assert instance.network is not original["network"]
         assert instance.configs.derived is original["configs"].derived
         assert saved == ["original", "replacement"]
+        assert len(instance.model_revision) == 32 and instance.model_revision != "original"
         assert not hasattr(instance, "_model_update_in_progress")
 
 
