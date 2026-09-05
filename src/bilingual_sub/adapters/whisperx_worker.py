@@ -9,7 +9,9 @@ from pathlib import Path
 
 def resolve_device(requested: str) -> str:
     req = (requested or "auto").strip().lower()
-    if req == "cpu":
+    if req in {"cpu", "mps"}:
+        if req == "mps":
+            print("WhisperX/CTranslate2 does not support MPS; using CPU. Use Whisper for Apple GPU.", flush=True)
         return "cpu"
     try:
         import torch

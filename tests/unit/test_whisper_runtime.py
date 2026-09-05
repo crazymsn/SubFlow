@@ -51,12 +51,14 @@ def test_cache_path_under_subflow(monkeypatch, tmp_path):
 
 def test_resolve_device_falls_back_to_cpu(monkeypatch):
     monkeypatch.setattr("bilingual_sub.adapters.whisper_backend.cuda_available", lambda: False)
+    monkeypatch.setattr("bilingual_sub.adapters.whisper_backend.mps_available", lambda: False)
     assert resolve_device("auto") == "cpu"
     assert resolve_device("cpu") == "cpu"
     assert resolve_device("cuda") == "cpu"
 
 
 def test_resolve_device_uses_cuda_when_present(monkeypatch):
+    monkeypatch.delenv("SUBFLOW_TORCH_BACKEND", raising=False)
     monkeypatch.setattr("bilingual_sub.adapters.whisper_backend.cuda_available", lambda: True)
     assert resolve_device("auto") == "cuda"
     assert resolve_device("cuda") == "cuda"

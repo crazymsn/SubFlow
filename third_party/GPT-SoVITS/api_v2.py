@@ -125,6 +125,7 @@ from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 from GPT_SoVITS.TTS_infer_pack.text_segmentation_method import get_method_names as get_cut_method_names
 from pydantic import BaseModel
 import threading
+import torch
 
 # print(sys.path)
 i18n = I18nAuto()
@@ -146,9 +147,23 @@ if config_path in [None, ""]:
 
 tts_config = TTS_Config(config_path)
 print(tts_config)
-tts_pipeline = TTS(tts_config)
+try:
+    tts_pipeline = TTS(tts_config)
+except (RuntimeError, NotImplementedError):
+    if str(tts_config.device) != "mps":
+        raise
+    print("Apple GPU model loading failed; starting CPU fallback.")
+    tts_config.device = torch.device("cpu")
+    tts_config.is_half = False
+    tts_pipeline = TTS(tts_config)
 
 APP = FastAPI()
+
+
+@APP.get("/subflow/runtime")
+async def subflow_runtime():
+    return {"device": str(tts_pipeline.configs.device), "is_half": tts_pipeline.configs.is_half,
+            "mps_available": torch.backends.mps.is_available(), "torch_version": torch.__version__}
 
 
 class TTS_Request(BaseModel):

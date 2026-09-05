@@ -433,6 +433,12 @@ def runtime_config(root: Path) -> dict:
     """Choose a complete, matching model pair; never infer a pair from arbitrary files."""
     import yaml
 
+    from bilingual_sub.adapters.runtime_bootstrap import torch_backend
+
+    device = os.environ.get("SUBFLOW_GPTSOVITS_DEVICE", torch_backend()).strip().lower()
+    if device not in {"cpu", "cuda", "mps"}:
+        raise TtsUnavailable("SUBFLOW_GPTSOVITS_DEVICE must be cpu, cuda or mps")
+
     override = os.environ.get("SUBFLOW_GPTSOVITS_CONFIG", "").strip()
     if override:
         path = Path(override).expanduser().resolve()
@@ -462,8 +468,8 @@ def runtime_config(root: Path) -> dict:
         if _weight_file_ok(root / gpt) and _weight_file_ok(root / sovits):
             return {
                 "version": version,
-                "device": os.environ.get("SUBFLOW_GPTSOVITS_DEVICE", "cpu"),
-                "is_half": os.environ.get("SUBFLOW_GPTSOVITS_DEVICE", "cpu") != "cpu",
+                "device": device,
+                "is_half": device == "cuda",
                 "t2s_weights_path": str((root / gpt).resolve()),
                 "vits_weights_path": str((root / sovits).resolve()),
                 "bert_base_path": str((root / _BERT_DIR).resolve()),
@@ -511,6 +517,7 @@ def start_server(
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
+    env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     env.pop("PYTHONPATH", None)
     env.pop("PYTHONHOME", None)
     env["NLTK_DATA"] = str(root / "nltk_data") + os.pathsep + env.get("NLTK_DATA", "")
@@ -604,10 +611,11 @@ def ensure_running(endpoint: str | None = None, *, wait_sec: float = 180.0, cont
             from bilingual_sub.adapters.runtime_bootstrap import (
                 auto_install_enabled,
                 ensure_sovits_runtime,
+                source_update_needed,
             )
 
             root = discover_home()
-            if root is None or missing_pretrained(root) or find_sovits_python(root) is None:
+            if root is None or missing_pretrained(root) or find_sovits_python(root) is None or source_update_needed(root):
                 if auto_install_enabled():
                     root = ensure_sovits_runtime(control=control, progress=progress)
                 else:

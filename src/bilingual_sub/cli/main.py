@@ -295,8 +295,8 @@ def run_cmd(
         _exit(1)
     if tts_provider == "gptsovits":
         enable_dub = True
-    if device not in ("auto", "cuda", "cpu"):
-        console.print("[red]--device must be auto, cuda, or cpu[/red]")
+    if device not in ("auto", "cuda", "mps", "cpu"):
+        console.print("[red]--device must be auto, cuda, mps, or cpu[/red]")
         _exit(1)
     if resume_from and resume_from not in STAGES:
         console.print(f"[red]--resume-from must be one of: {', '.join(STAGES)}[/red]")

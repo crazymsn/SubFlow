@@ -36,9 +36,12 @@ def bootstrap_assets() -> Path:
 
 
 def torch_backend() -> str:
-    backend = os.environ.get("SUBFLOW_TORCH_BACKEND", "cpu").lower()
-    if backend not in {"cpu", "cuda"}:
-        raise ValueError("SUBFLOW_TORCH_BACKEND must be cpu or cuda")
+    apple = sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+    backend = os.environ.get("SUBFLOW_TORCH_BACKEND", "mps" if apple else "cpu").strip().lower()
+    if backend not in {"cpu", "cuda", "mps"}:
+        raise ValueError("SUBFLOW_TORCH_BACKEND must be cpu, cuda or mps")
+    if backend == "mps" and not apple:
+        raise ValueError("MPS automatic installation requires a native Apple Silicon macOS client")
     if backend == "cuda" and (sys.platform == "darwin" or platform.machine().lower() not in {"amd64", "x86_64"}):
         raise ValueError("CUDA wheels require Windows/Linux x86_64; use cpu on this platform")
     return backend
@@ -74,6 +77,7 @@ def install_env() -> dict[str, str]:
     env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", UV_NO_CONFIG="1",
                UV_PYTHON_INSTALL_DIR=str(runtime_root() / "python"),
                UV_CACHE_DIR=str(runtime_root() / "download-cache"))
+    env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     # Frozen Qt search paths must never shadow an external interpreter's DLLs.
     if getattr(sys, "frozen", False):
         frozen = str(Path(getattr(sys, "_MEIPASS", "")).resolve()).lower()
@@ -193,10 +197,13 @@ def ensure_sovits_runtime(*, control: JobControl | None = None, progress: Progre
     runtime_root().mkdir(parents=True, exist_ok=True)
     with _locked(runtime_root() / "gptsovits-home.lock", control):
         source = bundled_src()
-        if not (home / "api_v2.py").is_file():
+        if not (home / "api_v2.py").is_file() or source_update_needed(home):
             if source is None:
                 raise RuntimeError("客户端缺少 GPT-SoVITS 源码，请重新下载完整客户端")
             copy_runtime_tree(source, home)
+            from bilingual_sub.__version__ import __version__
+
+            (home / ".subflow-source-version").write_text(__version__, encoding="utf-8")
         python = ensure_python_env("gptsovits", control=control, progress=progress)
         if models and (missing_pretrained(home) or not (home / ".subflow-assets-v1").is_file()):
             _progress(progress, "正在下载并校验配音模型与语言数据，下载完成后会自动启动…")
@@ -209,3 +216,16 @@ def ensure_sovits_runtime(*, control: JobControl | None = None, progress: Progre
                 raise RuntimeError("模型下载不完整：" + "; ".join(missing))
             (home / ".subflow-assets-v1").write_text("ready", encoding="utf-8")
     return home
+
+
+def source_update_needed(home: Path) -> bool:
+    """Update SubFlow-managed cached source while preserving user-selected installations."""
+    from bilingual_sub.__version__ import __version__
+    from bilingual_sub.adapters.tts.gptsovits_runtime import bundled_src, default_home
+
+    if os.environ.get("SUBFLOW_GPTSOVITS_HOME", "").strip() or home != default_home():
+        return False
+    if bundled_src() is None:
+        return False
+    marker = home / ".subflow-source-version"
+    return not marker.is_file() or marker.read_text(encoding="utf-8") != __version__

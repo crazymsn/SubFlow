@@ -18,6 +18,7 @@ if (ROOT / "fonts").is_dir():
 if (ROOT / "assets" / "brand").is_dir():
     datas.append((str(ROOT / "assets" / "brand"), "bilingual_sub/_data/brand"))
 worker = SRC / "bilingual_sub" / "adapters" / "whisper_worker.py"
+datas.append((str(SRC / "bilingual_sub" / "adapters" / "torch_device.py"), "bilingual_sub/adapters"))
 if worker.is_file():
     datas.append((str(worker), "bilingual_sub/adapters"))
 wx_worker = SRC / "bilingual_sub" / "adapters" / "whisperx_worker.py"

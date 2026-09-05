@@ -38,6 +38,11 @@ hann_window = {}
 
 
 def spectrogram_torch(y, n_fft, sampling_rate, hop_size, win_size, center=False):
+    if y.device.type == "mps":
+        # PyTorch 2.5 MPS does not support all STFT/complex operations. Only
+        # this preprocessing step runs on CPU; the real-valued result returns
+        # to the GPU for the neural network.
+        return spectrogram_torch(y.cpu(), n_fft, sampling_rate, hop_size, win_size, center).to(y.device)
     if torch.min(y) < -1.2:
         print("min value is ", torch.min(y))
     if torch.max(y) > 1.2:
@@ -91,6 +96,10 @@ def spec_to_mel_torch(spec, n_fft, num_mels, sampling_rate, fmin, fmax):
 
 
 def mel_spectrogram_torch(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
+    if y.device.type == "mps":
+        return mel_spectrogram_torch(
+            y.cpu(), n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center
+        ).to(y.device)
     if torch.min(y) < -1.2:
         print("min value is ", torch.min(y))
     if torch.max(y) > 1.2:

@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from bilingual_sub.adapters.procwin import gui_python, hidden_run_kwargs
+from bilingual_sub.adapters.torch_device import (
+    load_whisper_on_device,
+    mps_available,
+    select_device,
+    transcribe_with_fallback,
+)
 from bilingual_sub.core.control import JobStopped
 from bilingual_sub.models import Segment, WordSpan
 
@@ -60,14 +66,7 @@ def has_nvidia_gpu() -> bool:
 
 
 def resolve_device(requested: str) -> str:
-    req = (requested or "auto").strip().lower()
-    if req == "cpu":
-        return "cpu"
-    if cuda_available() and req in {"auto", "cuda"}:
-        return "cuda"
-    if req == "cuda":
-        logger.warning("CUDA unavailable; falling back to CPU")
-    return "cpu"
+    return select_device(requested, cuda=cuda_available(), mps=mps_available())
 
 
 def default_whisper_model() -> str:
@@ -79,10 +78,10 @@ def load_whisper_model(model_name: str, device: str):
 
     dev = resolve_device(device)
     try:
-        return whisper.load_model(model_name, device=dev), dev
+        return load_whisper_on_device(whisper, model_name, dev), dev
     except Exception as exc:
-        if dev == "cuda":
-            logger.warning("Whisper CUDA load failed (%s); using CPU", exc)
+        if dev in {"cuda", "mps"}:
+            logger.warning("Whisper %s load failed (%s); using CPU", dev, exc)
             return whisper.load_model(model_name, device="cpu"), "cpu"
         raise
 
@@ -234,10 +233,9 @@ def _transcribe_inprocess(
 ) -> list[Segment]:
     model, dev = load_whisper_model(model_name, device)
     logger.info("loading whisper model=%s device=%s", model_name, dev)
-    result: dict[str, Any] = model.transcribe(
-        str(wav),
+    result, dev = transcribe_with_fallback(
+        model, dev, str(wav),
         language=_whisper_language(language),
-        fp16=dev == "cuda",
         word_timestamps=False,
         verbose=False,
         condition_on_previous_text=True,

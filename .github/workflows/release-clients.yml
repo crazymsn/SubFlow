@@ -17,15 +17,18 @@ jobs:
         include:
           - os: windows-latest
             label: Windows-x64
+            backend: cpu
           - os: macos-14
             label: macOS-arm64
+            backend: mps
           - os: macos-15-intel
             label: macOS-x64
+            backend: cpu
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     env:
       QT_QPA_PLATFORM: offscreen
-      SUBFLOW_TORCH_BACKEND: cpu
+      SUBFLOW_TORCH_BACKEND: ${{ matrix.backend }}
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
     steps:
@@ -47,10 +50,19 @@ jobs:
         run: python -m pytest -q
       - name: Lint
         run: ruff check src tests scripts
-      - name: Prepare CPU recognition runtime from scratch
+      - name: Prepare recognition runtime from scratch
         run: python scripts/prepare-runtime.py asr
-      - name: Prepare CPU dubbing dependencies from scratch
+      - name: Prepare dubbing dependencies from scratch
         run: python scripts/prepare-runtime.py gptsovits --skip-models
+      - name: Probe Apple GPU dependencies and available hardware
+        if: matrix.backend == 'mps'
+        run: python scripts/check-apple-gpu.py
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.backend == 'mps'
+        with:
+          name: apple-gpu-report
+          path: apple-gpu-report.json
+          if-no-files-found: ignore
       - name: Build Windows client with automatic installer
         if: runner.os == 'Windows'
         shell: pwsh

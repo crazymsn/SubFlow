@@ -4,7 +4,7 @@
 
 深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
-当前源码版本 **1.3.0**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
+当前源码版本 **1.3.1**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
 
 ![SubFlow 语幕桌面客户端](docs/images/desktop-light.png)
 
@@ -57,7 +57,7 @@
 5. 拖入视频，或粘贴链接后下载。
 6. 选好源语言、目标语言、字幕样式，点击「开始处理」。
 
-客户端自带 FFmpeg 和安装器，首次启动自动在用户目录准备 Python 3.11、CPU 推理依赖和 GPT-SoVITS 模型；首次识别再下载所选 Whisper 权重。无需预装 Python、CUDA 或编译器。首次需要联网并预留约 15–20 GB 空间；后续复用缓存。无显卡也能识别、配音和导出，CPU 上建议先用 tiny/base/small 测试短片，速度取决于设备。详细步骤见 [桌面客户端](docs/desktop.md)。
+客户端自带 FFmpeg 和安装器，首次启动自动在用户目录准备 Python 3.11、推理依赖和 GPT-SoVITS 模型（Apple M 系列默认启用 MPS GPU，其余平台默认 CPU）；首次识别再下载所选 Whisper 权重。无需预装 Python、CUDA 或编译器。首次需要联网并预留约 15–20 GB 空间；后续复用缓存。Apple Silicon 客户端通过 PyTorch MPS 使用 Apple GPU；无需 CUDA。无显卡也能识别、配音和导出，CPU 上建议先用 tiny/base/small 测试短片，速度取决于设备。详细步骤见 [桌面客户端](docs/desktop.md)。
 
 ## 从源码运行
 

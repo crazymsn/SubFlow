@@ -43,3 +43,4 @@ third_party/GPT-SoVITS/**/user.dict
 third_party/GPT-SoVITS/**/userdict.md5
 .mypy_cache/
 client-smoke.json
+apple-gpu-report.json

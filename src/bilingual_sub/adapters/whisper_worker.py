@@ -6,6 +6,21 @@ import argparse
 import json
 from pathlib import Path
 
+if __package__:
+    from .torch_device import (
+        load_whisper_on_device,
+        mps_available,
+        select_device,
+        transcribe_with_fallback,
+    )
+else:
+    from torch_device import (  # type: ignore[no-redef]
+        load_whisper_on_device,
+        mps_available,
+        select_device,
+        transcribe_with_fallback,
+    )
+
 
 def resolve_device(requested: str) -> str:
     req = (requested or "auto").strip().lower()
@@ -20,19 +35,17 @@ def resolve_device(requested: str) -> str:
     if req == "cuda" and not cuda_ok:
         print("WARN CUDA unavailable; using CPU", flush=True)
         return "cpu"
-    if req in {"auto", "cuda"} and cuda_ok:
-        return "cuda"
-    return "cpu"
+    return select_device(req, cuda=cuda_ok, mps=mps_available())
 
 
 def load_model(name: str, device: str):
     import whisper
 
     try:
-        return whisper.load_model(name, device=device), device
+        return load_whisper_on_device(whisper, name, device), device
     except Exception as exc:
-        if device == "cuda":
-            print(f"WARN CUDA load failed ({exc}); using CPU", flush=True)
+        if device in {"cuda", "mps"}:
+            print(f"WARN {device} load failed ({exc}); using CPU", flush=True)
             return whisper.load_model(name, device="cpu"), "cpu"
         raise
 
@@ -53,10 +66,9 @@ def main() -> None:
     model, dev = load_model(args.model, dev)
     print(f"MODEL_LOADED device={dev}", flush=True)
     lang = None if (args.language or "").strip().lower() in {"", "auto"} else args.language
-    result = model.transcribe(
-        str(wav),
+    result, dev = transcribe_with_fallback(
+        model, dev, str(wav),
         language=lang,
-        fp16=dev == "cuda",
         word_timestamps=False,
         verbose=False,
         condition_on_previous_text=True,

@@ -322,10 +322,13 @@ class TTS_Config:
         if "cuda" in str(self.device) and not torch.cuda.is_available():
             print("Warning: CUDA is not available, set device to CPU.")
             self.device = torch.device("cpu")
+        if str(self.device) == "mps" and not torch.backends.mps.is_available():
+            print("Warning: Apple GPU/MPS is not available, set device to CPU.")
+            self.device = torch.device("cpu")
 
         self.is_half = self.configs.get("is_half", False)
-        if str(self.device) == "cpu" and self.is_half:
-            print(f"Warning: Half precision is not supported on CPU, set is_half to False.")
+        if str(self.device) in {"cpu", "mps"} and self.is_half:
+            print("Using float32 on CPU/MPS for stable inference.")
             self.is_half = False
 
         version = self.configs.get("version", None)
@@ -1514,8 +1517,16 @@ class TTS:
 
         except Exception as e:
             traceback.print_exc()
-            # 必须返回一个空音频, 否则会导致显存不释放。
-            yield 16000, np.zeros(int(16000), dtype=np.int16)
+            if (str(self.configs.device) == "mps" and isinstance(e, (RuntimeError, NotImplementedError))
+                    and not streaming_mode and not return_fragment):
+                print("Apple GPU inference failed; retrying this request once on CPU.")
+                config = deepcopy(self.configs)
+                config.device = torch.device("cpu")
+                config.is_half = False
+                self.__init__(config)
+                yield from self.run(inputs)
+                return
+            # Never return fake silence as a successful synthesis result.
             # 重置模型, 否则会导致显存释放不完全。
             del self.t2s_model
             del self.vits_model
