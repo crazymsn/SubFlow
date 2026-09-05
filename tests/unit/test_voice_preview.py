@@ -34,36 +34,36 @@ def test_synth_gptsovits_preview_waits_for_runtime(tmp_path, monkeypatch, pcm_wa
     assert calls["boot"] == 1
 
 
-def test_synth_voice_preview_uses_voice_and_sample(tmp_path, monkeypatch):
+def test_synth_voice_preview_uses_voice_and_sample(tmp_path, monkeypatch, pcm_wav):
     seen: list = []
 
     class FakeTts:
         def synth(self, req, control=None):
             seen.append(req)
-            req.dest.write_bytes(b"ID3fake")
+            req.dest.write_bytes(pcm_wav())
             return req.dest
 
     monkeypatch.setattr("bilingual_sub.core.voice_preview.select_tts", lambda provider, **_k: FakeTts())
-    dest = tmp_path / "nova-en.mp3"
+    dest = tmp_path / "nova-en.wav"
     path = synth_voice_preview(provider="openai", voice="nova", lang="en", dest=dest)
     assert path == dest
     assert seen[0].voice == "nova"
     assert seen[0].lang == "en"
     assert seen[0].text == preview_sample("en")
-    assert dest.read_bytes().startswith(b"ID3")
+    assert dest.read_bytes() == pcm_wav()
 
 
-def test_synth_voice_preview_reuses_cache(tmp_path, monkeypatch):
+def test_synth_voice_preview_reuses_cache(tmp_path, monkeypatch, pcm_wav):
     calls = {"n": 0}
 
     class FakeTts:
         def synth(self, req, control=None):
             calls["n"] += 1
-            req.dest.write_bytes(b"cached-audio-bytes" * 8)
+            req.dest.write_bytes(pcm_wav())
             return req.dest
 
     monkeypatch.setattr("bilingual_sub.core.voice_preview.select_tts", lambda provider, **_k: FakeTts())
-    dest = tmp_path / "alloy-zh.mp3"
+    dest = tmp_path / "alloy-zh.wav"
     first = synth_voice_preview(provider="openai", voice="alloy", lang="zh", dest=dest)
     second = synth_voice_preview(provider="openai", voice="alloy", lang="zh", dest=dest)
     assert first == second

@@ -122,13 +122,22 @@ def _save_state(
     *,
     control: JobControl | None = None,
     produced: dict[str, list[str]] | None = None,
+    artifact_context: dict | None = None,
+    context_stage: str | None = None,
 ) -> None:
     previous = _load_json(work_dir / "job_state.json")
     completed = stage if stage in STAGES else previous.get("completed_stage", previous.get("stage", "init"))
-    data = {"stage": stage, "completed_stage": completed, "paused": False, "stopped": False,
+    data: dict = {"stage": stage, "completed_stage": completed, "paused": False, "stopped": False,
             "artifact_schema": 1,
             "artifacts": completed_artifacts(work_dir, previous, completed, produced,
                 checkpoint=(lambda: _gate(control)) if produced else None)}
+    contexts = previous.get("artifact_contexts", {})
+    data["artifact_contexts"] = {
+        name: value for name, value in (contexts.items() if isinstance(contexts, dict) else [])
+        if name in {"translate", "render", "burn", "dub"} and _stage_index(name) <= _stage_index(completed)
+    }
+    if artifact_context is not None:
+        data["artifact_contexts"][context_stage or stage] = artifact_context
     if control:
         data["paused"] = control.is_paused()
         data["stopped"] = control.is_stopped()
@@ -140,6 +149,29 @@ def _save_state(
 def _verify_cache(work: Path, stage: str, control: JobControl | None = None) -> dict:
     return verify_artifacts(work, _load_json(work / "job_state.json"), stage,
                             checkpoint=lambda: _gate(control))
+
+
+def _artifact_context(stage: str, config: JobConfig, settings: AppSettings, work: Path,
+                      control: JobControl | None = None, detected_spoken: str | None = None) -> dict:
+    profile = render_profile(config, settings)
+    if stage == "render":
+        return {key: value for key, value in profile.items() if key != "burn"}
+    result = {"render": profile if config.burn else None,
+              "ass_sha256": file_digest(work / "subs.ass", checkpoint=lambda: _gate(control)) if config.burn else None}
+    if stage == "dub":
+        result["tts"] = _tts_fingerprint(config, detected_spoken=detected_spoken, cues=_original_cues(work, control))
+    return result
+
+
+def _verify_artifact_context(work: Path, stage: str, config: JobConfig, settings: AppSettings,
+                             control: JobControl | None = None, detected_spoken: str | None = None) -> None:
+    if not _verify_cache(work, stage, control):
+        raise ValueError(f"缺少 {stage} 阶段产物，请从 {stage} 重新处理")
+    contexts = _load_json(work / "job_state.json").get("artifact_contexts", {})
+    if not isinstance(contexts, dict) or contexts.get(stage) != _artifact_context(
+        stage, config, settings, work, control, detected_spoken
+    ):
+        raise ValueError(f"{stage} 阶段的字幕或配音设置与缓存不符，请从 {stage} 重新处理")
 
 
 def video_fingerprint(path: Path, *, control: JobControl | None = None) -> dict:
@@ -464,8 +496,12 @@ def _export_subs(
     cues: list[Cue],
     play_res: tuple[int, int],
     control: JobControl | None = None,
+    settings: AppSettings | None = None,
 ) -> Path:
     preset = _styled_preset(config)
+    context_settings = settings or load_settings()
+    render_context = _artifact_context("render", config, context_settings, work, control)
+    render_context["preset"] = preset.model_dump()
     ass_path = work / "subs.ass"
     srt_out = config.output_srt
     srt_out.parent.mkdir(parents=True, exist_ok=True)
@@ -484,10 +520,13 @@ def _export_subs(
     )
     if ass_out != ass_path:
         copy_file(ass_out, ass_path, checkpoint=lambda: _gate(control))
+    if render_context != _artifact_context("render", config, context_settings, work, control):
+        raise RuntimeError("导出期间字幕样式发生变化，请从 render 重新处理")
     state = _load_json(work / "job_state.json")
     stage = state.get("completed_stage", state.get("stage", "render"))
     _save_state(work, stage, {"job_id": state.get("job_id")}, control=control,
-                produced={"render": list(FILES["render"])})
+                produced={"render": list(FILES["render"])}, context_stage="render",
+                artifact_context=render_context)
     return ass_out
 
 
@@ -699,7 +738,7 @@ def _reexport_if_possible(
     ))
     prog("export", 0.85)
     ts = time.time()
-    ass_out = _export_subs(config, work, cues, play_res, control=control)
+    ass_out = _export_subs(config, work, cues, play_res, control=control, settings=settings)
     output_mp4 = _copy_or_burn(config, work, settings, report, control=control)
     _gate(control)
     stages = {"export_sec": time.time() - ts}
@@ -965,6 +1004,8 @@ def _run_job(
 
     glossary = Glossary.load(config.glossary_path or default_glossary_path())
     preset = _styled_preset(config)
+    render_context = _artifact_context("render", config, settings, work, control)
+    render_context["preset"] = preset.model_dump()
 
     cache_hits = 0
     api_calls = 0
@@ -1243,10 +1284,18 @@ def _run_job(
         save_cues_json(cues, cues_bi_path)
         stages["translate_sec"] = time.time() - ts
         _save_state(work, "translate", {"job_id": job_id, "missing_en": len(missing)}, control=control,
-                    produced={"translate": list(FILES["translate"])})
+                    produced={"translate": list(FILES["translate"])},
+                    artifact_context={"cache_hits": cache_hits, "api_calls": api_calls, "missing": missing})
     else:
         _verify_cache(work, "translate", control)
         cues = load_cues_json(cues_bi_path)
+        saved_stats = _load_json(work / "job_state.json").get("artifact_contexts", {}).get("translate")
+        if (not isinstance(saved_stats, dict)
+                or any(type(saved_stats.get(k)) is not int or saved_stats[k] < 0 for k in ("cache_hits", "api_calls"))
+                or not isinstance(saved_stats.get("missing"), list)
+                or any(not isinstance(item, str) for item in saved_stats["missing"])):
+            raise ValueError("translate 阶段统计缺失或损坏，请从 translate 重新处理")
+        cache_hits, api_calls, missing = saved_stats["cache_hits"], saved_stats["api_calls"], saved_stats["missing"]
 
     if _should_run(config.resume_from, "fit_subs"):
         _gate(control)
@@ -1284,6 +1333,8 @@ def _run_job(
         _gate(control)
         prog("render", 0.8)
         ts = time.time()
+        if render_context != _artifact_context("render", config, settings, work, control):
+            raise RuntimeError("处理期间字幕样式发生变化，请从 render 重新处理")
         write_subtitles(
             cues,
             preset,
@@ -1299,11 +1350,14 @@ def _run_job(
         if ass_out != ass_path:
             copy_file(ass_out, ass_path, checkpoint=lambda: _gate(control))
         stages["render_sec"] = time.time() - ts
+        if render_context != _artifact_context("render", config, settings, work, control):
+            raise RuntimeError("渲染期间字幕样式发生变化，请从 render 重新处理")
         _save_state(work, "render", {"job_id": job_id}, control=control,
-                    produced={"render": list(FILES["render"])})
+                    produced={"render": list(FILES["render"])},
+                    artifact_context=render_context)
     elif not srt_out.is_file() or not ass_out.is_file() or not ass_path.is_file():
-        _export_subs(config, work, cues, play_res, control=control)
-    _verify_cache(work, "render", control)
+        _export_subs(config, work, cues, play_res, control=control, settings=settings)
+    _verify_artifact_context(work, "render", config, settings, control)
 
     dest_mp4 = config.output_video or srt_out.with_suffix(".mp4")
     output_mp4: Path | None = None
@@ -1322,9 +1376,10 @@ def _run_job(
         verify_source()
         prog("burn", 0.9)
         ts = time.time()
-        burn_dest = burned_mp4 if need_dub else dest_mp4
+        burn_dest = burned_mp4
         burn_dest.parent.mkdir(parents=True, exist_ok=True)
         dest_mp4.parent.mkdir(parents=True, exist_ok=True)
+        burn_context = _artifact_context("burn", config, settings, work, control)
         burn_subtitles(
             source,
             ass_path,
@@ -1334,12 +1389,15 @@ def _run_job(
             preset=settings.burn.preset,
             control=control,
         )
-        if not need_dub:
-            output_mp4 = dest_mp4
         stages["burn_sec"] = time.time() - ts
+        if burn_context != _artifact_context("burn", config, settings, work, control):
+            raise RuntimeError("烧录期间字幕或设置发生变化，请从 render 重新处理")
         _save_state(work, "burn", {"job_id": job_id}, control=control,
-                    produced={"burn": ["burned.mp4"] if need_dub else []})
-    elif config.burn and not need_dub and dest_mp4.is_file():
+                    produced={"burn": list(FILES["burn"])},
+                    artifact_context=burn_context)
+    if config.burn and not need_dub:
+        _verify_artifact_context(work, "burn", config, settings, control)
+        copy_file(burned_mp4, dest_mp4, checkpoint=lambda: _gate(control))
         output_mp4 = dest_mp4
 
     if need_dub and _should_run(config.resume_from, "dub"):
@@ -1350,14 +1408,11 @@ def _run_job(
 
         tts_name = _resolved_tts_provider(config, asr_cues, detected_spoken=detected_spoken)
         ref_audio = config.tts_ref_audio
-        from bilingual_sub.gui.output_path import resolve_dub_sidecar
-
-        sidecar = resolve_dub_sidecar(config.output_video, srt_out)
         dub_tmp = work / "dubbed.mp4"
+        dub_context = _artifact_context("dub", config, settings, work, control, detected_spoken)
         try:
             if config.burn:
-                if not _verify_cache(work, "burn", control):
-                    raise RuntimeError("缺少烧录缓存身份，请从 burn 重新处理")
+                _verify_artifact_context(work, "burn", config, settings, control)
                 video_for_dub = burned_mp4
             else:
                 video_for_dub = source
@@ -1413,16 +1468,8 @@ def _run_job(
             )
             if dubbed is None or not Path(dubbed).is_file():
                 raise RuntimeError("配音失败，没有生成目标语种音轨")
-            if config.burn:
-                dest_mp4.parent.mkdir(parents=True, exist_ok=True)
-                if Path(dubbed).resolve() != dest_mp4.resolve():
-                    copy_file(dubbed, dest_mp4, checkpoint=lambda: _gate(control))
-                output_mp4 = dest_mp4
-            else:
-                if Path(dubbed).resolve() != sidecar.resolve():
-                    sidecar.parent.mkdir(parents=True, exist_ok=True)
-                    copy_file(dubbed, sidecar, checkpoint=lambda: _gate(control))
-                output_dub = sidecar
+            if dub_context != _artifact_context("dub", config, settings, work, control, detected_spoken):
+                raise RuntimeError("配音期间字幕、参考音频或设置发生变化，请重试")
         except JobStopped:
             raise
         except Exception as exc:
@@ -1430,7 +1477,21 @@ def _run_job(
             raise RuntimeError(f"配音失败，成片仍是原声：{exc}") from exc
         stages["dub_sec"] = time.time() - ts
         _save_state(work, "dub", {"job_id": job_id}, control=control,
-                    produced={"dub": list(FILES["dub"])})
+                    produced={"dub": list(FILES["dub"])},
+                    artifact_context=dub_context)
+    if need_dub:
+        _verify_artifact_context(work, "dub", config, settings, control, detected_spoken)
+        from bilingual_sub.gui.output_path import resolve_dub_sidecar
+
+        destination = dest_mp4 if config.burn else resolve_dub_sidecar(config.output_video, srt_out)
+        try:
+            copy_file(work / "dubbed.mp4", destination, checkpoint=lambda: _gate(control))
+        except OSError as exc:
+            raise RuntimeError(f"配音已完成，但成片导出失败；可从 done 重新导出：{exc}") from exc
+        if config.burn:
+            output_mp4 = destination
+        else:
+            output_dub = destination
 
     verify_source()
     if processing_profile(config, settings) != process_identity:

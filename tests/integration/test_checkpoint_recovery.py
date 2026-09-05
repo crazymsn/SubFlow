@@ -265,6 +265,176 @@ def test_reexport_rejects_changed_dub_and_rebuilds(dub_job):
     assert cfg.output_video.read_bytes() == b"burned dubbed"
 
 
+@pytest.mark.parametrize("burn", [False, True])
+def test_done_resume_restores_dub_at_new_destination_without_synthesis(dub_job, monkeypatch, burn):
+    cfg, settings, calls = dub_job
+    cfg.burn = burn
+    first = p.run(cfg, settings)
+    expected = (first.output_mp4 or first.output_dub).read_bytes()
+    cfg.output_video = cfg.output_video.with_name("relocated.mp4")
+    cfg.output_srt = cfg.output_srt.with_name("relocated.srt")
+    cfg.resume_from = "done"
+    monkeypatch.setattr(p, "dub_cues", lambda *a, **kw: pytest.fail("reuse verified dubbed video"))
+    second = p.run(cfg, settings)
+    destination = second.output_mp4 or second.output_dub
+    assert destination.read_bytes() == expected and destination != (first.output_mp4 or first.output_dub)
+    assert calls["asr"] == 1
+    report = json.loads(second.report_path.read_text())
+    assert report["output_mp4" if burn else "output_dub"] == str(destination)
+
+
+@pytest.mark.parametrize("damage", ["missing", "changed"])
+def test_done_resume_rejects_bad_dubbed_movie(dub_job, damage):
+    cfg, settings, _ = dub_job
+    first = p.run(cfg, settings)
+    before = first.output_mp4.read_bytes()
+    cached = cfg.work_dir / "dubbed.mp4"
+    if damage == "missing":
+        cached.unlink()
+    else:
+        cached.write_bytes(b"other video")
+    cfg.resume_from = "done"
+    with pytest.raises(ValueError, match="dub 阶段缓存"):
+        p.run(cfg, settings)
+    assert first.output_mp4.read_bytes() == before
+    assert json.loads((cfg.work_dir / "job_state.json").read_text())["stage"] != "done"
+
+
+@pytest.mark.parametrize("stage", ["dub", "done"])
+def test_no_dub_resume_restores_missing_movie_without_burn(job, monkeypatch, stage):
+    cfg, settings, calls, _, _ = job
+    cfg.burn, cfg.output_video = True, cfg.output_srt.with_suffix(".mp4")
+    monkeypatch.setattr(p, "burn_subtitles", lambda src, ass, out, **kw: out.write_bytes(b"original voice movie"))
+    first = p.run(cfg, settings)
+    first.output_mp4.unlink()
+    cfg.resume_from = stage
+    monkeypatch.setattr(p, "burn_subtitles", lambda *a, **kw: pytest.fail("reuse internal burned movie"))
+    result = p.run(cfg, settings)
+    assert result.output_mp4.read_bytes() == b"original voice movie" and calls["asr"] == 1
+
+
+def test_done_resume_does_not_certify_replaced_external_movie(job, monkeypatch):
+    cfg, settings, _, _, _ = job
+    cfg.burn, cfg.output_video = True, cfg.output_srt.with_suffix(".mp4")
+    monkeypatch.setattr(p, "burn_subtitles", lambda src, ass, out, **kw: out.write_bytes(b"original movie"))
+    p.run(cfg, settings)
+    cfg.output_video.write_bytes(b"unrelated movie")
+    cfg.resume_from = "done"
+    p.run(cfg, settings)
+    assert cfg.output_video.read_bytes() == b"original movie"
+
+
+@pytest.mark.parametrize("change,stage", [("subtitle_en_color", "render"), ("tts_prompt_text", "dub")])
+def test_done_resume_rejects_media_from_different_settings(dub_job, change, stage):
+    cfg, settings, _ = dub_job
+    p.run(cfg, settings)
+    before = cfg.output_video.read_bytes()
+    setattr(cfg, change, "#ABCDEF" if change == "subtitle_en_color" else "different reference text")
+    cfg.resume_from = "done"
+    with pytest.raises(ValueError, match=f"{stage} 阶段"):
+        p.run(cfg, settings)
+    assert cfg.output_video.read_bytes() == before
+
+
+def test_dub_resume_allows_new_voice_but_requires_matching_burn(dub_job, monkeypatch):
+    cfg, settings, _ = dub_job
+    p.run(cfg, settings)
+    cfg.tts_prompt_text = "new voice reference"
+    cfg.resume_from = "dub"
+    p.run(cfg, settings)
+    settings.burn.cq += 1
+    with pytest.raises(RuntimeError, match="burn 阶段"):
+        p.run(cfg, settings)
+
+
+def test_failed_export_after_burn_can_resume_without_encoding_again(job, monkeypatch):
+    cfg, settings, calls, _, _ = job
+    cfg.burn, cfg.output_video = True, cfg.output_srt.with_suffix(".mp4")
+    cfg.output_video.write_bytes(b"old public movie")
+    burns = []
+    def burn(src, ass, out, **kwargs):
+        burns.append(out)
+        out.write_bytes(b"new movie")
+    monkeypatch.setattr(p, "burn_subtitles", burn)
+    original_copy = p.copy_file
+    def fail(source, destination, **kwargs):
+        if destination == cfg.output_video:
+            raise OSError("export failed")
+        return original_copy(source, destination, **kwargs)
+    monkeypatch.setattr(p, "copy_file", fail)
+    with pytest.raises(OSError, match="export failed"):
+        p.run(cfg, settings)
+    assert cfg.output_video.read_bytes() == b"old public movie"
+    assert json.loads((cfg.work_dir / "job_state.json").read_text())["stage"] == "burn"
+    monkeypatch.setattr(p, "copy_file", original_copy)
+    cfg.resume_from = "dub"
+    p.run(cfg, settings)
+    assert cfg.output_video.read_bytes() == b"new movie"
+    assert len(burns) == 1 and calls["asr"] == 1
+
+
+def test_done_resume_preserves_translation_statistics_and_missing_lines(job, monkeypatch):
+    from bilingual_sub.core.translate import TranslateStats
+    cfg, settings, _, _, _ = job
+    cfg.subtitle_mode = "bilingual"
+    def translate(cues, **kwargs):
+        for cue in cues:
+            cue.en = "固定译文"
+        return cues, TranslateStats(cache_hits=3, api_calls=2), ["needs review"]
+    monkeypatch.setattr(p, "translate_cues", translate)
+    first = p.run(cfg, settings)
+    before = json.loads(first.report_path.read_text())
+    assert before["missing_en_count"] == 1 and before["translate_api_calls"] == 2
+    cfg.resume_from = "done"
+    second = p.run(cfg, settings)
+    after = json.loads(second.report_path.read_text())
+    for key in ("missing_en_count", "missing_en_samples", "translate_cache_hits", "translate_api_calls"):
+        assert after[key] == before[key]
+
+
+def test_reference_changed_after_mix_cannot_relabel_or_export_old_voice(dub_job, monkeypatch):
+    cfg, settings, _ = dub_job
+    reference = cfg.output_srt.with_name("ref.wav")
+    reference.write_bytes(b"speaker one")
+    cfg.tts_ref_audio = str(reference)
+    p.run(cfg, settings)
+    before = cfg.output_video.read_bytes()
+    def changed(cues, *, output, **kwargs):
+        output.write_bytes(b"new mixed video")
+        reference.write_bytes(b"speaker two")
+        return output
+    monkeypatch.setattr(p, "dub_cues", changed)
+    cfg.resume_from = "dub"
+    with pytest.raises(RuntimeError, match="配音期间"):
+        p.run(cfg, settings)
+    assert cfg.output_video.read_bytes() == before
+
+
+@pytest.mark.parametrize("burn", [False, True])
+def test_completed_dub_with_failed_export_resumes_without_synthesis(dub_job, monkeypatch, burn):
+    from bilingual_sub.gui.output_path import resolve_dub_sidecar
+    cfg, settings, _ = dub_job
+    cfg.burn = burn
+    destination = cfg.output_video if burn else resolve_dub_sidecar(cfg.output_video, cfg.output_srt)
+    destination.write_bytes(b"old exported movie")
+    original = p.copy_file
+    def fail(source, dest, **kwargs):
+        if dest == destination:
+            raise OSError("destination busy")
+        return original(source, dest, **kwargs)
+    monkeypatch.setattr(p, "copy_file", fail)
+    with pytest.raises(RuntimeError, match="配音已完成.*done"):
+        p.run(cfg, settings)
+    assert destination.read_bytes() == b"old exported movie"
+    assert json.loads((cfg.work_dir / "job_state.json").read_text())["completed_stage"] == "dub"
+    monkeypatch.setattr(p, "copy_file", original)
+    monkeypatch.setattr(p, "dub_cues", lambda *a, **kw: pytest.fail("do not synthesize again"))
+    cfg.resume_from = "done"
+    result = p.run(cfg, settings)
+    assert (result.output_mp4 or result.output_dub) == destination
+    assert destination.read_bytes() == (cfg.work_dir / "dubbed.mp4").read_bytes()
+
+
 def test_silence_detection_surfaces_actual_ffmpeg_failure(tmp_path):
     broken = tmp_path / "broken.wav"
     broken.write_bytes(b"not an audio file")

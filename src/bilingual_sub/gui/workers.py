@@ -96,11 +96,18 @@ class VoicePreviewWorker(QThread):
                 import hashlib
 
                 from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_ref_audio
+                from bilingual_sub.core.file_io import file_digest
+                from bilingual_sub.core.resource_claims import claim_resources
                 from bilingual_sub.core.voice_preview import preview_cache_dir
 
-                stat = self.video.stat()
-                key = hashlib.sha256(f"{self.video.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode()).hexdigest()[:16]
-                ref_audio = str(ensure_ref_audio(self.video, preview_cache_dir() / f"ref-{key}.wav", control=self.control))
+                source_digest = file_digest(self.video, checkpoint=self.control.wait_if_paused)
+                key = hashlib.sha256(f"{self.video.resolve()}|{source_digest}".encode()).hexdigest()[:16]
+                reference = preview_cache_dir() / f"ref-{key}.wav"
+                with claim_resources(reads=[self.video], writes=[reference, reference.with_suffix(".wav.json")],
+                                     checkpoint=self.control.wait_if_paused):
+                    ref_audio = str(ensure_ref_audio(self.video, reference, control=self.control))
+                    if file_digest(self.video, checkpoint=self.control.wait_if_paused) != source_digest:
+                        raise RuntimeError("试听准备期间源视频发生变化，请重试")
 
             path = synth_voice_preview(
                 provider=self.provider,

@@ -15,7 +15,6 @@ import sys
 import tempfile
 import threading
 import time
-import wave
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -701,48 +700,43 @@ def extract_ref_audio(
     duration: float = 5.0,
     control=None,
 ) -> Path:
+    import math
+
     from bilingual_sub.adapters.ffmpeg import find_ffmpeg, run_cmd
+    from bilingual_sub.core.audio_cache import pcm_duration
+    from bilingual_sub.core.file_io import staged_path
+    from bilingual_sub.core.output_guard import validate_outputs
 
     dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    validate_outputs({"参考音频": dest}, [video])
+    if not math.isfinite(start) or not math.isfinite(duration) or duration <= 0:
+        raise ValueError("参考音频的开始时间和时长必须有效")
     span = max(3.0, min(8.0, float(duration)))
-    run_cmd(
-        [
-            find_ffmpeg(),
-            "-y",
-            "-ss",
-            f"{max(0.0, float(start)):.3f}",
-            "-t",
-            f"{span:.3f}",
-            "-i",
-            str(video),
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "32000",
-            str(dest),
-        ],
-        control=control,
-    )
-    if not dest.is_file() or dest.stat().st_size < 64:
-        raise FileNotFoundError(f"failed to extract GPT-SoVITS reference from {video}")
-    with wave.open(str(dest), "rb") as wav:
-        seconds = wav.getnframes() / wav.getframerate()
-    if not 3.0 <= seconds <= 10.0:
-        dest.unlink(missing_ok=True)
-        raise TtsUnavailable("参考音频必须包含 3–10 秒人声；当前视频可提取的音频过短，请另选参考音频")
+    with staged_path(dest, suffix=".wav") as pending:
+        run_cmd(
+            [find_ffmpeg(), "-y", "-ss", f"{max(0.0, float(start)):.3f}",
+             "-t", f"{span:.3f}", "-i", str(video), "-vn", "-ac", "1", "-ar", "32000", str(pending)],
+            control=control,
+        )
+        seconds = pcm_duration(pending, control)
+        if not 3.0 <= seconds <= 10.0:
+            raise TtsUnavailable("参考音频必须包含 3–10 秒人声；当前视频可提取的音频过短，请另选参考音频")
+        if control:
+            control.wait_if_paused()
+        pending.replace(dest)
     return dest
 
 
 def ensure_ref_audio(video: Path, dest: Path, cues=None, *, control=None) -> Path:
-    dest = Path(dest)
-    from bilingual_sub.adapters.ffmpeg import is_pcm_wav
+    import hashlib
+    import json
 
-    if is_pcm_wav(dest):
-        with wave.open(str(dest), "rb") as wav:
-            if 3.0 <= wav.getnframes() / wav.getframerate() <= 10.0:
-                return dest
+    from bilingual_sub.core.audio_cache import cache_digest, produce_audio
+    from bilingual_sub.core.file_io import file_digest
+    from bilingual_sub.core.output_guard import validate_outputs
+
+    dest = Path(dest)
+    validate_outputs({"参考音频": dest, "参考记录": dest.with_suffix(dest.suffix + ".json")}, [video])
     start = 0.4
     duration = 5.0
     if cues:
@@ -753,7 +747,17 @@ def ensure_ref_audio(video: Path, dest: Path, cues=None, *, control=None) -> Pat
                 start = max(0.0, float(cue.start))
                 duration = min(8.0, max(3.0, span))
                 break
-    return extract_ref_audio(video, dest, start=start, duration=duration, control=control)
+    checkpoint = control.wait_if_paused if control else None
+    source_digest = file_digest(video, checkpoint=checkpoint)
+    key = hashlib.sha256(json.dumps(["reference-v2", source_digest, start, duration]).encode()).hexdigest()
+    if cache_digest(dest, key, control):
+        return dest
+    def extract(pending):
+        extract_ref_audio(video, pending, start=start, duration=duration, control=control)
+        if file_digest(video, checkpoint=checkpoint) != source_digest:
+            raise RuntimeError("参考音频提取期间源视频发生变化，请重试")
+    produce_audio(dest, key, extract, control)
+    return dest
 
 
 def copy_runtime_tree(src: Path, dest: Path) -> Path:

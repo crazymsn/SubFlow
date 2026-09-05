@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
 
 from bilingual_sub.adapters.tts.base import TtsRequest, select_tts
 from bilingual_sub.config import user_config_dir
+from bilingual_sub.core.audio_cache import cache_digest, produce_audio
 from bilingual_sub.core.control import JobControl
+from bilingual_sub.core.output_guard import validate_outputs
+from bilingual_sub.core.resource_claims import claim_resources
 
 PREVIEW_SAMPLES = {
     "zh": "你好，这是配音音色试听。",
@@ -42,16 +46,8 @@ def preview_cache_dir() -> Path:
 
 def preview_cache_path(voice: str, lang: str, provider: str = "gptsovits", extra: str = "") -> Path:
     token = _SAFE.sub("_", f"{provider}-{voice or 'default'}-{lang or 'zh'}-{extra}")
-    digest = hashlib.sha256(token.encode()).hexdigest()[:16]
+    digest = hashlib.sha256(json.dumps([provider, voice, lang, extra], ensure_ascii=False).encode()).hexdigest()[:16]
     return preview_cache_dir() / f"{token[:64]}-{digest}.wav"
-
-
-def _preview_extra(provider: str, ref_audio: str, prompt_text: str, prompt_lang: str = "") -> str:
-    if (provider or "").lower() != "gptsovits":
-        return ""
-    digest = hashlib.sha1(f"{ref_audio}|{prompt_text}|{prompt_lang}".encode()).hexdigest()[:10]
-    name = Path(ref_audio).stem if ref_audio else "noref"
-    return f"{name}-{digest}"
 
 
 def synth_voice_preview(
@@ -70,19 +66,11 @@ def synth_voice_preview(
 
     if control:
         control.check()
-    extra = tts_job_fingerprint(provider, voice=voice, endpoint=endpoint, ref_audio=ref_audio, prompt_text=prompt_text, prompt_lang=prompt_lang)
-    dest = dest or preview_cache_path(voice, lang, provider, extra)
-    if dest.is_file() and dest.stat().st_size > 64:
-        from bilingual_sub.adapters.ffmpeg import is_pcm_wav
-
-        if is_pcm_wav(dest) or dest.suffix.lower() not in {".wav", ".wave"}:
-            return dest
+    lang, voice = lang or "zh", voice or ""
     text = preview_sample(lang)
-    engine = (provider or "gptsovits").lower()
-    if engine == "gptsovits":
-        from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
-
-        ensure_running(endpoint or None, wait_sec=300, control=control)
+    engine = (provider or "gptsovits").strip().lower()
+    if engine in {"openai", "azure"}:
+        engine = "gptsovits"
     tts = select_tts(
         engine,
         endpoint=endpoint,
@@ -90,10 +78,32 @@ def synth_voice_preview(
         prompt_text=prompt_text,
         prompt_lang=prompt_lang,
     )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    raw = tts.synth(TtsRequest(text=text, lang=lang or "zh", voice=voice or "", dest=dest), control=control)
-    from bilingual_sub.adapters.ffmpeg import is_pcm_wav, to_pcm_wav
+    effective_ref = str(getattr(tts, "ref_audio", ref_audio) or "")
+    def identity():
+        return tts_job_fingerprint(engine, voice=voice,
+            **{key: str(getattr(tts, key, fallback) or "") for key, fallback in
+               (("endpoint", endpoint), ("ref_audio", ref_audio),
+                ("prompt_text", prompt_text), ("prompt_lang", prompt_lang))})
+    initial = identity()
+    key = hashlib.sha256(json.dumps(["preview-v2", initial, text, lang, voice], ensure_ascii=False).encode()).hexdigest()
+    dest = dest or preview_cache_path(voice, lang, engine, key)
+    record = dest.with_suffix(dest.suffix + ".json")
+    reads = [Path(effective_ref).expanduser()] if effective_ref else []
+    validate_outputs({"试听音频": dest, "试听记录": record}, reads)
+    checkpoint = control.wait_if_paused if control else None
+    with claim_resources(reads=reads, writes=[dest, record], checkpoint=checkpoint):
+        if identity() != initial:
+            raise RuntimeError("试听准备期间参考音频或设置发生变化，请重试")
+        cached = cache_digest(dest, key, control)
+        if cached and identity() == initial:
+            return dest
+        if engine == "gptsovits":
+            from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
 
-    if dest.suffix.lower() in {".wav", ".wave"} and not is_pcm_wav(Path(raw)):
-        return to_pcm_wav(Path(raw), dest, control=control)
-    return Path(raw)
+            ensure_running(str(getattr(tts, "endpoint", endpoint) or "") or None, wait_sec=300, control=control)
+        def synth(pending):
+            tts.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=pending), control=control)
+            if identity() != initial:
+                raise RuntimeError("试听合成期间参考音频或设置发生变化，请重试")
+        produce_audio(dest, key, synth, control)
+    return dest
