@@ -86,6 +86,8 @@ subflow run demo.mp4 -o out.mp4 --zh-color "#FFD400" --en-color "#F2F2F2"
 
 分步命令 `extract`、`transcribe`、`build-cues`、`translate`、`render` 和 `burn` 的输出需与输入文件不同；包括翻译字幕时也请指定新的输出 JSON。命令会拒绝与正在运行的 SubFlow 任务冲突的文件。识别结果目录中的 `whisper.log` / `whisperx.log` 用作相应引擎日志，请勿将输入或结果指定为该日志文件。
 
+Mac 上请勿将同一批输出命名为仅大小写或 Unicode 组合形式不同的路径；输入保护和文件占用登记也按此检查。即使磁盘设置为区分大小写，SubFlow 仍保守拒绝这些可能混淆的输出组合。单个文件复制是否可省略，仍依据实际路径和文件身份判断。
+
 ## Docker
 
 Compose 从当前源码自动构建 CPU 镜像，安装 FFmpeg、识别和配音环境。宿主机仅需安装 Docker 和 Compose。

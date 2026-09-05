@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
+from bilingual_sub.core.output_guard import paths_conflict
+
 Checkpoint = Callable[[], None] | None
 
 
@@ -154,9 +156,7 @@ def _commit_files(files: list[tuple[Path, Callable[[Path], object]]], *, checkpo
     paths = [path for path, _ in files]
     for i, path in enumerate(paths):
         for other in paths[:i]:
-            if path.resolve() == other.resolve() or (
-                path.exists() and other.exists() and path.samefile(other)
-            ):
+            if paths_conflict(path, other):
                 raise ValueError(f"字幕输出路径不能重复：{path}")
     pending: dict[Path, Path] = {}
     backups: dict[Path, Path | None] = {}

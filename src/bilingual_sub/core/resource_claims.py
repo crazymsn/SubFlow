@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 import time
 import uuid
 from collections.abc import Iterator
@@ -15,7 +14,7 @@ from pathlib import Path
 from filelock import FileLock, Timeout
 
 from bilingual_sub.core.file_io import Checkpoint
-from bilingual_sub.core.output_guard import same_file
+from bilingual_sub.core.output_guard import path_comparison_key, same_file
 from bilingual_sub.core.persistence import write_json
 
 
@@ -26,10 +25,7 @@ def registry_dir() -> Path:
 
 
 def _key(path: str) -> str:
-    key = os.path.normcase(path)
-    # Default macOS filesystems are case-insensitive. Conservatively reserve
-    # both spellings even on a case-sensitive macOS volume.
-    return key.casefold() if sys.platform == "darwin" else key
+    return path_comparison_key(path)
 
 
 def _overlap(left: tuple[str, bool], right: tuple[str, bool]) -> bool:
