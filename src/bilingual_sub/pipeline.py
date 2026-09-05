@@ -53,7 +53,7 @@ from bilingual_sub.core.langs import (
     translation_needed,
     whisper_language,
 )
-from bilingual_sub.core.netflix import fit_cues
+from bilingual_sub.core.netflix import fit_cues, fit_warnings
 from bilingual_sub.core.persistence import write_json
 from bilingual_sub.core.render import (
     SUBTITLE_PACK,
@@ -547,6 +547,8 @@ def _result_from_work(
         "input": str(config.input_video),
         "duration_sec": report.get("duration_sec") or 0,
         "cue_count": len(cues),
+        "subtitle_fit_warnings": (fit_warnings(cues, config.target_lang)
+                                  if config.subtitle_mode == "netflix_single" else []),
         "missing_en_count": int(report.get("missing_en_count") or len(missing)),
         "missing_en_samples": missing[:20],
         "translate_cache_hits": int(report.get("translate_cache_hits") or 0),
@@ -1270,10 +1272,15 @@ def _run_job(
                 video_for_dub = dest_mp4
             else:
                 video_for_dub = source
-            if not any(spoken_line(cue, config.target_lang) for cue in cues):
+            # Subtitle fitting changes display timing and stores only the shown
+            # language. Synthesize complete translated sentences at their
+            # original intervals, including when resuming directly at dub.
+            speech_cues = (load_cues_json(cues_bi_path)
+                           if config.subtitle_mode == "netflix_single" else cues)
+            if not any(spoken_line(cue, config.target_lang) for cue in speech_cues):
                 raise RuntimeError("没有目标语种台词，无法配音")
             dubbed = dub_cues(
-                cues,
+                speech_cues,
                 video=video_for_dub,
                 work=work,
                 output=dub_tmp,
@@ -1309,6 +1316,8 @@ def _run_job(
         "input": str(config.input_video),
         "duration_sec": duration,
         "cue_count": len(cues),
+        "subtitle_fit_warnings": (fit_warnings(cues, config.target_lang)
+                                  if config.subtitle_mode == "netflix_single" else []),
         "missing_en_count": len(missing),
         "missing_en_samples": missing[:20],
         "translate_cache_hits": cache_hits,
