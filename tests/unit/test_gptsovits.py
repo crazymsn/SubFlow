@@ -1,8 +1,10 @@
+import asyncio
 import io
 import json
 import wave
 from pathlib import Path
 
+import httpx
 import pytest
 
 from bilingual_sub.adapters.tts.base import TtsRequest, TtsUnavailable, select_tts
@@ -14,6 +16,37 @@ from bilingual_sub.adapters.tts.gptsovits import (
 )
 from bilingual_sub.adapters.tts.gptsovits_runtime import probe_endpoint
 from bilingual_sub.core.voice_preview import preview_sample, synth_voice_preview
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "invalid"])
+def test_invalid_timeout_rejected(monkeypatch, value):
+    from bilingual_sub.adapters.tts.gptsovits import _post_audio
+    monkeypatch.setenv("SUBFLOW_GPTSOVITS_TIMEOUT", value)
+    with pytest.raises(TtsUnavailable, match="正数"):
+        asyncio.run(_post_audio("http://invalid/tts", {}, None))
+
+
+@pytest.mark.parametrize("value,expected", [(None, 1800), ("3600", 3600)])
+def test_cpu_synthesis_timeout_and_override(monkeypatch, value, expected):
+    from bilingual_sub.adapters.tts.gptsovits import _post_audio
+    if value is None:
+        monkeypatch.delenv("SUBFLOW_GPTSOVITS_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("SUBFLOW_GPTSOVITS_TIMEOUT", value)
+    client = httpx.AsyncClient
+    def factory(**kwargs):
+        assert kwargs["timeout"].read == expected
+        assert kwargs["timeout"].connect == 5
+        return client(**kwargs, transport=httpx.MockTransport(lambda req: httpx.Response(200, content=b"test")))
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+    assert asyncio.run(_post_audio("http://test/tts", {}, None)).content == b"test"
+
+
+def test_direct_synthesis_cannot_overwrite_reference(tmp_path):
+    ref = tmp_path / "reference.wav"
+    ref.write_bytes(_pcm_wav())
+    with pytest.raises(ValueError, match="覆盖"):
+        GptSovitsTts(ref_audio=ref).synth(TtsRequest("text", "en", "", ref))
 
 
 def _pcm_wav(frames: int = 320) -> bytes:

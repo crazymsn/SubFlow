@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import io
 import json
+import math
 import os
 import threading
 import wave
@@ -13,6 +14,8 @@ import httpx
 
 from bilingual_sub.adapters.tts.base import TtsRequest, TtsUnavailable
 from bilingual_sub.core.control import JobControl
+from bilingual_sub.core.file_io import staged_path
+from bilingual_sub.core.output_guard import validate_outputs
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:9880"
 _synthesis_lock = threading.Lock()
@@ -86,7 +89,13 @@ def _is_audio(content: bytes) -> bool:
 
 
 async def _post_audio(url: str, payload: dict, control: JobControl | None) -> httpx.Response:
-    async with httpx.AsyncClient(trust_env=False, timeout=httpx.Timeout(180, connect=5)) as client:
+    try:
+        timeout = float(os.environ.get("SUBFLOW_GPTSOVITS_TIMEOUT", "1800"))
+    except ValueError as exc:
+        raise TtsUnavailable("SUBFLOW_GPTSOVITS_TIMEOUT 必须是正数秒数") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise TtsUnavailable("SUBFLOW_GPTSOVITS_TIMEOUT 必须是正数秒数")
+    async with httpx.AsyncClient(trust_env=False, timeout=httpx.Timeout(timeout, connect=5)) as client:
         task = asyncio.create_task(client.post(url, json=payload))
         try:
             while not task.done():
@@ -133,6 +142,7 @@ class GptSovitsTts:
         if control:
             control.check()
         ref = self._ref_path()
+        validate_outputs({"配音": req.dest}, [ref])
         if not req.text.strip():
             raise TtsUnavailable("配音文本不能为空")
         text_lang = to_sovits_lang(req.lang)
@@ -160,6 +170,8 @@ class GptSovitsTts:
                 resp = asyncio.run(_post_audio(url, payload, control))
             finally:
                 _synthesis_lock.release()
+        except httpx.ReadTimeout as exc:
+            raise TtsUnavailable("GPT-SoVITS 合成等待超时；CPU 推理较慢，可增加 SUBFLOW_GPTSOVITS_TIMEOUT 秒数后重试") from exc
         except httpx.HTTPError as exc:
             raise TtsUnavailable(f"请先启动 GPT-SoVITS 服务（{self.endpoint}）：{exc}") from exc
         body = resp.content or b""
@@ -172,12 +184,11 @@ class GptSovitsTts:
         req.dest.parent.mkdir(parents=True, exist_ok=True)
         if control:
             control.check()
-        part = req.dest.with_suffix(req.dest.suffix + ".part")
-        try:
+        with staged_path(req.dest) as part:
             part.write_bytes(body)
+            if control:
+                control.check()
             part.replace(req.dest)
-        finally:
-            part.unlink(missing_ok=True)
         return req.dest
 
 

@@ -4,7 +4,7 @@
 
 深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
-当前源码版本 **1.3.18**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
+当前源码版本 **1.3.19**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
 
 Apple Silicon 实机验收请参照 [M1 MacBook Air 测试清单](docs/mac-self-test.md)。
 
@@ -49,6 +49,8 @@ Apple Silicon 实机验收请参照 [M1 MacBook Air 测试清单](docs/mac-self-
 源语种和目标语种都选简体、字幕选中英：中文原声 + 简体/英文字幕，不会自动配成英文。
 
 中文原视频选择简体中文或繁體中文目标时始终保留原声，配音开关不会覆盖此规则。简繁转换只影响字幕；英文等跨语种目标才调用 GPT-SoVITS。
+
+CPU 配音可能较慢，单次请求默认等待最多 1800 秒；可通过环境变量 `SUBFLOW_GPTSOVITS_TIMEOUT` 调整为正数秒数。停止任务仍可中断客户端等待。服务在合成期间继续响应健康检查；正在运行的推理线程结束后才释放模型供下一请求使用。
 
 ## 开始使用
 

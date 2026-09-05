@@ -104,7 +104,7 @@ RESP:
 import os
 import sys
 import traceback
-from typing import Generator, Union
+from typing import Union
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -117,10 +117,11 @@ import signal
 import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, Response
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
 import uvicorn
 from io import BytesIO
 from tools.i18n.i18n import I18nAuto
+from tools.subflow_concurrency import ModelStreamingResponse, SerializedModel
 from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 from GPT_SoVITS.TTS_infer_pack.text_segmentation_method import get_method_names as get_cut_method_names
 from pydantic import BaseModel
@@ -158,12 +159,14 @@ except (RuntimeError, NotImplementedError):
     tts_pipeline = TTS(tts_config)
 
 APP = FastAPI()
+model_operations = SerializedModel()
 
 
 @APP.get("/subflow/runtime")
 async def subflow_runtime():
     return {"device": str(tts_pipeline.configs.device), "is_half": tts_pipeline.configs.is_half,
-            "mps_available": torch.backends.mps.is_available(), "torch_version": torch.__version__}
+            "mps_available": torch.backends.mps.is_available(), "torch_version": torch.__version__,
+            "busy": model_operations.lock.locked()}
 
 
 class TTS_Request(BaseModel):
@@ -429,50 +432,56 @@ async def tts_handle(req: dict):
     streaming_mode = streaming_mode or return_fragment
 
 
-    try:
-        tts_generator = tts_pipeline.run(req)
-
-        if streaming_mode:
-
-            def streaming_generator(tts_generator: Generator, media_type: str):
-                if_frist_chunk = True
+    if streaming_mode:
+        def streaming_generator():
+            tts_generator = tts_pipeline.run(req)
+            stream_media_type = media_type
+            if_frist_chunk = True
+            try:
                 for sr, chunk in tts_generator:
-                    if if_frist_chunk and media_type == "wav":
+                    if if_frist_chunk and stream_media_type == "wav":
                         yield wave_header_chunk(sample_rate=sr)
-                        media_type = "raw"
+                        stream_media_type = "raw"
                         if_frist_chunk = False
-                    yield pack_audio(BytesIO(), chunk, sr, media_type).getvalue()
+                    yield pack_audio(BytesIO(), chunk, sr, stream_media_type).getvalue()
+            finally:
+                tts_generator.close()
 
-            # _media_type = f"audio/{media_type}" if not (streaming_mode and media_type in ["wav", "raw"]) else f"audio/x-{media_type}"
-            return StreamingResponse(
-                streaming_generator(
-                    tts_generator,
-                    media_type,
-                ),
-                media_type=f"audio/{media_type}",
-            )
+        # _media_type = f"audio/{media_type}" if not (streaming_mode and media_type in ["wav", "raw"]) else f"audio/x-{media_type}"
+        return ModelStreamingResponse(
+            model_operations.stream(streaming_generator),
+            media_type=f"audio/{media_type}",
+        )
 
-        else:
+    def synthesize_response():
+        tts_generator = tts_pipeline.run(req)
+        try:
             sr, audio_data = next(tts_generator)
             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
             return Response(audio_data, media_type=f"audio/{media_type}")
-    except Exception as e:
-        # Reference preprocessing can fail before TTS.run's synthesis guard.
-        # Recover those MPS errors too, but never restart a partly streamed reply.
-        if (not streaming_mode and str(tts_pipeline.configs.device) == "mps"
-                and isinstance(e, (RuntimeError, NotImplementedError))):
-            print(f"Apple GPU preprocessing failed ({e}); retrying once on CPU.")
-            config = tts_pipeline.configs
-            config.device = torch.device("cpu")
-            config.is_half = False
-            try:
-                tts_pipeline.__init__(config)
-                sr, audio_data = next(tts_pipeline.run(req))
-                audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
-                return Response(audio_data, media_type=f"audio/{media_type}")
-            except Exception as retry_error:
-                return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(retry_error)})
-        return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
+        finally:
+            tts_generator.close()
+
+    def synthesize_with_recovery():
+        try:
+            return synthesize_response()
+        except Exception as e:
+            # Reference preprocessing can fail before TTS.run's synthesis guard.
+            # Recover those MPS errors too, but never restart a partly streamed reply.
+            if (not streaming_mode and str(tts_pipeline.configs.device) == "mps"
+                    and isinstance(e, (RuntimeError, NotImplementedError))):
+                print(f"Apple GPU preprocessing failed ({e}); retrying once on CPU.")
+                config = tts_pipeline.configs
+                config.device = torch.device("cpu")
+                config.is_half = False
+                try:
+                    tts_pipeline.__init__(config)
+                    return synthesize_response()
+                except Exception as retry_error:
+                    return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(retry_error)})
+            return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
+
+    return await model_operations.call(synthesize_with_recovery)
 
 
 @APP.get("/control")
@@ -511,11 +520,11 @@ async def tts_get_endpoint(
 ):
     req = {
         "text": text,
-        "text_lang": text_lang.lower(),
+        "text_lang": (text_lang or "").lower(),
         "ref_audio_path": ref_audio_path,
         "aux_ref_audio_paths": aux_ref_audio_paths,
         "prompt_text": prompt_text,
-        "prompt_lang": prompt_lang.lower(),
+        "prompt_lang": (prompt_lang or "").lower(),
         "top_k": top_k,
         "top_p": top_p,
         "temperature": temperature,
@@ -540,14 +549,14 @@ async def tts_get_endpoint(
 
 @APP.post("/tts")
 async def tts_post_endpoint(request: TTS_Request):
-    req = request.dict()
+    req = request.model_dump()
     return await tts_handle(req)
 
 
 @APP.get("/set_refer_audio")
 async def set_refer_aduio(refer_audio_path: str = None):
     try:
-        tts_pipeline.set_ref_audio(refer_audio_path)
+        await model_operations.call(lambda: tts_pipeline.set_ref_audio(refer_audio_path))
     except Exception as e:
         return JSONResponse(status_code=400, content={"message": "set refer audio failed", "Exception": str(e)})
     return JSONResponse(status_code=200, content={"message": "success"})
@@ -577,7 +586,7 @@ async def set_gpt_weights(weights_path: str = None):
     try:
         if weights_path in ["", None]:
             return JSONResponse(status_code=400, content={"message": "gpt weight path is required"})
-        tts_pipeline.init_t2s_weights(weights_path)
+        await model_operations.call(lambda: tts_pipeline.init_t2s_weights(weights_path))
     except Exception as e:
         return JSONResponse(status_code=400, content={"message": "change gpt weight failed", "Exception": str(e)})
 
@@ -589,7 +598,7 @@ async def set_sovits_weights(weights_path: str = None):
     try:
         if weights_path in ["", None]:
             return JSONResponse(status_code=400, content={"message": "sovits weight path is required"})
-        tts_pipeline.init_vits_weights(weights_path)
+        await model_operations.call(lambda: tts_pipeline.init_vits_weights(weights_path))
     except Exception as e:
         return JSONResponse(status_code=400, content={"message": "change sovits weight failed", "Exception": str(e)})
     return JSONResponse(status_code=200, content={"message": "success"})
