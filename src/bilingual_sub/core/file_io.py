@@ -14,7 +14,8 @@ from pathlib import Path
 Checkpoint = Callable[[], None] | None
 
 
-def _discard(path: Path) -> None:
+def discard_temporary(path: Path) -> None:
+    """Remove only a temporary file owned by the calling operation."""
     try:
         path.unlink(missing_ok=True)
     except PermissionError:
@@ -33,7 +34,7 @@ def staged_path(destination: Path) -> Iterator[Path]:
     try:
         yield pending
     finally:
-        _discard(pending)
+        discard_temporary(pending)
 
 
 def _check(checkpoint: Checkpoint) -> None:
@@ -149,4 +150,4 @@ def write_text_files(
     finally:
         for temp in [*pending.values(), *backups.values()]:
             if temp is not None and temp not in retained:
-                _discard(temp)
+                discard_temporary(temp)

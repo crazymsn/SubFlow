@@ -29,7 +29,7 @@ from bilingual_sub.core.burn import burn_subtitles
 from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.cues import build_cues
 from bilingual_sub.core.dub import dub_cues
-from bilingual_sub.core.file_io import copy_file, file_digest
+from bilingual_sub.core.file_io import copy_file, discard_temporary, file_digest
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.core.glossary_ai import extract_glossary
 from bilingual_sub.core.job_profile import processing_profile, render_profile
@@ -132,15 +132,20 @@ def _save_state(
     write_json(work_dir / "job_state.json", data)
 
 
-def video_fingerprint(path: Path) -> dict:
+def video_fingerprint(path: Path, *, control: JobControl | None = None) -> dict:
     resolved = path.resolve()
     if not resolved.is_file():
-        return {"path": str(resolved), "size": 0, "mtime_ns": 0}
+        return {"path": str(resolved), "size": 0, "mtime_ns": 0, "sha256": None}
     st = resolved.stat()
+    digest = file_digest(resolved, checkpoint=lambda: _gate(control))
+    after = resolved.stat()
+    if (st.st_size, st.st_mtime_ns, st.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+        raise OSError(f"读取视频身份时文件发生变化，请重试：{path}")
     return {
         "path": str(resolved),
         "size": int(st.st_size),
         "mtime_ns": int(st.st_mtime_ns),
+        "sha256": digest,
     }
 
 
@@ -179,9 +184,9 @@ def _tts_fingerprint(config: JobConfig, *, detected_spoken: str | None = None, c
     )
 
 
-def artifact_key(config: JobConfig) -> str:
+def artifact_key(config: JobConfig, *, control: JobControl | None = None) -> str:
     if config.input_video.is_file():
-        fp = video_fingerprint(config.input_video)
+        fp = video_fingerprint(config.input_video, control=control)
     elif config.source_url:
         fp = {"path": f"url|{config.source_url}", "size": 0, "mtime_ns": 0}
     else:
@@ -189,7 +194,7 @@ def artifact_key(config: JobConfig) -> str:
     preview = config.preview_minutes or 0
     gloss = _glossary_hash(config.glossary_path)
     raw = (
-        f"{fp['path']}|{fp['size']}|{fp['mtime_ns']}|"
+        f"{fp['path']}|{fp['size']}|{fp['mtime_ns']}|{fp.get('sha256') or ''}|"
         f"{config.whisper_model}|{config.translate_model}|{preview}|"
         f"{config.source_lang}|{config.target_lang}|{config.subtitle_mode}|"
         f"{int(translation_needed(config.source_lang, config.target_lang, config.subtitle_mode))}|"
@@ -202,15 +207,20 @@ def artifact_key(config: JobConfig) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _same_fingerprint(saved: dict | None, config: JobConfig, work: Path | None = None) -> bool:
-    if not saved:
+def _same_fingerprint(saved: dict | None, config: JobConfig, work: Path | None = None,
+                      *, control: JobControl | None = None) -> bool:
+    if (not isinstance(saved, dict) or not isinstance(saved.get("sha256"), str)
+            or len(saved["sha256"]) != 64
+            or any(not isinstance(saved.get(key), int) or isinstance(saved[key], bool)
+                   for key in ("size", "mtime_ns"))):
         return False
     if config.input_video.is_file():
-        cur = video_fingerprint(config.input_video)
+        cur = video_fingerprint(config.input_video, control=control)
         return (
             os.path.normcase(str(saved.get("path") or "")) == os.path.normcase(cur["path"])
-            and int(saved.get("size") or -1) == cur["size"]
-            and int(saved.get("mtime_ns") or -1) == cur["mtime_ns"]
+            and saved["size"] == cur["size"]
+            and saved["mtime_ns"] == cur["mtime_ns"]
+            and saved.get("sha256") == cur["sha256"]
         )
     if work is None or not config.source_url:
         return False
@@ -221,8 +231,9 @@ def _same_fingerprint(saved: dict | None, config: JobConfig, work: Path | None =
     if url_txt.read_text(encoding="utf-8").strip() != config.source_url:
         return False
     stat = src.stat()
-    return (int(saved.get("size") or -1) == stat.st_size and stat.st_size > 0
-            and int(saved.get("mtime_ns") or -1) == stat.st_mtime_ns)
+    return (saved["size"] == stat.st_size and stat.st_size > 0
+            and saved["mtime_ns"] == stat.st_mtime_ns
+            and saved.get("sha256") == file_digest(src, checkpoint=lambda: _gate(control)))
 
 
 def _job_profile_matches(report: dict, config: JobConfig) -> bool:
@@ -238,7 +249,8 @@ def _job_profile_matches(report: dict, config: JobConfig) -> bool:
     )
 
 
-def _resume_dir_matches(config: JobConfig, work: Path, settings: AppSettings | None = None) -> bool:
+def _resume_dir_matches(config: JobConfig, work: Path, settings: AppSettings | None = None,
+                        *, control: JobControl | None = None) -> bool:
     report = _load_json(work / "job_input.json") or _load_json(work / "report.json")
     if report.get("processing_profile") != processing_profile(config, settings or load_settings()):
         return False
@@ -249,13 +261,10 @@ def _resume_dir_matches(config: JobConfig, work: Path, settings: AppSettings | N
         if config.source_url and str(report.get("source_url") or "") != config.source_url:
             return False
         if config.input_video.is_file():
-            return _same_fingerprint(saved, config, work)
+            return _same_fingerprint(saved, config, work, control=control)
         saved_url = str(report.get("source_url") or "")
         if config.source_url and saved_url:
-            return saved_url == config.source_url and _same_fingerprint(saved, config, work)
-    url_txt = work / "source.url.txt"
-    if config.source_url and url_txt.is_file() and (work / "source.mp4").is_file():
-        return url_txt.read_text(encoding="utf-8").strip() == config.source_url
+            return saved_url == config.source_url and _same_fingerprint(saved, config, work, control=control)
     return False
 
 
@@ -263,12 +272,12 @@ def _auto_work_dir(config: JobConfig) -> bool:
     return str(config.work_dir) in ("", "auto")
 
 
-def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
+def _work_dir(config: JobConfig, settings: AppSettings, *, control: JobControl | None = None) -> Path:
     explicit = not _auto_work_dir(config)
     if explicit:
         wd = config.work_dir
         if (config.resume_from and _stage_index(config.resume_from) > _stage_index("ingest")
-                and not _resume_dir_matches(config, wd, settings)):
+                and not _resume_dir_matches(config, wd, settings, control=control)):
             raise FileNotFoundError("工作目录不是这部片子或字幕/识别设置不同；请从 ingest 重新处理")
     elif config.resume_from:
         last = load_last_job()
@@ -276,13 +285,13 @@ def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
             raise FileNotFoundError(
                 "resume requested but no last job found; pass --work-dir to the previous work folder"
             )
-        if not _resume_dir_matches(config, last, settings):
+        if not _resume_dir_matches(config, last, settings, control=control):
             raise FileNotFoundError(
                 "上次作业不是这部片子或字幕/识别设置不同；请传 --work-dir 指向对应工作目录"
             )
         wd = last
     elif settings.video.work_dir == "auto":
-        wd = Path(tempfile.gettempdir()) / "bilingual-sub" / artifact_key(config)
+        wd = Path(tempfile.gettempdir()) / "bilingual-sub" / artifact_key(config, control=control)
     else:
         wd = Path(settings.video.work_dir)
     wd.mkdir(parents=True, exist_ok=True)
@@ -312,15 +321,17 @@ def _load_silences(path: Path) -> list[tuple[float, float]]:
     return out
 
 
-def _can_reexport(config: JobConfig, work: Path, settings: AppSettings | None = None) -> bool:
+def _can_reexport(config: JobConfig, work: Path, settings: AppSettings | None = None,
+                  *, control: JobControl | None = None) -> bool:
     try:
-        return _can_reexport_checked(config, work, settings)
+        return _can_reexport_checked(config, work, settings, control=control)
     except (OSError, ValueError, TypeError, KeyError, IndexError) as exc:
         logger.warning("Invalid cached job; processing again: %s", exc)
         return False
 
 
-def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings | None = None) -> bool:
+def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings | None = None,
+                          *, control: JobControl | None = None) -> bool:
     if config.resume_from or not _auto_work_dir(config):
         return False
     cues_path = work / "cues.bilingual.json"
@@ -361,7 +372,7 @@ def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings |
     settings = settings or load_settings()
     if report.get("processing_profile") != processing_profile(config, settings):
         return False
-    if not _same_fingerprint(report.get("input_fingerprint"), config, work):
+    if not _same_fingerprint(report.get("input_fingerprint"), config, work, control=control):
         return False
     if str(report.get("whisper_model") or config.whisper_model) != config.whisper_model:
         return False
@@ -510,8 +521,12 @@ def _copy_or_burn(
             return dest
     ass_path = work / "subs.ass"
     source = work / "source.mp4"
-    if not source.is_file():
+    identity = report.get("input_fingerprint")
+    expected = identity.get("sha256") if isinstance(identity, dict) else None
+    if not source.is_file() or file_digest(source, checkpoint=lambda: _gate(control)) != expected:
         source = config.input_video
+    if not source.is_file() or file_digest(source, checkpoint=lambda: _gate(control)) != expected:
+        raise RuntimeError("缓存源视频与任务记录不符，请从 ingest 重新处理")
     if not ass_path.is_file():
         raise FileNotFoundError("previous subtitles missing; cannot export without re-running")
     burn_subtitles(
@@ -571,7 +586,7 @@ def _result_from_work(
                                 if output_mp4 else None),
         "output_dub": str(output_dub) if output_dub else None,
         "output_srt": str(config.output_srt),
-        "input_fingerprint": video_fingerprint(config.input_video),
+        "input_fingerprint": report.get("input_fingerprint"),
         "whisper_model": config.whisper_model,
         "translate_model": config.translate_model,
         "style_preset": config.style_preset,
@@ -601,7 +616,7 @@ def _result_from_work(
         "last_stage": "done",
         "stopped": False,
         "reused": reused,
-        "processing_profile": processing_profile(config, settings),
+        "processing_profile": report.get("processing_profile"),
         "render_profile": render_profile(config, settings),
     }
     report_path = work / "report.json"
@@ -635,7 +650,7 @@ def _reexport_if_possible(
     t0: float,
     control: JobControl | None = None,
 ) -> JobResult | None:
-    if not _can_reexport(config, work, settings):
+    if not _can_reexport(config, work, settings, control=control):
         return None
     report = _load_json(work / "report.json")
     state = _load_json(work / "job_state.json")
@@ -696,7 +711,7 @@ def _validate_output_paths(config: JobConfig, work: Path | None = None, *, inclu
         outputs["视频"] = config.output_video or config.output_srt.with_suffix(".mp4")
     elif include_dub:
         outputs["配音"] = resolve_dub_sidecar(config.output_video, config.output_srt)
-    protected = [config.input_video]
+    protected = [config.input_video, default_glossary_path()]
     if config.glossary_path:
         protected.append(config.glossary_path)
     if config.tts_ref_audio:
@@ -722,7 +737,7 @@ def _download_source(config: JobConfig, work: Path, prog, control: JobControl | 
     if (source.is_file() and source.stat().st_size > 0 and marker.is_file()
             and marker.read_text(encoding="utf-8").strip() == url
             and saved.get("url") == url
-            and saved.get("fingerprint") == video_fingerprint(source)):
+            and saved.get("fingerprint") == video_fingerprint(source, control=control)):
         return source
     staging = work / "downloads" / hashlib.sha256(url.encode()).hexdigest()[:16]
     staging.mkdir(parents=True, exist_ok=True)
@@ -735,6 +750,9 @@ def _download_source(config: JobConfig, work: Path, prog, control: JobControl | 
         copy_file(downloaded, pending, checkpoint=lambda: _gate(control))
         if pending.stat().st_size == 0:
             raise RuntimeError("下载结果为空，请重试")
+        fingerprint = video_fingerprint(pending, control=control)
+        fingerprint["path"] = str(source.resolve())
+        write_json(pending_manifest, {"url": url, "fingerprint": fingerprint})
         _gate(control)
         # Invalidate the old identity before replacing its media. A failed
         # marker write must never leave another video's URL attached to it.
@@ -742,12 +760,10 @@ def _download_source(config: JobConfig, work: Path, prog, control: JobControl | 
         manifest.unlink(missing_ok=True)
         pending.replace(source)
         marker.write_text(url, encoding="utf-8")
-        pending_manifest.write_text(json.dumps({"url": url, "fingerprint": video_fingerprint(source)},
-                                               ensure_ascii=False), encoding="utf-8")
         pending_manifest.replace(manifest)
     finally:
-        pending.unlink(missing_ok=True)
-        pending_manifest.unlink(missing_ok=True)
+        discard_temporary(pending)
+        discard_temporary(pending_manifest)
     return source
 
 
@@ -768,7 +784,7 @@ def run(
     settings = copy.deepcopy(settings or load_settings())
     t0 = time.time()
 
-    work = _work_dir(config, settings)
+    work = _work_dir(config, settings, control=control)
     _validate_output_paths(config, work)
     lock = FileLock(str(work / ".job.lock"))
     try:
@@ -784,8 +800,7 @@ def run(
             previous = _load_json(work / "report.json").get("output_mp4")
             if isinstance(previous, str) and previous:
                 reads.append(Path(previous))
-        if config.glossary_path:
-            reads.append(config.glossary_path)
+        reads.append(config.glossary_path or default_glossary_path())
         if config.tts_ref_audio:
             reads.append(Path(config.tts_ref_audio))
         writes = [config.output_srt, config.output_srt.with_suffix(".ass")]
@@ -860,12 +875,11 @@ def _run_job(
             ts = time.time()
             config.input_video = _download_source(config, work, prog, control)
             stages["ingest_sec"] = time.time() - ts
-        _save_state(work, "ingest", {"job_id": job_id}, control=control)
 
     input_video = config.input_video
     if not input_video.is_file():
         fallback = work / "source.mp4"
-        if fallback.is_file() and config.resume_from and _resume_dir_matches(config, work, settings):
+        if fallback.is_file() and config.resume_from and _resume_dir_matches(config, work, settings, control=control):
             input_video = fallback
             config.input_video = fallback
         elif config.source_url:
@@ -878,6 +892,13 @@ def _run_job(
         else:
             raise FileNotFoundError("请先选择本地视频，或填写可下载的视频链接")
     _validate_output_paths(config, work)
+    input_identity = video_fingerprint(input_video, control=control)
+    process_identity = processing_profile(config, settings)
+    if config.resume_from and _stage_index(config.resume_from) > _stage_index("ingest"):
+        previous = _load_json(work / "job_input.json") or _load_json(work / "report.json")
+        if (previous.get("input_fingerprint") != input_identity
+                or previous.get("processing_profile") != process_identity):
+            raise RuntimeError("恢复前输入内容或处理配置发生变化，请从 ingest 重新处理")
     if settings.video.copy_to_ascii_path:
         source = copy_to_ascii_workdir(input_video, work, checkpoint=lambda: _gate(control))
     else:
@@ -885,19 +906,28 @@ def _run_job(
         dest = work / "source.mp4"
         if source.resolve() != dest.resolve():
             copy_file(input_video, dest, checkpoint=lambda: _gate(control))
+        source = dest
+
+    def verify_source() -> None:
+        if file_digest(source, checkpoint=lambda: _gate(control)) != input_identity["sha256"]:
+            raise RuntimeError("工作源视频内容发生变化，请从 ingest 重新处理")
+
+    verify_source()
 
     meta = probe_video(source)
     duration = float(meta.get("duration") or 0)
     play_res = (int(meta["width"]), int(meta["height"]))
     if not meta.get("has_audio"):
         raise FfmpegError(f"no audio stream in {input_video}")
-    identity = {"input_fingerprint": video_fingerprint(config.input_video),
-                "processing_profile": processing_profile(config, settings),
+    identity = {"input_fingerprint": input_identity,
+                "processing_profile": process_identity,
                 "source_url": config.source_url,
                 "source_lang": config.source_lang, "target_lang": config.target_lang,
                 "subtitle_mode": config.subtitle_mode, "whisper_model": config.whisper_model,
                 "translate_model": config.translate_model, "asr_backend": config.asr_backend}
     write_json(work / "job_input.json", identity)
+    if _should_run(config.resume_from, "ingest"):
+        _save_state(work, "ingest", {"job_id": job_id}, control=control)
 
     speech = work / "speech.wav"
     silences_path = work / "silences.json"
@@ -1241,6 +1271,7 @@ def _run_job(
     )
     if config.burn and _should_run(config.resume_from, "burn"):
         _gate(control)
+        verify_source()
         prog("burn", 0.9)
         ts = time.time()
         burn_dest = burned_mp4 if need_dub else dest_mp4
@@ -1349,6 +1380,9 @@ def _run_job(
         stages["dub_sec"] = time.time() - ts
         _save_state(work, "dub", {"job_id": job_id}, control=control)
 
+    verify_source()
+    if processing_profile(config, settings) != process_identity:
+        raise RuntimeError("处理期间术语或配置内容发生变化，请重新处理")
     elapsed = time.time() - t0
     report = {
         "job_id": job_id,
@@ -1369,7 +1403,7 @@ def _run_job(
         "output_video_sha256": (file_digest(output_mp4, checkpoint=lambda: _gate(control))
                                 if output_mp4 else None),
         "output_srt": str(srt_out),
-        "input_fingerprint": video_fingerprint(config.input_video),
+        "input_fingerprint": input_identity,
         "whisper_model": config.whisper_model,
         "translate_model": config.translate_model,
         "style_preset": config.style_preset,
@@ -1395,7 +1429,7 @@ def _run_job(
         "stopped": False,
         "output_dub": str(output_dub) if output_dub else None,
         "reused": False,
-        "processing_profile": processing_profile(config, settings),
+        "processing_profile": process_identity,
         "render_profile": render_profile(config, settings),
     }
     report_path = work / "report.json"

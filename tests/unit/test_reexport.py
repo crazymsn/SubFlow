@@ -356,6 +356,7 @@ def test_url_job_reexport_matches_work_copy(tmp_path: Path, monkeypatch):
         "path": str(source),
         "size": source.stat().st_size,
         "mtime_ns": source.stat().st_mtime_ns,
+        "sha256": file_digest(source),
     }
     report["source_url"] = cfg.source_url
     (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")

@@ -232,6 +232,8 @@ def test_overwritten_or_unverified_previous_movie_is_rebuilt(tmp_path, monkeypat
         os.utime(previous, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
     cfg = JobConfig(tmp_path / "input.mp4", dest, tmp_path / "out.srt", tmp_path,
                     source_lang="zh", target_lang="zh")
+    cfg.input_video.write_bytes(b"original input")
+    report["input_fingerprint"] = p.video_fingerprint(cfg.input_video)
     (tmp_path / "subs.ass").write_text("subtitles")
     monkeypatch.setattr(p, "_style_same", lambda *a: True)
     burned = []
