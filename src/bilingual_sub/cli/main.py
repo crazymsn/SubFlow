@@ -249,7 +249,7 @@ def run_cmd(
     if not url and (input_video is None or not input_video.is_file()):
         console.print(f"[red]File not found: {input_video}[/red]")
         _exit(1)
-    from bilingual_sub.core.langs import effective_target_lang, is_valid_subtitle_mode
+    from bilingual_sub.core.langs import effective_target_lang, is_valid_subtitle_mode, output_stem_suffix
 
     if not is_valid_subtitle_mode(subtitle_mode):
         console.print("[red]--subtitle-mode must be bilingual, enzh, netflix_single, or single:<lang>[/red]")
@@ -272,7 +272,7 @@ def run_cmd(
     chosen_model = translate_model or settings.translate.model
     source = input_video.resolve() if input_video else Path(url or "source.mp4")
     out_srt = srt or source.with_name(source.stem + ".bilingual.srt")
-    out_mp4 = output or source.with_name(source.stem + "-中英字幕.mp4")
+    out_mp4 = output or source.with_name(source.stem + output_stem_suffix(subtitle_mode) + ".mp4")
 
     cfg = JobConfig(
         input_video=source,

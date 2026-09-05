@@ -32,6 +32,8 @@ from bilingual_sub.config import load_subtitle_colors, load_ui_theme, save_user_
 from bilingual_sub.core.control import JobControl
 from bilingual_sub.core.langs import (
     effective_target_lang,
+    output_stem_suffix,
+    should_dub,
     translation_needed,
     wants_spoken_target,
 )
@@ -39,9 +41,9 @@ from bilingual_sub.adapters.ytdlp import download_folder
 from bilingual_sub.gui.assets import GITHUB_MARK_PX, HEADER_MARK_PX, load_app_icon, load_brand_mark, load_github_mark
 from bilingual_sub.gui.model_choice import merge_model_list, preferred_model
 from bilingual_sub.gui.output_path import (
-    DEFAULT_STEM_SUFFIX,
     copy_finished_outputs,
     next_output_path,
+    refresh_output_path,
     relocate_output,
     resolve_output_mp4,
     sidecar_ass,
@@ -52,12 +54,13 @@ from bilingual_sub.gui.progress import format_pct, should_log_stage, stage_text
 from bilingual_sub.gui.styles import app_qss
 from bilingual_sub.gui.theme import tokens_for, type_font
 from bilingual_sub.gui.widgets.action_bar import build_action_bar
-from bilingual_sub.gui.widgets.deck import apply_deck_width, build_deck
+from bilingual_sub.gui.audio_player import PreviewPlayer
+from bilingual_sub.gui.widgets.deck import apply_deck_width, build_deck, fill_voice_combo
 from bilingual_sub.gui.widgets.field import SCROLL_FLOOR, hairline
 from bilingual_sub.gui.widgets.header import build_header
 from bilingual_sub.gui.widgets.source_strip import build_source
 from bilingual_sub.gui.widgets.stage import build_stage
-from bilingual_sub.gui.workers import DownloadWorker, ModelsWorker, PipelineWorker
+from bilingual_sub.gui.workers import DownloadWorker, ModelsWorker, PipelineWorker, VoicePreviewWorker
 from bilingual_sub.i18n import DEFAULT_LOCALE, set_locale, tr
 from bilingual_sub.logging_util import redact_api_key
 from bilingual_sub.models import JobConfig, JobResult
@@ -72,6 +75,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 760)
         self._worker: PipelineWorker | None = None
         self._models_worker: ModelsWorker | None = None
+        self._preview_worker: VoicePreviewWorker | None = None
+        self._preview_player = PreviewPlayer(self)
+        self._preview_player.finished.connect(self._on_preview_played)
         self._dl_worker: DownloadWorker | None = None
         self._last_output: Path | None = None
         self._last_result: JobResult | None = None
@@ -103,6 +109,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(icon)
         self.source_lang_combo.currentIndexChanged.connect(self._sync_dub_default)
         self.target_lang_combo.currentIndexChanged.connect(self._sync_dub_default)
+        self.mode_combo.currentIndexChanged.connect(self._sync_output_name)
         self._apply_theme(persist=False)
         self._hydrate()
         self.retranslateUi()
@@ -252,8 +259,17 @@ class MainWindow(QMainWindow):
         else:
             self.drop.set_prompt(tr("drop"), title_color=tones.ink, hint_color=tones.muted)
 
+    def _sync_output_name(self) -> None:
+        mode = str(self.mode_combo.currentData() or "bilingual")
+        refreshed = refresh_output_path(self.out_edit.text(), self._video, mode)
+        if str(refreshed) != self.out_edit.text():
+            self.out_edit.setText(str(refreshed))
+
+    def _output_mode(self) -> str:
+        return str(self.mode_combo.currentData() or "bilingual")
+
     def _set_video(self, path: Path) -> None:
-        out = next_output_path(self.out_edit.text(), self._video, path)
+        out = next_output_path(self.out_edit.text(), self._video, path, mode=self._output_mode())
         self._video = path
         self._refresh_drop()
         self.out_edit.setText(str(out))
@@ -405,7 +421,7 @@ class MainWindow(QMainWindow):
         if self._job_busy() or self._last_result is None:
             return
         try:
-            dest = resolve_output_mp4(self.out_edit.text(), self._video)
+            dest = resolve_output_mp4(self.out_edit.text(), self._video, mode=self._output_mode())
         except ValueError:
             return
         if self._video and dest.resolve() == self._video.resolve():
@@ -424,7 +440,7 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, tr("select_out"), start)
         if not folder:
             return
-        chosen = relocate_output(self.out_edit.text(), Path(folder), self._video)
+        chosen = relocate_output(self.out_edit.text(), Path(folder), self._video, mode=self._output_mode())
         self.out_edit.setText(str(chosen))
         self._try_relocate_outputs(chosen, log=True)
         self.out_edit.setFocus()
@@ -546,6 +562,9 @@ class MainWindow(QMainWindow):
         self.lbl_tts.setText(tr("tts_provider"))
         self.lbl_voice.setText(tr("tts_voice"))
         self.lbl_endpoint.setText(tr("tts_endpoint"))
+        fill_voice_combo(self.tts_voice_edit)
+        if not self._preview_busy():
+            self.tts_preview_btn.setText(tr("tts_preview"))
         if self.tts_endpoint_edit.placeholderText() == "":
             self.tts_endpoint_edit.setPlaceholderText("http://127.0.0.1:9880")
         self.browse_out_btn.setText(tr("browse"))
@@ -576,8 +595,89 @@ class MainWindow(QMainWindow):
         self.tts_endpoint_edit.setEnabled(on and sovits)
         self._slot_voice.setVisible(on and not sovits)
         self._slot_endpoint.setVisible(on and sovits)
+        self.tts_preview_btn.setEnabled(on and not sovits and not self._preview_busy())
         if self.more_box.isVisible():
             self._toggle_more(True)
+
+    def _preview_request(self) -> tuple[str, str, str, str]:
+        provider = str(self.tts_combo.currentData() or "openai")
+        voice = "" if provider != "openai" else str(self.tts_voice_edit.currentData() or "alloy")
+        lang = str(self.target_lang_combo.currentData() or "zh")
+        endpoint = "" if provider != "gptsovits" else self.tts_endpoint_edit.text().strip()
+        return provider, voice, lang, endpoint
+
+    def _preview_busy(self) -> bool:
+        return bool(self._preview_worker is not None and self._preview_worker.isRunning())
+
+    def _set_preview_busy(self, busy: bool) -> None:
+        self.tts_preview_btn.setText(tr("tts_previewing") if busy else tr("tts_preview"))
+        on = self.dub_check.isChecked()
+        sovits = str(self.tts_combo.currentData() or "openai") == "gptsovits"
+        self.tts_preview_btn.setEnabled(on and not sovits and not busy)
+
+    def _stop_voice_preview(self) -> None:
+        self._preview_player.stop()
+        worker = self._preview_worker
+        if worker is not None:
+            try:
+                worker.ok.disconnect()
+                worker.fail.disconnect()
+            except RuntimeError:
+                pass
+
+    def _preview_voice(self) -> None:
+        if self._preview_busy():
+            return
+        provider, voice, lang, endpoint = self._preview_request()
+        if provider == "openai" and not get_api_key() and not self.key_edit.text().strip():
+            self._set_key_status(tr("need_token"))
+            return
+        if self.key_edit.text().strip():
+            set_api_key(self.key_edit.text().strip())
+            self.key_edit.clear()
+            self.key_edit.setPlaceholderText(tr("token_kept"))
+        self._stop_voice_preview()
+        self._set_preview_busy(True)
+        self._preview_worker = VoicePreviewWorker(provider, voice, lang, endpoint)
+        self._preview_worker.ok.connect(self._on_preview_ready)
+        self._preview_worker.fail.connect(self._on_preview_fail)
+        self._preview_worker.start()
+
+    def _on_preview_ready(self, path: str) -> None:
+        worker = self.sender()
+        if worker is not None and worker is not self._preview_worker:
+            return
+        provider, voice, lang, _endpoint = self._preview_request()
+        if isinstance(worker, VoicePreviewWorker) and (worker.provider, worker.voice, worker.lang) != (
+            provider,
+            voice,
+            lang,
+        ):
+            self._set_preview_busy(False)
+            return
+        audio = Path(path)
+        if not audio.is_file():
+            self._on_preview_fail(tr("tts_preview_fail").format(msg=path))
+            return
+        label = voice or "GPT-SoVITS"
+        self._log_line(tr("tts_preview_ok").format(voice=label))
+        self._preview_player.play(audio)
+
+    def _on_preview_played(self) -> None:
+        self._set_preview_busy(False)
+
+    def _on_preview_fail(self, msg: str) -> None:
+        self._set_preview_busy(False)
+        safe = redact_api_key(msg, get_api_key())
+        if safe in {tr("need_token"), "请先保存 API 令牌"}:
+            self._set_key_status(tr("need_token"))
+            return
+        self._set_key_status(tr("tts_preview_fail").format(msg=safe))
+        self._log_line(tr("tts_preview_fail").format(msg=safe))
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._stop_voice_preview()
+        super().closeEvent(event)
 
     def _job_busy(self) -> bool:
         return bool(self._worker is not None and self._worker.isRunning())
@@ -651,7 +751,9 @@ class MainWindow(QMainWindow):
             subtitle_mode,
         )
         need_xl8 = translation_needed(source_lang, target_lang, subtitle_mode)
-        need_dub = self.dub_check.isChecked() and str(self.tts_combo.currentData() or "openai") != "none"
+        need_dub = should_dub(source_lang, source_lang, target_lang) or (
+            self.dub_check.isChecked() and str(self.tts_combo.currentData() or "openai") != "none"
+        )
         if (need_xl8 or need_dub) and not get_api_key() and not self.key_edit.text().strip():
             QMessageBox.warning(self, PRODUCT_ZH, tr("need_token"))
             return
@@ -666,9 +768,11 @@ class MainWindow(QMainWindow):
             save_user_overrides({"translate": {"model": model}})
 
         if not self.out_edit.text().strip() and url and not self._video:
-            self.out_edit.setText(str(Path.home() / "Downloads" / f"source{DEFAULT_STEM_SUFFIX}.mp4"))
+            self.out_edit.setText(
+                str(Path.home() / "Downloads" / f"source{output_stem_suffix(subtitle_mode)}.mp4")
+            )
         try:
-            out_mp4 = resolve_output_mp4(self.out_edit.text(), self._video)
+            out_mp4 = resolve_output_mp4(self.out_edit.text(), self._video, mode=subtitle_mode)
         except ValueError:
             QMessageBox.warning(self, PRODUCT_ZH, tr("need_out"))
             return

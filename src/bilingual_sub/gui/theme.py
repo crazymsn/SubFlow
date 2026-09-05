@@ -527,6 +527,27 @@ QPushButton#ghost:disabled, QPushButton#quiet:disabled {
     border-color: $line;
     background: transparent;
 }
+QPushButton#ttsPreviewBtn {
+    background: transparent;
+    color: $ink;
+    border: 1px solid $line;
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0 14px;
+}
+QPushButton#ttsPreviewBtn:hover {
+    border-color: $filament;
+    background: $filamentWash;
+}
+QPushButton#ttsPreviewBtn:pressed {
+    border-color: $filamentPressed;
+    background: $filamentHover;
+}
+QPushButton#ttsPreviewBtn:disabled {
+    color: $disabledFg;
+    border-color: $line;
+    background: transparent;
+}
 QPushButton#danger {
     background: transparent;
     color: $danger;

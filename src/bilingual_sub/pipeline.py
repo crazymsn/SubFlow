@@ -38,9 +38,9 @@ from bilingual_sub.core.langs import (
     pair_cues_polluted,
     screen_han_lang,
     screen_translate_lang,
+    should_dub,
     spoken_family,
     translation_needed,
-    wants_spoken_target,
     whisper_language,
 )
 from bilingual_sub.core.netflix import fit_cues
@@ -145,7 +145,7 @@ def artifact_key(config: JobConfig) -> str:
         f"{config.whisper_model}|{config.translate_model}|{preview}|"
         f"{config.source_lang}|{config.target_lang}|{config.subtitle_mode}|"
         f"{int(translation_needed(config.source_lang, config.target_lang, config.subtitle_mode))}|"
-        f"{int(wants_spoken_target(config.source_lang, config.target_lang))}|"
+        f"{int(should_dub(config.source_lang, config.source_lang, config.target_lang))}|"
         f"{config.asr_backend}|{int(config.refine_translate)}|{gloss}|"
         f"{config.source_url or ''}|"
         f"{config.subtitle_zh_color}|{config.subtitle_en_color}|"
@@ -806,10 +806,8 @@ def _run_job(
     elif config.burn and dest_mp4.is_file():
         output_mp4 = dest_mp4
 
-    if (
-        wants_spoken_target(detected_spoken, config.target_lang)
-        and _should_run(config.resume_from, "dub")
-    ):
+    need_dub = should_dub(config.source_lang, detected_spoken, config.target_lang)
+    if need_dub and _should_run(config.resume_from, "dub"):
         _gate(control)
         prog("dub", 0.94)
         ts = time.time()
@@ -838,16 +836,19 @@ def _run_job(
                 duration=duration,
                 control=control,
             )
+            if dubbed is None or not Path(dubbed).is_file():
+                raise RuntimeError("配音失败，没有生成目标语种音轨")
             if config.burn:
-                if dubbed.resolve() != dest_mp4.resolve():
+                if Path(dubbed).resolve() != dest_mp4.resolve():
                     shutil.copy2(dubbed, dest_mp4)
                 output_mp4 = dest_mp4
             else:
-                if dubbed.resolve() != sidecar.resolve():
+                if Path(dubbed).resolve() != sidecar.resolve():
                     shutil.copy2(dubbed, sidecar)
                 output_dub = sidecar
         except Exception as exc:
-            logger.warning("dub failed, keeping subtitle outputs: %s", exc)
+            logger.warning("dub failed: %s", exc)
+            raise RuntimeError(f"配音失败，成片仍是原声：{exc}") from exc
         stages["dub_sec"] = time.time() - ts
         _save_state(work, "dub", {"job_id": job_id}, control=control)
 
@@ -883,7 +884,7 @@ def _run_job(
         "ui_locale": config.ui_locale,
         "detected_spoken": detected_spoken,
         "translated": translation_needed(config.source_lang, config.target_lang, config.subtitle_mode),
-        "dubbed": wants_spoken_target(detected_spoken, config.target_lang),
+        "dubbed": bool(need_dub),
         "last_stage": "done",
         "stopped": False,
         "output_dub": str(output_dub) if output_dub else None,

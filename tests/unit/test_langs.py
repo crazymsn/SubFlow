@@ -9,7 +9,9 @@ from bilingual_sub.core.langs import (
     effective_target_lang,
     has_distinct_target_line,
     is_valid_subtitle_mode,
+    output_stem_suffix,
     prompt_name,
+    should_dub,
     translation_needed,
     wants_spoken_target,
     whisper_language,
@@ -129,3 +131,14 @@ def test_single_subtitle_modes():
     assert english_src[0].en == "Hello"
     assert spoken_line(english_src[0], "en") == "Hello"
     assert spoken_line(english_src[0], "zh") == "你好"
+    assert spoken_line(Cue(0.0, 1.0, "大家好", None), "en") == ""
+    assert spoken_line(Cue(0.0, 1.0, "Hello everyone", None), "en") == "Hello everyone"
+    assert should_dub("zh", "zh", "en") is True
+    assert should_dub("zh", "en", "en") is True
+    assert should_dub("zh", "en", "zh") is True
+    assert should_dub("zh", "zh", "zh") is False
+    assert should_dub("en", "en", "en") is False
+    assert output_stem_suffix("bilingual") == "-中英字幕"
+    assert output_stem_suffix("enzh") == "-英中字幕"
+    assert output_stem_suffix("single:en") == "-English"
+    assert output_stem_suffix("netflix_single") == "-单行字幕"

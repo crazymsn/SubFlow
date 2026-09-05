@@ -4,6 +4,7 @@ from bilingual_sub.gui.output_path import (
     copy_finished_outputs,
     default_output_mp4,
     next_output_path,
+    refresh_output_path,
     relocate_output,
     resolve_output_mp4,
     sidecar_ass,
@@ -76,3 +77,15 @@ def test_next_output_refreshes_when_still_on_auto_default():
     nxt = Path(r"C:\media\two.mp4")
     got = next_output_path(str(default_output_mp4(prev)), prev, nxt)
     assert got == default_output_mp4(nxt)
+
+
+def test_enzh_stem_is_not_chinese_english_label():
+    video = Path(r"C:\media\lecture.mp4")
+    assert default_output_mp4(video, "enzh") == Path(r"C:\media\lecture-英中字幕.mp4")
+    assert default_output_mp4(video, "bilingual") == Path(r"C:\media\lecture-中英字幕.mp4")
+    switched = refresh_output_path(str(default_output_mp4(video, "bilingual")), video, "enzh")
+    assert switched == Path(r"C:\media\lecture-英中字幕.mp4")
+    custom = refresh_output_path(r"D:\exports\final.mp4", video, "enzh")
+    assert custom == Path(r"D:\exports\final.mp4")
+    resolved = resolve_output_mp4(r"C:\media\lecture-中英字幕.mp4", video, mode="enzh")
+    assert resolved == Path(r"C:\media\lecture-英中字幕.mp4")

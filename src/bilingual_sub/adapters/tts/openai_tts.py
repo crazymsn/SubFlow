@@ -30,6 +30,9 @@ class OpenAiTts:
         try:
             resp = client.audio.speech.create(model="tts-1", voice=voice, input=req.text)
         except Exception as exc:
+            detail = str(exc)
+            if "model_not_found" in detail or "No available channel" in detail:
+                raise TtsUnavailable("当前令牌未开通语音模型（tts-1），无法试听或配音") from exc
             raise TtsUnavailable(f"令牌通道未开放 TTS：{exc}") from exc
         req.dest.parent.mkdir(parents=True, exist_ok=True)
         req.dest.write_bytes(resp.read() if hasattr(resp, "read") else bytes(resp))

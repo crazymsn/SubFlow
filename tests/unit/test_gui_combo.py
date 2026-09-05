@@ -139,6 +139,11 @@ def test_output_path_is_editable_and_survives_new_video():
     first = Path(r"C:\media\one.mp4")
     win._set_video(first)
     assert win.out_edit.text() == str(default_output_mp4(first))
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("enzh"))
+    assert win.out_edit.text() == str(default_output_mp4(first, "enzh"))
+    assert win.out_edit.text().endswith("英中字幕.mp4")
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("bilingual"))
+    assert win.out_edit.text() == str(default_output_mp4(first))
     custom = Path(r"D:\exports\final.mp4")
     win.out_edit.setText(str(custom))
     assert win.out_edit.text() == str(custom)
@@ -529,6 +534,9 @@ def test_empty_counter_download_gate_and_more_overlay():
     app.processEvents()
     assert win._slot_voice.isVisible()
     assert win._slot_endpoint.isHidden()
+    assert win.tts_preview_btn.objectName() == "ttsPreviewBtn"
+    assert win.tts_preview_btn.text() == "试听"
+    assert win.tts_preview_btn.isVisible()
     assert {win.tts_voice_edit.itemData(i) for i in range(win.tts_voice_edit.count())} == {
         "alloy",
         "echo",
@@ -537,10 +545,12 @@ def test_empty_counter_download_gate_and_more_overlay():
         "nova",
         "shimmer",
     }
+    assert "中性" in win.tts_voice_edit.itemText(0)
     win.tts_combo.setCurrentIndex(win.tts_combo.findData("gptsovits"))
     app.processEvents()
     assert win._slot_voice.isHidden()
     assert win._slot_endpoint.isVisible()
+    assert not win.tts_preview_btn.isVisible()
     win.tts_combo.setCurrentIndex(win.tts_combo.findData("openai"))
     win.dub_check.setChecked(False)
     win.more_btn.setChecked(False)

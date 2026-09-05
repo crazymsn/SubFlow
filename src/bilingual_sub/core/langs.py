@@ -274,6 +274,38 @@ def wants_spoken_target(source_lang: str, target_lang: str) -> bool:
     return lang_family(source_lang) != lang_family(target_lang)
 
 
+def should_dub(declared_source: str, detected_spoken: str, target_lang: str) -> bool:
+    """Dub when the target spoken language differs from the original track.
+
+    Use the user's source language when it is set. ASR detection is a second
+    vote so English-heard + Chinese-target still dubs, and Chinese-declared +
+    English-target still dubs even if Whisper's script vote flipped.
+    """
+    if wants_spoken_target(declared_source, target_lang):
+        return True
+    heard = (detected_spoken or "").strip() or declared_source
+    return wants_spoken_target(heard, target_lang)
+
+
+def output_stem_suffix(mode: str) -> str:
+    """Visible export stem. 中英 / 英中 are different products, not aliases."""
+    if mode == "enzh":
+        return "-英中字幕"
+    if mode == "netflix_single":
+        return "-单行字幕"
+    if (mode or "").startswith("single:"):
+        for code, label in SINGLE_SUB_MODES:
+            if code == mode:
+                return f"-{label}"
+        return f"-{mode.split(':', 1)[1]}"
+    return "-中英字幕"
+
+
+def output_stem_suffixes() -> tuple[str, ...]:
+    extras = tuple(f"-{label}" for _code, label in SINGLE_SUB_MODES)
+    return ("-中英字幕", "-英中字幕", "-单行字幕") + extras
+
+
 def translation_needed(source_lang: str, target_lang: str, mode: str) -> bool:
     """True when the subtitle style needs a language the source track does not already give."""
     if is_pair_mode(mode):
@@ -295,9 +327,15 @@ def has_distinct_target_line(cues) -> bool:
 
 def spoken_line(cue, target_lang: str) -> str:
     """Text the dubber should speak. Target language is the spoken language."""
+    zh = (getattr(cue, "zh", None) or "").strip()
+    en = (getattr(cue, "en", None) or "").strip()
     if lang_family(target_lang) == "zh":
-        return (getattr(cue, "zh", None) or "").strip()
-    return ((getattr(cue, "en", None) or getattr(cue, "zh", None) or "")).strip()
+        return zh
+    if en:
+        return en
+    if zh and text_family(zh) != "zh":
+        return zh
+    return ""
 
 
 def drop_target_if_unneeded(cues, source_lang: str, target_lang: str, mode: str) -> None:

@@ -60,6 +60,35 @@ class ModelsWorker(QThread):
             self.fail.emit(str(exc))
 
 
+class VoicePreviewWorker(QThread):
+    ok = Signal(str)
+    fail = Signal(str)
+
+    def __init__(self, provider: str, voice: str, lang: str, endpoint: str = "") -> None:
+        super().__init__()
+        self.provider = provider
+        self.voice = voice
+        self.lang = lang
+        self.endpoint = endpoint
+
+    def run(self) -> None:
+        try:
+            from bilingual_sub.adapters.tts.base import TtsUnavailable
+            from bilingual_sub.core.voice_preview import synth_voice_preview
+
+            path = synth_voice_preview(
+                provider=self.provider,
+                voice=self.voice,
+                lang=self.lang,
+                endpoint=self.endpoint,
+            )
+            self.ok.emit(str(path))
+        except TtsUnavailable as exc:
+            self.fail.emit(str(exc))
+        except Exception as exc:
+            self.fail.emit(str(exc))
+
+
 class DownloadWorker(QThread):
     progress = Signal(str, float)
     ok = Signal(str)

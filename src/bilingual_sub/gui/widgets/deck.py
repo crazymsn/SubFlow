@@ -25,6 +25,24 @@ from bilingual_sub.i18n import tr
 OPENAI_VOICES = ("alloy", "echo", "fable", "onyx", "nova", "shimmer")
 
 
+def voice_item_text(voice: str) -> str:
+    label = tr(f"tts_voice_{voice}")
+    if label == f"tts_voice_{voice}":
+        return voice
+    return f"{voice} · {label}"
+
+
+def fill_voice_combo(combo: QComboBox) -> None:
+    current = combo.currentData()
+    combo.blockSignals(True)
+    combo.clear()
+    for voice in OPENAI_VOICES:
+        combo.addItem(voice_item_text(voice), voice)
+    index = combo.findData(current) if current else 0
+    combo.setCurrentIndex(index if index >= 0 else 0)
+    combo.blockSignals(False)
+
+
 def _select_combo(combo: QComboBox, code: str) -> None:
     index = combo.findData(code)
     combo.setCurrentIndex(index if index >= 0 else 0)
@@ -277,23 +295,33 @@ def build_more_drawer(win) -> QFrame:
     win.tts_combo.currentIndexChanged.connect(win._sync_tts_fields)
     win.tts_voice_edit = QComboBox()
     win.tts_voice_edit.setEditable(False)
-    for voice in OPENAI_VOICES:
-        win.tts_voice_edit.addItem(voice, voice)
-    win.tts_voice_edit.setCurrentIndex(0)
+    fill_voice_combo(win.tts_voice_edit)
     win.tts_endpoint_edit = QLineEdit()
     win.tts_endpoint_edit.setPlaceholderText("http://127.0.0.1:9880")
     win.tts_help = QLabel(tr("tts_help"))
     win.tts_help.setObjectName("help")
     win.tts_help.hide()
+    win.tts_preview_btn = QPushButton(tr("tts_preview"))
+    win.tts_preview_btn.setObjectName("ttsPreviewBtn")
+    win.tts_preview_btn.setMinimumHeight(36)
+    win.tts_preview_btn.setMinimumWidth(88)
+    win.tts_preview_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    win.tts_preview_btn.clicked.connect(win._preview_voice)
+    voice_row = QWidget()
+    voice_lay = QHBoxLayout(voice_row)
+    voice_lay.setContentsMargins(0, 0, 0, 0)
+    voice_lay.setSpacing(8)
+    voice_lay.addWidget(expanding(win.tts_voice_edit), 1)
+    voice_lay.addWidget(win.tts_preview_btn, 0)
     win._slot_tts = field_col(win.lbl_tts, expanding(win.tts_combo))
-    win._slot_voice = field_col(win.lbl_voice, expanding(win.tts_voice_edit))
+    win._slot_voice = field_col(win.lbl_voice, expanding(voice_row))
     win._slot_endpoint = field_col(win.lbl_endpoint, expanding(win.tts_endpoint_edit))
     win._slot_endpoint.hide()
     track = QHBoxLayout()
     track.setContentsMargins(0, 0, 0, 0)
     track.setSpacing(12)
     track.addWidget(win._slot_tts, 2)
-    track.addWidget(win._slot_voice, 2)
+    track.addWidget(win._slot_voice, 3)
     track.addWidget(win._slot_endpoint, 3)
     dub.addLayout(track)
     win.dub_box.setVisible(False)
