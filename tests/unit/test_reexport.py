@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -187,6 +188,26 @@ def test_different_video_or_model_skips_reuse(tmp_path: Path, video: Path):
         target_lang="ja",
     )
     assert _can_reexport(lang_cfg, work) is False
+
+
+def test_reexport_rechecks_the_bytes_copied_from_previous_movie(tmp_path, video, monkeypatch):
+    from bilingual_sub import pipeline as p
+    cfg = JobConfig(video, tmp_path / "new.mp4", tmp_path / "new.srt", Path("auto"), burn=True)
+    previous, work = tmp_path / "previous.mp4", tmp_path / "work"
+    _plant_job(work, video, previous, whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
+    report = json.loads((work / "report.json").read_text())
+    cfg.output_video.write_bytes(b"old destination")
+    original = p.copy_file
+    def replace_after_validation(source, target, **kwargs):
+        if source == previous:
+            stamp = source.stat()
+            source.write_bytes(b"x" * stamp.st_size)
+            os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        return original(source, target, **kwargs)
+    monkeypatch.setattr(p, "copy_file", replace_after_validation)
+    with pytest.raises(ValueError, match="内容"):
+        p._copy_or_burn(cfg, work, AppSettings(), report)
+    assert cfg.output_video.read_bytes() == b"old destination"
 
 
 def test_stale_english_cues_block_single_chinese_reuse(tmp_path: Path, video: Path):

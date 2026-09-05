@@ -168,8 +168,9 @@ def _artifact_context(stage: str, config: JobConfig, settings: AppSettings, work
 
 def _verify_artifact_context(work: Path, stage: str, config: JobConfig, settings: AppSettings,
                              control: JobControl | None = None, detected_spoken: str | None = None,
-                             *, allow_unidentified_model: bool = False) -> None:
-    if not _verify_cache(work, stage, control):
+                             *, allow_unidentified_model: bool = False) -> dict:
+    verified = _verify_cache(work, stage, control)
+    if not verified:
         raise ValueError(f"缺少 {stage} 阶段产物，请从 {stage} 重新处理")
     contexts = _load_json(work / "job_state.json").get("artifact_contexts", {})
     saved_context = contexts.get(stage) if isinstance(contexts, dict) else None
@@ -180,6 +181,7 @@ def _verify_artifact_context(work: Path, stage: str, config: JobConfig, settings
         stage, config, settings, work, control, detected_spoken
     ):
         raise ValueError(f"{stage} 阶段的字幕或配音设置与缓存不符，请从 {stage} 重新处理")
+    return verified
 
 
 def video_fingerprint(path: Path, *, control: JobControl | None = None) -> dict:
@@ -565,13 +567,13 @@ def _copy_or_burn(
         dubbed = work / "dubbed.mp4"
         if not dubbed.is_file():
             raise FileNotFoundError("previous dub missing; cannot export without re-running")
-        _verify_cache(work, "dub", control)
+        verified = _verify_cache(work, "dub", control)
         from bilingual_sub.gui.output_path import resolve_dub_sidecar
 
         dest = resolve_dub_sidecar(config.output_video, config.output_srt)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dubbed.resolve() != dest.resolve():
-            copy_file(dubbed, dest, checkpoint=lambda: _gate(control))
+            copy_file(dubbed, dest, checkpoint=lambda: _gate(control), expected_sha256=verified["dubbed.mp4"])
         return dest
     dest = config.output_video or config.output_srt.with_suffix(".mp4")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -579,9 +581,9 @@ def _copy_or_burn(
         dubbed = work / "dubbed.mp4"
         if not dubbed.is_file():
             raise FileNotFoundError("previous dub missing; cannot export without re-running")
-        _verify_cache(work, "dub", control)
+        verified = _verify_cache(work, "dub", control)
         if dubbed.resolve() != dest.resolve():
-            copy_file(dubbed, dest, checkpoint=lambda: _gate(control))
+            copy_file(dubbed, dest, checkpoint=lambda: _gate(control), expected_sha256=verified["dubbed.mp4"])
         return dest
     prev = Path(str(report["output_mp4"])) if report.get("output_mp4") else None
     style_same = _style_same(report, config, settings)
@@ -591,7 +593,7 @@ def _copy_or_burn(
             prev, checkpoint=lambda: _gate(control)
         ):
             if prev.resolve() != dest.resolve():
-                copy_file(prev, dest, checkpoint=lambda: _gate(control))
+                copy_file(prev, dest, checkpoint=lambda: _gate(control), expected_sha256=saved)
             return dest
     ass_path = work / "subs.ass"
     source = work / "source.mp4"
@@ -1412,8 +1414,8 @@ def _run_job(
                     produced={"burn": list(FILES["burn"])},
                     artifact_context=burn_context)
     if config.burn and not need_dub:
-        _verify_artifact_context(work, "burn", config, settings, control)
-        copy_file(burned_mp4, dest_mp4, checkpoint=lambda: _gate(control))
+        verified = _verify_artifact_context(work, "burn", config, settings, control)
+        copy_file(burned_mp4, dest_mp4, checkpoint=lambda: _gate(control), expected_sha256=verified["burned.mp4"])
         output_mp4 = dest_mp4
 
     if need_dub and _should_run(config.resume_from, "dub"):
@@ -1499,13 +1501,14 @@ def _run_job(
                     produced={"dub": list(FILES["dub"])},
                     artifact_context=dub_context)
     if need_dub:
-        _verify_artifact_context(work, "dub", config, settings, control, detected_spoken,
+        verified = _verify_artifact_context(work, "dub", config, settings, control, detected_spoken,
                                  allow_unidentified_model=_should_run(config.resume_from, "dub"))
         from bilingual_sub.gui.output_path import resolve_dub_sidecar
 
         destination = dest_mp4 if config.burn else resolve_dub_sidecar(config.output_video, srt_out)
         try:
-            copy_file(work / "dubbed.mp4", destination, checkpoint=lambda: _gate(control))
+            copy_file(work / "dubbed.mp4", destination, checkpoint=lambda: _gate(control),
+                       expected_sha256=verified["dubbed.mp4"])
         except OSError as exc:
             raise RuntimeError(f"配音已完成，但成片导出失败；可从 done 重新导出：{exc}") from exc
         if config.burn:

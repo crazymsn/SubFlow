@@ -79,6 +79,45 @@ def test_copy_success_and_hardlink_alias(media):
     assert_no_temps(target.parent)
 
 
+@pytest.mark.parametrize("when", ["before", "during"])
+def test_recorded_copy_rejects_changed_content_with_same_metadata(media, when):
+    source, target = media
+    expected = file_io.file_digest(source)
+    stamp = source.stat()
+    def replace_tail():
+        with source.open("r+b") as stream:
+            stream.seek(2 * 1024 * 1024)
+            stream.write(b"x" * 1024 * 1024)
+        os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    calls = 0
+    def checkpoint():
+        nonlocal calls
+        calls += 1
+        if when == "during" and calls == 3:
+            replace_tail()
+    if when == "before":
+        replace_tail()
+    with pytest.raises(ValueError, match="内容"):
+        file_io.copy_file(source, target, checkpoint=checkpoint, expected_sha256=expected)
+    assert target.read_bytes() == b"previous complete video"
+    assert_no_temps(target.parent)
+
+
+@pytest.mark.parametrize("same", [False, True])
+def test_recorded_copy_validates_even_when_destination_is_same_inode(media, same):
+    source, target = media
+    if same:
+        target.unlink()
+        os.link(source, target)
+    expected = file_io.file_digest(source)
+    file_io.copy_file(source, target, expected_sha256=expected)
+    assert file_io.file_digest(target) == expected
+    with pytest.raises(ValueError, match="内容"):
+        file_io.copy_file(source, target, expected_sha256="0" * 64)
+    assert file_io.file_digest(target) == expected
+    assert_no_temps(target.parent)
+
+
 def test_missing_same_path_copy_is_an_error(tmp_path):
     missing = tmp_path / "missing.mp4"
     with pytest.raises(FileNotFoundError):

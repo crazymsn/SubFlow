@@ -62,15 +62,19 @@ def file_digest(path: Path, *, checkpoint: Checkpoint = None) -> str:
     return digest.hexdigest()
 
 
-def copy_file(source: Path, destination: Path, *, checkpoint: Checkpoint = None) -> None:
-    """Copy in bounded chunks; a failed or cancelled copy keeps the old target."""
+def copy_file(source: Path, destination: Path, *, checkpoint: Checkpoint = None,
+              expected_sha256: str | None = None) -> None:
+    """Stage bounded chunks, checking any recorded digest before publication."""
     _check(checkpoint)
     if not source.is_file():
         raise FileNotFoundError(f"复制源文件不存在或不是普通文件：{source}")
     if source.resolve() == destination.resolve() or (
         destination.exists() and source.samefile(destination)
     ):
+        if expected_sha256 is not None and file_digest(source, checkpoint=checkpoint) != expected_sha256:
+            raise ValueError(f"复制内容与任务记录不符：{source}")
         return
+    digest = hashlib.sha256() if expected_sha256 is not None else None
     with staged_path(destination) as pending:
         with source.open("rb") as reader, pending.open("wb") as writer:
             before = os.fstat(reader.fileno())
@@ -80,6 +84,8 @@ def copy_file(source: Path, destination: Path, *, checkpoint: Checkpoint = None)
                 if not chunk:
                     break
                 writer.write(chunk)
+                if digest is not None:
+                    digest.update(chunk)
             writer.flush()
             os.fsync(writer.fileno())
             after = source.stat()
@@ -87,6 +93,8 @@ def copy_file(source: Path, destination: Path, *, checkpoint: Checkpoint = None)
                 after.st_size, after.st_mtime_ns, after.st_ino
             ):
                 raise OSError(f"复制时源文件发生变化，请重试：{source}")
+            if digest is not None and digest.hexdigest() != expected_sha256:
+                raise ValueError(f"复制内容与任务记录不符：{source}")
         shutil.copystat(source, pending)
         _check(checkpoint)
         pending.replace(destination)

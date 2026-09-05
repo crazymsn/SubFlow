@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -298,6 +299,47 @@ def test_done_resume_rejects_bad_dubbed_movie(dub_job, damage):
         p.run(cfg, settings)
     assert first.output_mp4.read_bytes() == before
     assert json.loads((cfg.work_dir / "job_state.json").read_text())["stage"] != "done"
+
+
+@pytest.mark.parametrize("burn", [False, True])
+def test_dubbed_export_checks_bytes_copied_after_cache_validation(dub_job, monkeypatch, burn):
+    cfg, settings, _ = dub_job
+    cfg.burn = burn
+    first = p.run(cfg, settings)
+    destination = first.output_mp4 or first.output_dub
+    before = destination.read_bytes()
+    original_copy = p.copy_file
+    def replace_after_validation(source, dest, **kwargs):
+        if source == cfg.work_dir / "dubbed.mp4" and dest == destination:
+            stamp = source.stat()
+            source.write_bytes(b"x" * stamp.st_size)
+            os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        return original_copy(source, dest, **kwargs)
+    monkeypatch.setattr(p, "copy_file", replace_after_validation)
+    cfg.resume_from = "done"
+    with pytest.raises(ValueError, match="内容"):
+        p.run(cfg, settings)
+    assert destination.read_bytes() == before
+
+
+def test_original_audio_export_checks_bytes_copied_after_validation(job, monkeypatch):
+    cfg, settings, _, _, _ = job
+    cfg.burn, cfg.output_video = True, cfg.output_srt.with_suffix(".mp4")
+    monkeypatch.setattr(p, "burn_subtitles", lambda src, ass, out, **kw: out.write_bytes(b"original voice"))
+    p.run(cfg, settings)
+    before = cfg.output_video.read_bytes()
+    original_copy = p.copy_file
+    def replace_after_validation(source, dest, **kwargs):
+        if source == cfg.work_dir / "burned.mp4":
+            stamp = source.stat()
+            source.write_bytes(b"x" * stamp.st_size)
+            os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        return original_copy(source, dest, **kwargs)
+    monkeypatch.setattr(p, "copy_file", replace_after_validation)
+    cfg.resume_from = "done"
+    with pytest.raises(ValueError, match="内容"):
+        p.run(cfg, settings)
+    assert cfg.output_video.read_bytes() == before
 
 
 @pytest.mark.parametrize("stage", ["dub", "done"])
