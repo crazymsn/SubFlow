@@ -34,6 +34,9 @@ from tools.audio_sr import AP_BWE
 from tools.i18n.i18n import I18nAuto, scan_language_list
 from TTS_infer_pack.text_segmentation_method import splits
 from TTS_infer_pack.TextPreprocessor import TextPreprocessor
+from TTS_infer_pack.reference_cache import (
+    empty_prompt_cache, invalidate_prompt_cache, prepare_prompt, prepare_references, set_reference,
+)
 from sv import SV
 
 resample_transform_dict = {}
@@ -452,17 +455,7 @@ class TTS:
             self.bert_model, self.bert_tokenizer, self.configs.device
         )
 
-        self.prompt_cache: dict = {
-            "ref_audio_path": None,
-            "prompt_semantic": None,
-            "refer_spec": [],
-            "prompt_text": None,
-            "prompt_lang": None,
-            "phones": None,
-            "bert_features": None,
-            "norm_text": None,
-            "aux_ref_audio_paths": [],
-        }
+        self.prompt_cache: dict = empty_prompt_cache()
 
         self.stop_flag: bool = False
         self.precision: torch.dtype = torch.float16 if self.configs.is_half else torch.float32
@@ -477,6 +470,7 @@ class TTS:
         # self.enable_half_precision(self.configs.is_half)
 
     def init_cnhuhbert_weights(self, base_path: str):
+        invalidate_prompt_cache(self)
         print(f"Loading CNHuBERT weights from {base_path}")
         self.cnhuhbert_model = CNHubert(base_path)
         self.cnhuhbert_model = self.cnhuhbert_model.eval()
@@ -485,6 +479,7 @@ class TTS:
             self.cnhuhbert_model = self.cnhuhbert_model.half()
 
     def init_bert_weights(self, base_path: str):
+        invalidate_prompt_cache(self)
         print(f"Loading BERT weights from {base_path}")
         self.bert_tokenizer = AutoTokenizer.from_pretrained(base_path)
         self.bert_model = AutoModelForMaskedLM.from_pretrained(base_path)
@@ -492,8 +487,11 @@ class TTS:
         self.bert_model = self.bert_model.to(self.configs.device)
         if self.configs.is_half and str(self.configs.device) != "cpu":
             self.bert_model = self.bert_model.half()
+        if hasattr(self, "text_preprocessor"):
+            self.text_preprocessor = TextPreprocessor(self.bert_model, self.bert_tokenizer, self.configs.device)
 
     def init_vits_weights(self, weights_path: str):
+        invalidate_prompt_cache(self)
         self.configs.vits_weights_path = weights_path
         version, model_version, if_lora_v3 = get_sovits_version_from_path_fast(weights_path)
         if "Pro" in model_version:
@@ -595,6 +593,7 @@ class TTS:
 
 
     def init_t2s_weights(self, weights_path: str):
+        invalidate_prompt_cache(self)
         print(f"Loading Text2Semantic weights from {weights_path}")
         self.configs.t2s_weights_path = weights_path
         self.configs.save_configs()
@@ -697,10 +696,11 @@ class TTS:
             enable: bool, whether to enable half precision.
 
         """
-        if str(self.configs.device) == "cpu" and enable:
-            print("Half precision is not supported on CPU.")
+        if str(self.configs.device) in {"cpu", "mps"} and enable:
+            print("Half precision is disabled on CPU and Apple GPU.")
             return
 
+        invalidate_prompt_cache(self)
         self.configs.is_half = enable
         self.precision = torch.float16 if enable else torch.float32
         if save:
@@ -734,7 +734,11 @@ class TTS:
         Args:
             device: torch.device, the device to use for all models.
         """
+        invalidate_prompt_cache(self)
         self.configs.device = device
+        if str(device) in {"cpu", "mps"} and self.configs.is_half:
+            self.enable_half_precision(False, save=False)
+        self.text_preprocessor.device = device
         if save:
             self.configs.save_configs()
         if self.t2s_model is not None:
@@ -749,6 +753,8 @@ class TTS:
             self.vocoder = self.vocoder.to(device)
         if self.sr_model is not None:
             self.sr_model = self.sr_model.to(device)
+        if self.sv_model is not None:
+            self.sv_model = self.sv_model.to(device)
 
     def set_ref_audio(self, ref_audio_path: str):
         """
@@ -757,9 +763,7 @@ class TTS:
         Args:
             ref_audio_path: str, the path of the reference audio.
         """
-        self._set_prompt_semantic(ref_audio_path)
-        self._set_ref_spec(ref_audio_path)
-        self._set_ref_audio_path(ref_audio_path)
+        set_reference(self, ref_audio_path)
 
     def _set_ref_audio_path(self, ref_audio_path):
         self.prompt_cache["ref_audio_path"] = ref_audio_path
@@ -1036,11 +1040,11 @@ class TTS:
         ########## variables initialization ###########
         self.stop_flag: bool = False
         text: str = inputs.get("text", "")
-        text_lang: str = inputs.get("text_lang", "")
+        text_lang: str = (inputs.get("text_lang", "") or "").lower()
         ref_audio_path: str = inputs.get("ref_audio_path", "")
         aux_ref_audio_paths: list = inputs.get("aux_ref_audio_paths", [])
-        prompt_text: str = inputs.get("prompt_text", "")
-        prompt_lang: str = inputs.get("prompt_lang", "")
+        prompt_text: str = (inputs.get("prompt_text", "") or "").strip()
+        prompt_lang: str = (inputs.get("prompt_lang", "") or "").lower()
         top_k: int = inputs.get("top_k", 15)
         top_p: float = inputs.get("top_p", 1)
         temperature: float = inputs.get("temperature", 1)
@@ -1122,50 +1126,11 @@ class TTS:
         if no_prompt_text and self.configs.use_vocoder:
             raise NO_PROMPT_ERROR("prompt_text cannot be empty when using SoVITS_V3")
 
-        if ref_audio_path in [None, ""] and (
-            (self.prompt_cache["prompt_semantic"] is None) or (self.prompt_cache["refer_spec"] in [None, []])
-        ):
-            raise ValueError(
-                "ref_audio_path cannot be empty, when the reference audio is not set using set_ref_audio()"
-            )
-
         ###### setting reference audio and prompt text preprocessing ########
         t0 = time.perf_counter()
-        if (ref_audio_path is not None) and (
-            ref_audio_path != self.prompt_cache["ref_audio_path"]
-            or (self.is_v2pro and self.prompt_cache["refer_spec"][0][1] is None)
-        ):
-            if not os.path.exists(ref_audio_path):
-                raise ValueError(f"{ref_audio_path} not exists")
-            self.set_ref_audio(ref_audio_path)
-
-        aux_ref_audio_paths = aux_ref_audio_paths if aux_ref_audio_paths is not None else []
-        paths = set(aux_ref_audio_paths) & set(self.prompt_cache["aux_ref_audio_paths"])
-        if not (len(list(paths)) == len(aux_ref_audio_paths) == len(self.prompt_cache["aux_ref_audio_paths"])):
-            self.prompt_cache["aux_ref_audio_paths"] = aux_ref_audio_paths
-            self.prompt_cache["refer_spec"] = [self.prompt_cache["refer_spec"][0]]
-            for path in aux_ref_audio_paths:
-                if path in [None, ""]:
-                    continue
-                if not os.path.exists(path):
-                    print(i18n("音频文件不存在，跳过："), path)
-                    continue
-                self.prompt_cache["refer_spec"].append(self._get_ref_spec(path))
-
+        prepare_references(self, ref_audio_path, aux_ref_audio_paths)
         if not no_prompt_text:
-            prompt_text = prompt_text.strip("\n")
-            if prompt_text[-1] not in splits:
-                prompt_text += "。" if prompt_lang != "en" else "."
-            print(i18n("实际输入的参考文本:"), prompt_text)
-            if self.prompt_cache["prompt_text"] != prompt_text:
-                phones, bert_features, norm_text = self.text_preprocessor.segment_and_extract_feature_for_text(
-                    prompt_text, prompt_lang, self.configs.version
-                )
-                self.prompt_cache["prompt_text"] = prompt_text
-                self.prompt_cache["prompt_lang"] = prompt_lang
-                self.prompt_cache["phones"] = phones
-                self.prompt_cache["bert_features"] = bert_features
-                self.prompt_cache["norm_text"] = norm_text
+            prepare_prompt(self, prompt_text, prompt_lang, splits)
 
         ###### text preprocessing ########
         t1 = time.perf_counter()

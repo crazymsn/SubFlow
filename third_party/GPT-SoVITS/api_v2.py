@@ -116,7 +116,7 @@ import wave
 import signal
 import numpy as np
 import soundfile as sf
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Query, Response
 from fastapi.responses import JSONResponse
 import uvicorn
 from io import BytesIO
@@ -173,7 +173,7 @@ class TTS_Request(BaseModel):
     text: str = None
     text_lang: str = None
     ref_audio_path: str = None
-    aux_ref_audio_paths: list = None
+    aux_ref_audio_paths: list[str] | None = None
     prompt_lang: str = None
     prompt_text: str = ""
     top_k: int = 15
@@ -496,7 +496,7 @@ async def tts_get_endpoint(
     text: str = None,
     text_lang: str = None,
     ref_audio_path: str = None,
-    aux_ref_audio_paths: list = None,
+    aux_ref_audio_paths: list[str] | None = Query(default=None),
     prompt_lang: str = None,
     prompt_text: str = "",
     top_k: int = 15,

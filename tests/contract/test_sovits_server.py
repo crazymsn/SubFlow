@@ -179,6 +179,21 @@ def test_missing_language_is_client_error(api, method):
     asyncio.run(scenario())
 
 
+def test_get_auxiliary_references_are_query_parameters(api, monkeypatch):
+    seen = []
+    def generate(req):
+        seen.extend(req["aux_ref_audio_paths"])
+        yield 16000, b"audio"
+    monkeypatch.setattr(api.tts_pipeline, "run", generate)
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api.APP), base_url="http://local") as client:
+            response = await client.get("/tts", params=[*payload().items(), ("aux_ref_audio_paths", "one.wav"),
+                                                      ("aux_ref_audio_paths", "two.wav")])
+            assert response.status_code == 200
+    asyncio.run(scenario())
+    assert seen == ["one.wav", "two.wav"]
+
+
 def test_preprocessing_failure_retries_once_on_cpu_and_closes_generators(api, monkeypatch):
     calls, closed = [], []
     api.tts_pipeline.configs.device = "mps"
