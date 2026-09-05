@@ -26,7 +26,7 @@ def test_install_isolated_and_cached(monkeypatch, tmp_path):
     py = rt.ensure_python_env('asr')
     assert py.is_file()
     assert any('--managed-python' in c for c in calls)
-    assert any('torch==2.5.1' in c or 'torch==2.2.2' in c for c in calls)
+    assert any(any(arg.startswith(('torch==2.5.1', 'torch==2.2.2')) for arg in c) for c in calls)
     before = len(calls)
     assert rt.ensure_python_env('asr') == py
     assert len(calls) == before + 1  # Recheck imports even when the ready marker matches.

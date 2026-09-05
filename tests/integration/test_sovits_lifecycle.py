@@ -37,7 +37,10 @@ def parent_script(tmp_path, *, crash=False):
     script.write_text(f"""import subprocess, sys, time
 from pathlib import Path
 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
-Path({str(pid_file)!r}).write_text(str(child.pid))
+pid_file = Path({str(pid_file)!r})
+pending = pid_file.with_suffix('.pending')
+pending.write_text(str(child.pid), encoding='ascii')
+pending.replace(pid_file)
 {ending}
 """, encoding="utf-8")
     return script, pid_file

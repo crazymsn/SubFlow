@@ -73,7 +73,7 @@ def find_uv() -> Path:
 
 def install_env() -> dict[str, str]:
     env = os.environ.copy()
-    for key in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
+    for key in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "UV_TORCH_BACKEND"):
         env.pop(key, None)
     env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", UV_NO_CONFIG="1",
                UV_PYTHON_INSTALL_DIR=str(runtime_root() / "python"),
@@ -139,31 +139,84 @@ def _locked(path: Path, control: JobControl | None):
         lock.release()
 
 
-def ensure_python_env(kind: str, *, control: JobControl | None = None, progress: Progress = None) -> Path:
-    root = runtime_root()
-    root.mkdir(parents=True, exist_ok=True)
-    assets = bootstrap_assets()
-    requirements = assets / f"{kind}.txt"
-    version = "2.2.2" if sys.platform == "darwin" and platform.machine() == "x86_64" else "2.5.1"
-    stamp = hashlib.sha256(requirements.read_bytes() + f"{version}|{torch_backend()}|v1".encode()).hexdigest()
-    python = managed_python(kind)
-    marker = managed_env(kind) / ".subflow-ready"
-    log = root / f"install-{kind}.log"
-    module = {
+def _torch_build(backend: str) -> tuple[str, str, list[str]]:
+    x86 = platform.machine().lower() in {"x86_64", "amd64"}
+    version = "2.2.2" if sys.platform == "darwin" and x86 else "2.5.1"
+    if sys.platform != "darwin" and x86:
+        wheel = "cu124" if backend == "cuda" else "cpu"
+        return version, f"{version}+{wheel}", ["--torch-backend", wheel]
+    return version, version, []
+
+
+def _runtime_probe(kind: str, version: str, backend: str) -> str:
+    modules = {
         "asr": "torch, torchaudio, whisper",
         "gptsovits": (
             "torch, torchaudio, fastapi, uvicorn, soundfile, numpy, librosa, yaml, "
             "onnxruntime, transformers, pyopenjtalk, jieba"
         ),
-        "whisperx": "torch, whisperx",
-    }[kind]
-    check = [str(python), "-c", f"import {module}"]
+        "whisperx": "torch, torchaudio, whisperx",
+    }
+    if kind not in modules:
+        raise ValueError(f"Unknown runtime: {kind}")
+    code = (
+        f"import {modules[kind]}\n"
+        f"expected = ({version!r}, {version!r})\n"
+        "actual = (str(torch.__version__), str(torchaudio.__version__))\n"
+        "if actual != expected:\n"
+        "    raise RuntimeError(f'PyTorch build mismatch: expected {expected}, got {actual}')\n"
+    )
+    if backend == "cuda":
+        code += (
+            "if torch.version.cuda != '12.4':\n"
+            "    raise RuntimeError('PyTorch CUDA 12.4 build is required')\n"
+        )
+    else:
+        code += (
+            "if torch.version.cuda is not None:\n"
+            "    raise RuntimeError('PyTorch CUDA build is not valid for this runtime')\n"
+        )
+    if backend == "mps":
+        code += (
+            "if not torch.backends.mps.is_built():\n"
+            "    raise RuntimeError('PyTorch MPS support was not built')\n"
+        )
+    return code
+
+
+def _ready_marker(marker: Path, stamp: str, control: JobControl | None) -> None:
+    pending = marker.with_name(marker.name + ".pending")
+    try:
+        if control:
+            control.wait_if_paused()
+        pending.write_text(stamp, encoding="utf-8")
+        if control:
+            control.wait_if_paused()
+        pending.replace(marker)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def ensure_python_env(kind: str, *, control: JobControl | None = None, progress: Progress = None) -> Path:
+    backend = torch_backend()
+    version, wheel_version, backend_args = _torch_build(backend)
+    probe = _runtime_probe(kind, wheel_version, backend)
+    root = runtime_root()
+    root.mkdir(parents=True, exist_ok=True)
+    requirements = bootstrap_assets() / f"{kind}.txt"
+    content = requirements.read_bytes()
+    stamp = hashlib.sha256(content + f"{wheel_version}|{backend}|v2".encode()).hexdigest()
+    legacy = hashlib.sha256(content + f"{version}|{backend}|v1".encode()).hexdigest()
+    python = managed_python(kind)
+    marker = managed_env(kind) / ".subflow-ready"
+    log = root / f"install-{kind}.log"
+    check = [str(python), "-c", probe]
     with _locked(root / f"{kind}.lock", control):
         repair = python.is_file()
-        if python.is_file() and marker.is_file() and marker.read_text(errors="replace") == stamp:
+        cached = marker.read_text(encoding="utf-8", errors="replace") if marker.is_file() else None
+        if python.is_file() and cached in {stamp, legacy}:
             try:
                 _run(check, log, control, timeout=90)
-                return python
             except JobStopped:
                 raise
             except (OSError, RuntimeError) as exc:
@@ -171,6 +224,10 @@ def ensure_python_env(kind: str, *, control: JobControl | None = None, progress:
                     raise RuntimeError("运行环境已损坏，自动安装已关闭（SUBFLOW_AUTO_INSTALL=0）") from exc
                 _progress(progress, "运行环境检查失败，正在修复依赖…")
                 repair = True
+            else:
+                if cached != stamp:
+                    _ready_marker(marker, stamp, control)
+                return python
         if not auto_install_enabled():
             raise RuntimeError("自动安装已关闭（SUBFLOW_AUTO_INSTALL=0）且运行环境尚未准备")
         uv = str(find_uv())
@@ -179,27 +236,22 @@ def ensure_python_env(kind: str, *, control: JobControl | None = None, progress:
         if not python.is_file() or repair:
             _run([uv, "python", "install", "3.11", "--no-bin", "--no-registry"], log, control)
             _run([uv, "venv", "--allow-existing", "--managed-python", "--python", "3.11", "--seed", str(python.parent.parent)], log, control)
-        _progress(progress, f"正在安装 {kind} 依赖（{torch_backend().upper()}），首次下载可能需要数分钟…")
-        torch_args = [uv, "pip", "install", "--python", str(python), f"torch=={version}", f"torchaudio=={version}"]
+        _progress(progress, f"正在安装 {kind} 依赖（{backend.upper()}），首次下载可能需要数分钟…")
+        torch_args = [uv, "pip", "install", "--python", str(python),
+                      f"torch=={wheel_version}", f"torchaudio=={wheel_version}", *backend_args]
         if repair:
             torch_args.append("--reinstall")
-        if sys.platform != "darwin" and platform.machine().lower() in {"x86_64", "amd64"}:
-            torch_args.extend(["--index-url", "https://download.pytorch.org/whl/" + ("cu124" if torch_backend() == "cuda" else "cpu")])
         _run(torch_args, log, control)
-        constraints = root / f"torch-{version}.txt"
-        constraints.write_text(f"torch=={version}\ntorchaudio=={version}\n", encoding="utf-8")
-        args = [uv, "pip", "install", "--python", str(python), "-r", str(requirements)]
+        # Each environment owns its constraints under the same installation lock.
+        constraints = python.parent.parent / ".subflow-torch-constraints.txt"
+        constraints.write_text(f"torch=={wheel_version}\ntorchaudio=={wheel_version}\n", encoding="utf-8")
+        args = [uv, "pip", "install", "--python", str(python), "-r", str(requirements), *backend_args]
         if repair:
             args.append("--reinstall")
         args += ["-c", str(constraints)]
         _run(args, log, control)
         _run(check, log, control, timeout=90)
-        pending_marker = marker.with_name(marker.name + ".pending")
-        try:
-            pending_marker.write_text(stamp, encoding="utf-8")
-            pending_marker.replace(marker)
-        finally:
-            pending_marker.unlink(missing_ok=True)
+        _ready_marker(marker, stamp, control)
     return python
 
 

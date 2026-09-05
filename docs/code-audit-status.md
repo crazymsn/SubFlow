@@ -2,6 +2,21 @@
 
 目标保持为审核完整项目、修复发现的问题并验证实际行为。本记录不将已通过的测试等同于“全部代码没有问题”。
 
+## 1.3.29：环境修复保持 PyTorch 构建
+
+- 实际 uv 0.11.8 只读预演确认：按旧方式通过通用源全量重装，会将现有 torch / torchaudio `2.5.1+cu124` 换为 `2.5.1`。仅约束基础版本不能保持加速后端。旧代码六个回归用例失败，覆盖两阶段安装约束、错误构建探测和旧环境迁移。
+- Windows / Linux x86_64 的两阶段安装都使用明确的 `--torch-backend cpu` 或 `cu124`，并固定完整本地构建版本。Mac 使用原生包，Apple Silicon 为 2.5.1、Intel 为 2.2.2。该选源方式依据 [uv 官方 PyTorch 集成说明](https://docs.astral.sh/uv/guides/integration/pytorch/)，并通过项目固定版本 uv 0.11.8 实际验证。
+- 环境探测除导入模块外，还核对 torch / torchaudio 版本、CUDA 构建版本，以及 MPS 是否编译进 PyTorch。探测不要求当前机器有可用 GPU；实际设备可用性仍由推理时判断。健康旧环境完成探测后只更新准备标记，错误构建才进入修复。
+- 每个环境在自身安装锁下保存约束文件，消除不同运行环境同时写同一约束文件的情况；清除继承的 UV_TORCH_BACKEND，采用应用明确选择的后端。
+
+34 项定向测试、Ruff 与 mypy（81 个源码文件）通过。ASR 与 GPT-SoVITS 的 Linux CPU、Mac arm64、Mac Intel 共六组依赖解析通过，选择了预期的 PyTorch 版本；Linux CPU 解析未引入 nvidia-* CUDA 运行库包。现有 CUDA 环境通过实际 GPT-SoVITS 导入和构建探测，按 CPU 构建要求检查同一环境时被正确拒绝；验证没有修改已有环境。Mac 解析不等于实机安装或 GPU 推理验收。
+
+证据为 `.verify/torch-repair-old-resolver.log`、`.verify/torch-repair-cu124-resolver.log`、`.verify/torch-build-live-acceptance.json`，以及 `.verify/torch-*-resolved.txt` / `.verify/sovits-*-resolved.txt`。M1 MacBook Air 实机 GPU 与实际试听仍由用户最后自行验收。
+
+首轮全量回归发现生命周期测试的 PID 通知竞态：测试收到文件创建后立即关闭子进程，PID 可能尚未写入。测试夹具现完整写入临时文件后原子发布，保留对子孙进程实际退出的检查；9 项生命周期测试通过。该失败证据为 `.verify/torch-build-full.log`。
+
+修复后的最终全量回归 **893 项通过、1 项跳过**，核心覆盖率 **91.33%**；Ruff 与 mypy（81 个源码文件）通过。全量证据为 `.verify/torch-build-full-final.log`。测试环境为隔离的 FastAPI 0.141.1 / Starlette 1.6.0，仍有两条既有 Pillow 弃用提示。
+
 ## 1.3.28 补充验收：真实进程异常退出
 
 新增独立子进程测试，在识别文件写完但阶段记录未提交、外部 ASS 已替换但工作 ASS 尚未替换、完成报告已替换但 done 状态尚未替换这三个位置执行 `os._exit(77)`，确保跳过 finally 清理。三个场景均通过：
@@ -13,6 +28,8 @@
 本轮尚未发现这些边界上的运行代码缺陷，新增测试已纳入常规 pytest 收集。识别、音频提取和视频探测使用固定夹具，文件提交、进程退出、操作系统锁及恢复流程为实际执行。它验证进程退出后的恢复，不代表断电时的磁盘持久性，也不宣称多个文件在崩溃瞬间已经整体原子提交。定向证据为 `.verify/process-crash-recovery.log`。
 
 新增用例后的全量回归 **880 项通过、1 项跳过**，核心覆盖率 **91.33%**，Ruff 通过。运行代码和版本仍为 1.3.28；此轮提交用于补充跨平台持续集成验收。全量证据为 `.verify/process-crash-full.log`。
+
+[补充验收 GitHub Actions](https://github.com/crazymsn/SubFlow/actions/runs/33989381706) 的 Windows、Mac arm64、Mac Intel 和 Docker 四项构建已全部通过；三个客户端的 pytest 包含新增的真实进程崩溃恢复场景。
 
 ## 1.3.28：完成记录保存失败与取消
 
