@@ -11,6 +11,7 @@ services:
       SUBFLOW_API_KEY: ${SUBFLOW_API_KEY:-}
       SUBFLOW_TRANSLATE_MODEL: ${SUBFLOW_TRANSLATE_MODEL:-}
       SUBFLOW_GPTSOVITS_DEVICE: cpu
+      SUBFLOW_LOCK_DIR: /root/.cache/bilingual-sub/resource-locks
       HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
     volumes:
       - ./data:/data

@@ -8,6 +8,11 @@ from bilingual_sub.i18n import set_locale
 
 
 @pytest.fixture(autouse=True)
+def _isolate_resource_claims(tmp_path_factory, monkeypatch):
+    monkeypatch.setenv("SUBFLOW_LOCK_DIR", str(tmp_path_factory.mktemp("resource-claims")))
+
+
+@pytest.fixture(autouse=True)
 def _reset_ui_locale():
     set_locale("zh-Hans")
     yield

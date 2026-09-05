@@ -148,7 +148,8 @@ def test_cached_movie_export_cancels_before_replacing_existing_movie(tmp_path, m
                 self.stop()
             super().wait_if_paused()
     with pytest.raises(JobStopped):
-        p._copy_or_burn(cfg, tmp_path, AppSettings(), {"output_mp4": str(previous)},
+        p._copy_or_burn(cfg, tmp_path, AppSettings(), {"output_mp4": str(previous),
+                        "output_video_sha256": p.file_digest(previous)},
                         control=CancelDuringCopy())
     assert destination.read_bytes() == b"complete old movie"
     assert not list(tmp_path.glob(".subflow-output-*.tmp"))

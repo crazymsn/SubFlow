@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import stat
@@ -38,6 +39,25 @@ def staged_path(destination: Path) -> Iterator[Path]:
 def _check(checkpoint: Checkpoint) -> None:
     if checkpoint:
         checkpoint()
+
+
+def file_digest(path: Path, *, checkpoint: Checkpoint = None) -> str:
+    """Hash all content without loading a video into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        before = os.fstat(stream.fileno())
+        while True:
+            _check(checkpoint)
+            block = stream.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+        after = path.stat()
+        if (before.st_size, before.st_mtime_ns, before.st_ino) != (
+            after.st_size, after.st_mtime_ns, after.st_ino
+        ):
+            raise OSError(f"校验时文件发生变化，请重试：{path}")
+    return digest.hexdigest()
 
 
 def copy_file(source: Path, destination: Path, *, checkpoint: Checkpoint = None) -> None:

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
+from bilingual_sub.core.file_io import copy_file
 from bilingual_sub.core.langs import output_stem_suffix, output_stem_suffixes
+from bilingual_sub.core.resource_claims import claim_resources
 
 DEFAULT_STEM_SUFFIX = "-中英字幕"
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".m4v", ".webm"}
@@ -111,11 +112,13 @@ def resolve_dub_sidecar(output_video: Path | None, output_srt: Path) -> Path:
 
 
 def _copy_if_needed(src: Path | None, dest: Path) -> Path | None:
-    if src is None or not src.is_file():
+    if src is None:
         return None
+    if not src.is_file():
+        raise FileNotFoundError(f"需要复制的成品文件已不存在：{src}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.resolve() != dest.resolve():
-        shutil.copy2(src, dest)
+        copy_file(src, dest)
     return dest
 
 
@@ -133,26 +136,22 @@ def copy_finished_outputs(
 
     plan = [("mp4", src_mp4, dest_mp4), ("srt", src_srt, sidecar_srt(dest_mp4)),
             ("ass", src_ass, sidecar_ass(dest_mp4)), ("dub", src_dub, sidecar_dub(dest_mp4))]
-    active = [(kind, src, dest) for kind, src, dest in plan if src is not None and src.is_file()]
+    active = [(kind, src, dest) for kind, src, dest in plan if src is not None]
     validate_outputs({kind: dest for kind, src, dest in active}, list(protected_inputs))
     for kind, src, dest in active:
         for other_kind, other_src, _ in active:
             if kind != other_kind and same_file(dest, other_src):
                 raise ValueError(f"{kind}输出路径会覆盖已有{other_kind}文件：{dest}")
-    dest_mp4.parent.mkdir(parents=True, exist_ok=True)
     copied: dict[str, Path] = {}
-    mp4 = _copy_if_needed(src_mp4, dest_mp4)
-    if mp4 is not None:
-        copied["mp4"] = mp4
-    srt = _copy_if_needed(src_srt, sidecar_srt(dest_mp4))
-    if srt is not None:
-        copied["srt"] = srt
-    ass = _copy_if_needed(src_ass, sidecar_ass(dest_mp4))
-    if ass is not None:
-        copied["ass"] = ass
-    dub = _copy_if_needed(src_dub, sidecar_dub(dest_mp4))
-    if dub is not None:
-        copied["dub"] = dub
+    with claim_resources(reads=[src for _, src, _ in active] + list(protected_inputs),
+                         writes=[dest for _, _, dest in active]):
+        for _, src, _ in active:
+            if not src.is_file():
+                raise FileNotFoundError(f"需要复制的成品文件已不存在：{src}")
+        for kind, src, dest in active:
+            result = _copy_if_needed(src, dest)
+            if result is not None:
+                copied[kind] = result
     return copied
 
 

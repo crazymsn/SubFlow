@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from bilingual_sub.config import AppSettings
+from bilingual_sub.core.file_io import file_digest
 from bilingual_sub.core.job_profile import processing_profile, render_profile
 from bilingual_sub.models import JobConfig
 from bilingual_sub.pipeline import artifact_key, run, video_fingerprint
@@ -30,6 +31,7 @@ def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, transla
                 "duration_sec": 1.2,
                 "play_res": [1280, 720],
                 "output_mp4": str(prev_mp4),
+                "output_video_sha256": file_digest(prev_mp4),
                 "missing_en_count": 0,
                 "missing_en_samples": [],
                 "translate_cache_hits": 3,

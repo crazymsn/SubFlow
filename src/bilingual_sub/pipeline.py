@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -28,7 +29,7 @@ from bilingual_sub.core.burn import burn_subtitles
 from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.cues import build_cues
 from bilingual_sub.core.dub import dub_cues
-from bilingual_sub.core.file_io import copy_file
+from bilingual_sub.core.file_io import copy_file, file_digest
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.core.glossary_ai import extract_glossary
 from bilingual_sub.core.job_profile import processing_profile, render_profile
@@ -62,6 +63,7 @@ from bilingual_sub.core.render import (
     save_cues_json,
     write_subtitles,
 )
+from bilingual_sub.core.resource_claims import claim_resources
 from bilingual_sub.core.translate import (
     fill_translated_languages,
     translate_cues,
@@ -499,9 +501,13 @@ def _copy_or_burn(
     prev = Path(str(report["output_mp4"])) if report.get("output_mp4") else None
     style_same = _style_same(report, config, settings)
     if prev and prev.is_file() and style_same and not report.get("dubbed"):
-        if prev.resolve() != dest.resolve():
-            copy_file(prev, dest, checkpoint=lambda: _gate(control))
-        return dest
+        saved = report.get("output_video_sha256")
+        if isinstance(saved, str) and len(saved) == 64 and saved == file_digest(
+            prev, checkpoint=lambda: _gate(control)
+        ):
+            if prev.resolve() != dest.resolve():
+                copy_file(prev, dest, checkpoint=lambda: _gate(control))
+            return dest
     ass_path = work / "subs.ass"
     source = work / "source.mp4"
     if not source.is_file():
@@ -542,6 +548,7 @@ def _result_from_work(
     stages: dict[str, float],
     elapsed: float,
     reused: bool,
+    control: JobControl | None = None,
 ) -> JobResult:
     missing = list(report.get("missing_en_samples") or [])
     payload: dict = {
@@ -560,6 +567,8 @@ def _result_from_work(
         "work_dir": str(work),
         "play_res": report.get("play_res") or [2560, 1600],
         "output_mp4": str(output_mp4) if output_mp4 else None,
+        "output_video_sha256": (file_digest(output_mp4, checkpoint=lambda: _gate(control))
+                                if output_mp4 else None),
         "output_dub": str(output_dub) if output_dub else None,
         "output_srt": str(config.output_srt),
         "input_fingerprint": video_fingerprint(config.input_video),
@@ -669,6 +678,7 @@ def _reexport_if_possible(
         stages=stages,
         elapsed=time.time() - t0,
         reused=True,
+        control=control,
     )
 
 
@@ -748,12 +758,14 @@ def run(
     on_progress: ProgressCb = None,
     control: JobControl | None = None,
 ) -> JobResult:
+    # A caller/UI edit must not redirect a running job outside its reservations.
+    config = copy.deepcopy(config)
     if config.resume_from and config.resume_from not in STAGES:
         raise ValueError(f"未知恢复阶段：{config.resume_from}")
     _gate(control)
     _validate_output_paths(config)
     setup_logging(api_key=get_api_key())
-    settings = settings or load_settings()
+    settings = copy.deepcopy(settings or load_settings())
     t0 = time.time()
 
     work = _work_dir(config, settings)
@@ -765,7 +777,31 @@ def run(
         raise RuntimeError(f"工作目录正在被另一任务使用：{work}；请等待该任务结束或选择其他目录") from exc
     try:
         _gate(control)
-        return _run_in_work(config, settings, work, on_progress, control, t0)
+        from bilingual_sub.gui.output_path import resolve_dub_sidecar
+
+        reads = [config.input_video] if not config.source_url else []
+        if not config.resume_from and _auto_work_dir(config) and config.burn:
+            previous = _load_json(work / "report.json").get("output_mp4")
+            if isinstance(previous, str) and previous:
+                reads.append(Path(previous))
+        if config.glossary_path:
+            reads.append(config.glossary_path)
+        if config.tts_ref_audio:
+            reads.append(Path(config.tts_ref_audio))
+        writes = [config.output_srt, config.output_srt.with_suffix(".ass")]
+        writes.append((config.output_video or config.output_srt.with_suffix(".mp4"))
+                      if config.burn else resolve_dub_sidecar(config.output_video, config.output_srt))
+        # The tree covers dynamic scratch files; explicit paths also identify
+        # existing hardlinks to important work artifacts outside this directory.
+        writes.extend(work / name for name in (
+            "source.mp4", "speech.wav", "transcript.json", "silences.json", "subs.ass",
+            "cues.zh.json", "cues.source.json", "cues.bilingual.json", "cues.fitted.json",
+            "report.json", "job_state.json", "job_input.json", "burned.mp4", "dubbed.mp4",
+            "sovits_ref.wav", "glossary.generated.yaml", "glossary.merged.yaml",
+        ))
+        with claim_resources(reads=reads, writes=writes, trees=[work],
+                             checkpoint=lambda: _gate(control)):
+            return _run_in_work(config, settings, work, on_progress, control, t0)
     finally:
         lock.release()
 
@@ -1330,6 +1366,8 @@ def _run_job(
         "work_dir": str(work),
         "play_res": list(play_res),
         "output_mp4": str(output_mp4) if output_mp4 else None,
+        "output_video_sha256": (file_digest(output_mp4, checkpoint=lambda: _gate(control))
+                                if output_mp4 else None),
         "output_srt": str(srt_out),
         "input_fingerprint": video_fingerprint(config.input_video),
         "whisper_model": config.whisper_model,

@@ -4,7 +4,7 @@
 
 深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
-当前源码版本 **1.3.12**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
+当前源码版本 **1.3.13**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
 
 Apple Silicon 实机验收请参照 [M1 MacBook Air 测试清单](docs/mac-self-test.md)。
 
@@ -96,6 +96,8 @@ docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp
 ```
 
 输入输出位于 `./data`，模型使用命名卷持久缓存。首次跨语种配音会自动下载模型；重复运行无需重装。旧 Docker Hub 镜像不代表本次源码构建。
+
+同一 Compose 项目的容器共用文件占用登记，避免两个任务同时写同一输出，或覆盖另一任务正在读取的文件。原生客户端默认使用当前用户的缓存目录。自定义多个部署共享输入输出时，应让它们使用同一 `SUBFLOW_LOCK_DIR`、相同的文件路径映射和支持文件锁的存储；不要把登记目录放进任务工作目录。
 
 ## 流水线
 
