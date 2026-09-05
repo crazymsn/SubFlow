@@ -12,7 +12,9 @@
 
 21 项定向测试通过，包含 5000 个静音区间完整保留、父进程正常 / 非零退出后后代回收、回调错误、取消、UTF-8 分块、超长行拒绝及 stdout 完整性。16 MiB stderr 的 tracemalloc 检查确认 Python 跟踪到的峰值分配低于 6 MiB。该界限针对诊断捕获，不是整个应用、子进程 RSS 或最终 stdout 结果的内存上限。证据为 `.verify/ffmpeg-capture-final-targeted.log`；Ruff 和 mypy（83 个源码文件）通过。
 
-最终全量回归 **979 项通过、1 项跳过**，核心覆盖率 **91.31%**（2313 条语句）；证据为 `.verify/ffmpeg-capture-full.log`，耗时 176.64 秒，仍有两条既有 Pillow 弃用提示。对应提交的客户端与 Docker 构建另行验证；M1 GPU 与试听验收仍由用户最后自行执行。
+最终全量回归 **979 项通过、1 项跳过**，核心覆盖率 **91.31%**（2313 条语句）；证据为 `.verify/ffmpeg-capture-full.log`，耗时 176.64 秒，仍有两条既有 Pillow 弃用提示。[对应提交的 GitHub Actions](https://github.com/crazymsn/SubFlow/actions/runs/33992811131) 已成功，Windows、Mac arm64、Mac Intel 与 Docker 四项构建全部通过；publish 因非标签构建跳过，不表示已经发布 Release。
+
+2026-09-06 又对该提交完成真实 CPU 媒体验收：中文到简体 / 繁体均不调用翻译或配音，实际识别、烧录及完成阶段恢复通过；纯 CPU GPT-SoVITS 成功合成英文并混入视频，重复运行仅合成一次，测试服务完整退出。详细数值、产物和测试边界见 [1.3.34 CPU 验收记录](cpu-media-qa-1.3.34.md)。M1 GPU 与试听验收仍由用户最后自行执行。
 
 ## 1.3.33：Whisper 识别环境选择和异常边界
 
