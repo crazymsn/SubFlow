@@ -4,10 +4,14 @@ from __future__ import annotations
 import os
 import re
 import signal
+import sys
 import uuid
 from collections.abc import Callable
 
 import psutil
+
+if sys.platform == "win32":
+    raise ImportError("POSIX task scopes are unavailable on Windows")
 
 SCOPE_ENV = "SUBFLOW_POSIX_SCOPES"
 

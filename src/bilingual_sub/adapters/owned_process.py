@@ -32,6 +32,8 @@ def _signal_owned_group(pid: int, sig: int) -> None:
 
 
 def _kill_owned_group(pid: int) -> None:
+    if sys.platform == "win32":
+        raise NotImplementedError("POSIX process groups are unavailable on Windows")
     _signal_owned_group(pid, signal.SIGKILL)
 
 
@@ -108,13 +110,13 @@ def owned_process(args: list[str], **kwargs):
             psutil.Process(proc.pid).resume()
         elif scope:
             scope.bind(proc.pid)
-            proc._subflow_posix_scope = scope
+            setattr(proc, "_subflow_posix_scope", scope)
         yield proc
     finally:
         try:
             if job:
                 job.close()
-            elif proc is not None and scope is not None:
+            elif sys.platform != "win32" and proc is not None and scope is not None:
                 scope.signal(signal.SIGKILL)
         finally:
             if proc is not None:
