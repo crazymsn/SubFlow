@@ -1,16 +1,19 @@
 """Real FFmpeg acceptance for long timelines, overlaps and trailing silence."""
 import array
 import math
+import threading
 import wave
 from pathlib import Path
 
 import pytest
 
 from bilingual_sub.adapters.ffmpeg import find_ffmpeg, probe_video, run_cmd
+from bilingual_sub.core.control import JobControl
 from bilingual_sub.core.dub import mix_timeline
 
 
-def test_many_clips_preserve_offsets_overlap_and_full_duration(tmp_path):
+@pytest.mark.parametrize("repeat", range(6))
+def test_many_clips_preserve_offsets_overlap_and_full_duration(tmp_path, repeat):
     ffmpeg = find_ffmpeg()
     video = tmp_path / "中文源视频.mp4"
     run_cmd([ffmpeg, "-y", "-f", "lavfi", "-i", "color=s=160x90:r=25:d=5",
@@ -26,7 +29,13 @@ def test_many_clips_preserve_offsets_overlap_and_full_duration(tmp_path):
     # 25 simultaneous clips cross a batch boundary; all start at 1 second.
     clips = [(1.0, clip)] * 25 + [(2.0, clip)] * 24 + [(3.0, clip)] * 24
     out = tmp_path / "配音成片.mp4"
-    mix_timeline(video, clips, out, 5)
+    control = JobControl()
+    deadline = threading.Timer(30, control.stop)
+    deadline.start()
+    try:
+        mix_timeline(video, clips, out, 5, control=control)
+    finally:
+        deadline.cancel()
     assert float(probe_video(out)["duration"]) == pytest.approx(5, abs=0.05)
     decoded = tmp_path / "decoded.wav"
     run_cmd([ffmpeg, "-y", "-i", str(out), "-vn", "-ac", "1", "-ar", "48000", str(decoded)])

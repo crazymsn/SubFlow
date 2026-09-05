@@ -2,6 +2,24 @@
 
 目标保持为审核完整项目、修复发现的问题并验证实际行为。本记录不将已通过的测试等同于“全部代码没有问题”。
 
+## 1.3.33：Whisper 识别环境选择和异常边界
+
+九项旧代码用例复现：主程序能导入 Whisper 时绕过 MPS managed 环境及显式解释器；已缓存解释器只做 Whisper 导入检查便执行；准备失败 / 取消路径可能根本未触发；指定无效解释器仍尝试其他环境；推理内部的 ImportError 被整体捕获并在外部环境重新识别。旧代码证据为 `.verify/whisper-selection-before.log`。
+
+默认自动 MPS 识别先调用共享准备入口，核验架构、PyTorch 构建和依赖后使用外部进程。显式解释器优先于主程序 Whisper，两个变量按非空值顺序选择，路径展开并绝对化；无效指定不再默默替换。CPU 源码运行保留原有进程内支持，但异常捕获仅限模块导入，不吞掉推理阶段的 ImportError。
+
+53 项定向测试通过。除选择和错误传播单元测试，还实际启动独立 Python 工作者验证 MPS / 显式路径分派、结果提交、取消保留旧结果和临时目录清理；模型计算与环境安装在测试边界使用固定夹具，不将其表述为 Apple GPU 或神经网络识别实测。证据为 `.verify/whisper-selection-final-targeted.log`。Ruff 与 mypy（82 个源码文件）通过。
+
+首轮全量回归发现另一项实际缺陷：5 秒、73 段配音混合在 FFmpeg 8.1.1 上持续编码近 3 分钟，输出由约 14 MB 增长至 15 MB；日志重复报告接近负 2^63 的无效 DTS。已保存输入、滤镜、两个时间点的进程及输出信息后停止该测试子进程，让回归记录失败；没有因观察超时直接重启测试。
+
+使用保存的相同输入重复比较：原始无限 apad 加时间裁剪 20 次中 8 次超时；仅添加 whole_dur 时长约束 20 次中 4 次音轨只有约 3.115 秒。最终改为按 48 kHz 采样数补齐及裁剪，并用 N/SR/TB 重建输出时间戳，20 次均通过 5 秒音轨长度、三处声音位置和五处静音检查。证据为 `.verify/ffmpeg-hang/snapshot.json`、`repeated-results.json` 及同目录固定输入。该比较揭示异常时间戳路径，不据此宣称上游具体内部实现的根因。
+
+常规混音验收现重复六次，并设置可取消的 30 秒测试期限，防止再次卡死整套测试。22 项混音及识别提示回归通过，另两项实际子进程测试确认 FFmpeg 异常文本保留末尾 8192 字符；这限制异常展示大小，不代表底层 stdout/stderr 捕获内存已有同样上限。处理修订改为 `bounded-dub-samples-v14`，避免复用旧的异常成片。首轮全量还发现识别提示丢失包名的既有断言，提示已保留 openai-whisper 名称。首轮结果为 959 项通过、2 项失败、1 项跳过，后续全量另行验收。
+
+首轮重复错误日志已压缩为 `.verify/whisper-selection-full.log.gz`，压缩前后通过 SHA-256 校验；摘要及大小记录在 `.verify/whisper-selection-first-log.json`，避免保留约 617 MB 的未压缩重复日志。
+
+修复后最终全量回归 **968 项通过、1 项跳过**，核心覆盖率 **91.38%**（2309 条语句）；Ruff 与 mypy（82 个源码文件）通过。证据为 `.verify/whisper-bounded-mix-full-final.log`，耗时 175.25 秒，仍有两条既有 Pillow 弃用提示。对应提交的跨平台构建另行验收，M1 实机 GPU 和试听仍由用户最后执行。
+
 ## 1.3.32：MPS 配音启动使用受管理环境
 
 六个旧代码回归用例复现：缓存目录中的旧 venv 优先于已准备的 managed MPS 解释器；缺少 managed 解释器或导入失败时继续选择旧环境 / 系统 Python；源码发现依据资源完整度选择其他 GPT-SoVITS，可能跳过项目内适配和缓存修复。旧代码证据为 `.verify/sovits-mps-selection-before.log`。
@@ -11,6 +29,8 @@
 63 项定向测试通过，包括选择顺序、缺失与损坏环境、启动前验证失败、Intel 架构拒绝，以及现有服务进程生命周期检查；Ruff 与 mypy（82 个源码文件）通过。显式 HOME / PYTHON 覆盖、关闭自动安装及 CPU 模式保留既有手动兼容路径。选择测试模拟 MPS 平台及文件布局，不代表已运行 Apple GPU；真实 M1 GPU 和试听仍由用户最后自行验收。定向证据为 `.verify/sovits-mps-selection-final-targeted.log`。
 
 最终全量回归 **946 项通过、1 项跳过**，核心覆盖率 **91.38%**；全量证据为 `.verify/sovits-mps-selection-full.log`，耗时 165.09 秒，仍有两条既有 Pillow 弃用提示。跨平台打包与依赖准备由本次提交的 GitHub Actions 再验证。
+
+[1.3.32 GitHub Actions](https://github.com/crazymsn/SubFlow/actions/runs/33991544539) 的 Windows、Mac arm64、Mac Intel 和 Docker 四项构建全部通过。
 
 ## 1.3.31：统一社区源码安装入口
 

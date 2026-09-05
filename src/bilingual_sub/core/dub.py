@@ -138,7 +138,10 @@ def _mix_group(video, clips, output, duration, graph, control):
         names.append(f"[{label}]")
     mix = "".join(names) + f"amix=inputs={len(clips)}:normalize=0"
     if video is not None:
-        mix += f",apad,atrim=duration={duration:.6f}"
+        # Bound silence by samples and rebuild timestamps after mixed-input EOF.
+        # Time-only trimming of unbounded apad can hang or truncate on FFmpeg 8.1.
+        samples = max(1, round(duration * 48000))
+        mix += f",apad=whole_len={samples},atrim=end_sample={samples},asetpts=N/SR/TB"
     mix += "[aout]"
     filters.append(mix)
     graph.write_text(";".join(filters), encoding="utf-8")

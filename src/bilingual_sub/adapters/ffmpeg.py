@@ -81,7 +81,7 @@ def run_cmd(args: list[str], *, check: bool = True, control=None,
             **hidden_run_kwargs(),
         )
         if check and proc.returncode != 0:
-            raise FfmpegError(proc.stderr.strip() or proc.stdout.strip() or "ffmpeg failed")
+            raise FfmpegError((proc.stderr.strip() or proc.stdout.strip() or "ffmpeg failed")[-8192:])
         return proc
 
     control.check()
@@ -98,7 +98,7 @@ def run_cmd(args: list[str], *, check: bool = True, control=None,
     out, err = control.run_attached(popen)
     code = 0 if popen.returncode is None else popen.returncode
     if check and code != 0:
-        raise FfmpegError((err or "").strip() or (out or "").strip() or "ffmpeg failed")
+        raise FfmpegError(((err or "").strip() or (out or "").strip() or "ffmpeg failed")[-8192:])
     return subprocess.CompletedProcess(args, code, out, err)
 
 

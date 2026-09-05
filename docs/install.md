@@ -22,6 +22,8 @@ Mac 解压后将 SubFlow.app 放入应用程序目录。当前构建没有 Apple
 
 默认自动 MPS 配音使用项目源码和受管理的原生解释器。新建服务前检查缓存环境，旧 venv 或电脑上的其他 GPT-SoVITS 不会代替它；环境检查或修复失败会显示错误。显式设置 `SUBFLOW_GPTSOVITS_HOME` / `SUBFLOW_GPTSOVITS_PYTHON`，或关闭自动安装时，仍按手动整合包设置处理。已经运行的兼容 API 服务仍可连接，实际计算设备需查看服务报告。
 
+默认自动 MPS 识别也在每次任务前核验受管理环境，使用外部识别进程，避免主程序已有的 Whisper 或旧缓存绕过原生环境检查。识别解释器可用 `SUBFLOW_PYTHON` 显式指定，也兼容 `SUBFLOW_WHISPER_PYTHON`；前者非空时优先。显式路径无效或不能导入 Whisper 时会报错，需修正或清除该设置后再使用自动环境。
+
 WhisperX / CTranslate2 不支持 MPS，选择它时识别会使用 CPU；需要 Apple GPU 请使用默认 Whisper 引擎。Mac 上的 Linux Docker 容器不提供原生 MPS，本项目 Compose 保持 CPU 模式。Apple GPU 加速请使用原生客户端。
 
 源码用户可运行 `subflow run in.mp4 --device mps`。依赖及 GPU 运算检查：

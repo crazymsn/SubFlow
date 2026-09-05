@@ -36,10 +36,9 @@ def _whisper_language(language: str | None) -> str | None:
     return language
 
 MISSING_WHISPER_MSG = (
-    "未找到可用的 Whisper 识别环境。客户端不内置 Torch。\n"
-    "请任选其一：\n"
-    "1. 在本机 Python 安装：pip install openai-whisper torch\n"
-    "2. 设置环境变量 SUBFLOW_PYTHON，指向已安装 Whisper 的 python.exe"
+    "未找到可用的 Whisper 识别环境。请开启自动安装后重试；\n"
+    "源码运行可执行 python scripts/prepare-runtime.py asr，\n"
+    "或设置 SUBFLOW_PYTHON 指向已安装 Whisper（openai-whisper）的 Python 解释器。"
 )
 
 
@@ -138,6 +137,20 @@ def _cache_path() -> Path:
     return root / "whisper-python.txt"
 
 
+def _explicit_whisper_python() -> str | None:
+    for key in ("SUBFLOW_PYTHON", "SUBFLOW_WHISPER_PYTHON"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _automatic_mps_asr() -> bool:
+    from bilingual_sub.adapters.runtime_bootstrap import auto_install_enabled, torch_backend
+
+    return not _explicit_whisper_python() and auto_install_enabled() and torch_backend() == "mps"
+
+
 def _python_candidates() -> list[Path]:
     found: list[Path] = []
     seen: set[str] = set()
@@ -152,7 +165,7 @@ def _python_candidates() -> list[Path]:
         seen.add(key)
         found.append(p)
 
-    add(os.environ.get("SUBFLOW_PYTHON") or os.environ.get("SUBFLOW_WHISPER_PYTHON"))
+    add(_explicit_whisper_python())
     from bilingual_sub.adapters.runtime_bootstrap import managed_python
 
     add(managed_python("asr"))
@@ -216,16 +229,14 @@ def _python_has_whisper(python: Path) -> bool:
 
 
 def find_whisper_python() -> Path | None:
-    from bilingual_sub.adapters.runtime_bootstrap import (
-        auto_install_enabled,
-        managed_python,
-        torch_backend,
-    )
+    from bilingual_sub.adapters.runtime_bootstrap import managed_python
 
-    explicit = os.environ.get("SUBFLOW_PYTHON") or os.environ.get("SUBFLOW_WHISPER_PYTHON")
+    explicit = _explicit_whisper_python()
     # An Intel interpreter cached by an older app can run under Rosetta but
     # cannot use Apple GPU. Prepare the native managed environment on upgrade.
-    if torch_backend() == "mps" and auto_install_enabled() and not explicit:
+    if explicit:
+        candidates = [Path(explicit).expanduser().resolve()]
+    elif _automatic_mps_asr():
         candidates = [managed_python("asr")]
     else:
         candidates = _python_candidates()
@@ -342,45 +353,39 @@ def transcribe(
 ) -> list[Segment]:
     if control:
         control.wait_if_paused()
-    try:
-        import whisper  # noqa: F401
+    from bilingual_sub.adapters.runtime_bootstrap import auto_install_enabled, ensure_python_env
 
-        if on_progress:
-            on_progress("transcribe", 0.22)
-        result = _transcribe_inprocess(
-            wav,
-            model_name=model_name,
-            language=language,
-            device=device,
-            out_json=out_json,
-            control=control,
-        )
-        if control:
-            control.check()
-        return result
-    except ImportError:
-        python = find_whisper_python()
-        if python is None:
-            from bilingual_sub.adapters.runtime_bootstrap import (
-                auto_install_enabled,
-                ensure_python_env,
+    explicit = _explicit_whisper_python()
+    managed_mps = _automatic_mps_asr()
+    if not explicit and not managed_mps:
+        try:
+            import whisper  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            if on_progress:
+                on_progress("transcribe", 0.22)
+            result = _transcribe_inprocess(
+                wav, model_name=model_name, language=language, device=device,
+                out_json=out_json, control=control,
             )
-
-            if not auto_install_enabled():
-                raise RuntimeError(MISSING_WHISPER_MSG) from None
-            python = ensure_python_env("asr", control=control,
-                progress=lambda message: on_progress(message, 0.20) if on_progress else None)
-        target = out_json or (wav.with_name(wav.stem + ".transcript.json"))
-        return _transcribe_external(
-            python,
-            wav,
-            model_name=model_name,
-            language=language,
-            device=device,
-            out_json=target,
-            on_progress=on_progress,
-            control=control,
-        )
+            if control:
+                control.check()
+            return result
+    # A native MPS cache needs the full architecture/build probe before each job.
+    python = None if managed_mps else find_whisper_python()
+    if python is None:
+        if explicit:
+            raise RuntimeError("指定的 Whisper 解释器不可用，请检查 SUBFLOW_PYTHON / SUBFLOW_WHISPER_PYTHON 及其 Whisper 依赖")
+        if not auto_install_enabled():
+            raise RuntimeError(MISSING_WHISPER_MSG) from None
+        python = ensure_python_env("asr", control=control,
+            progress=lambda message: on_progress(message, 0.20) if on_progress else None)
+    target = out_json or (wav.with_name(wav.stem + ".transcript.json"))
+    return _transcribe_external(
+        python, wav, model_name=model_name, language=language, device=device,
+        out_json=target, on_progress=on_progress, control=control,
+    )
 
 
 def _segments_from_payload(data: dict) -> list[Segment]:
