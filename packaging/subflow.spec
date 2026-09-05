@@ -98,6 +98,13 @@ try:
     occ_datas, occ_bins, occ_hidden = collect_all("opencc")
     datas += occ_datas
     hidden += occ_hidden
+    try:
+        mm_datas, mm_bins, mm_hidden = collect_all("PySide6.QtMultimedia")
+        datas += mm_datas
+        occ_bins += mm_bins
+        hidden += mm_hidden
+    except Exception:
+        pass
 except Exception:
     pass
 

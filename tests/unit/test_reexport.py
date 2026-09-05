@@ -203,3 +203,29 @@ def test_english_in_chinese_field_blocks_bilingual_reuse(tmp_path: Path, video: 
         encoding="utf-8",
     )
     assert _can_reexport(cfg, work) is False
+
+
+def test_english_target_without_dubbed_file_blocks_reuse(tmp_path: Path, video: Path):
+    from bilingual_sub.pipeline import _can_reexport
+
+    cfg = JobConfig(
+        input_video=video,
+        output_video=tmp_path / "a.mp4",
+        output_srt=tmp_path / "a.srt",
+        work_dir=Path("auto"),
+        whisper_model="medium",
+        translate_model="gpt-4o-mini",
+        burn=True,
+        source_lang="zh",
+        target_lang="en",
+        subtitle_mode="bilingual",
+    )
+    work = tmp_path / "undubbed"
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    report = json.loads((work / "report.json").read_text(encoding="utf-8"))
+    report["target_lang"] = "en"
+    report["detected_spoken"] = "zh"
+    (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    assert _can_reexport(cfg, work) is False
+    (work / "dubbed.mp4").write_bytes(b"en-dub")
+    assert _can_reexport(cfg, work) is True

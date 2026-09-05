@@ -154,6 +154,43 @@ def escape_subtitles_path(path: Path) -> str:
     return s
 
 
+def is_pcm_wav(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size < 44:
+        return False
+    try:
+        header = path.read_bytes()[:12]
+    except OSError:
+        return False
+    return header.startswith(b"RIFF") and header[8:12] == b"WAVE"
+
+
+def to_pcm_wav(src: Path, dest: Path | None = None) -> Path:
+    """Decode any ffmpeg audio into 16-bit PCM WAV for Windows playback."""
+    src = Path(src)
+    dest = Path(dest) if dest is not None else src.with_name(src.stem + ".pcm.wav")
+    if dest.resolve() == src.resolve() and is_pcm_wav(src):
+        return src
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    run_cmd(
+        [
+            find_ffmpeg(),
+            "-y",
+            "-i",
+            str(src),
+            "-ac",
+            "1",
+            "-ar",
+            "24000",
+            "-c:a",
+            "pcm_s16le",
+            str(dest),
+        ]
+    )
+    if not is_pcm_wav(dest):
+        raise FfmpegError(f"cannot decode preview audio: {src}")
+    return dest
+
+
 def remux_to_mp4(src: Path, dest: Path) -> Path:
     """Prefer stream copy into MP4; transcode only if the container rejects the codecs."""
     if src.suffix.lower() == ".mp4" and src.resolve() == dest.resolve():

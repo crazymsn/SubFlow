@@ -10,7 +10,7 @@ from bilingual_sub.adapters.meding import (
     TranslationCache,
     create_client,
 )
-from bilingual_sub.core.langs import normalize_pair_fields, park_pair_source
+from bilingual_sub.core.langs import normalize_pair_fields, park_pair_source, text_family
 from bilingual_sub.models import Cue
 from bilingual_sub.secrets.store import get_api_key
 
@@ -149,8 +149,10 @@ def translate_pair_cues(
         stats.api_calls += getattr(st, "api_calls", 0)
         missing.extend(miss)
         for index, updated in zip(need_zh, out):
-            chinese = (updated.en or "").strip()
-            if chinese:
+            cand_en = (updated.en or "").strip()
+            cand_zh = (updated.zh or "").strip()
+            chinese = cand_en if text_family(cand_en) == "zh" else cand_zh
+            if text_family(chinese) == "zh":
                 cues[index].zh = chinese
 
     normalize_pair_fields(cues)

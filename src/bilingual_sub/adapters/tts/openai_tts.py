@@ -27,8 +27,17 @@ class OpenAiTts:
 
         client = OpenAI(api_key=key, base_url=f"{MEDING_BASE_URL}/v1")
         voice = req.voice or "alloy"
+        fmt = "wav" if req.dest.suffix.lower() in {".wav", ".wave"} else "mp3"
         try:
-            resp = client.audio.speech.create(model="tts-1", voice=voice, input=req.text)
+            try:
+                resp = client.audio.speech.create(
+                    model="tts-1",
+                    voice=voice,
+                    input=req.text,
+                    response_format=fmt,
+                )
+            except TypeError:
+                resp = client.audio.speech.create(model="tts-1", voice=voice, input=req.text)
         except Exception as exc:
             detail = str(exc)
             if "model_not_found" in detail or "No available channel" in detail:

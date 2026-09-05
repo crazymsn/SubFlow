@@ -247,7 +247,7 @@ def pair_cues_polluted(cues) -> bool:
 
 def assign_pair_fields(cues, source_lang: str) -> None:
     """Keep cue.zh = Chinese and cue.en = English after pair translation."""
-    if lang_family(source_lang) == "en":
+    if spoken_family(cues, source_lang) == "en":
         for cue in cues:
             spoken = cue.zh
             translated = cue.en
@@ -274,17 +274,55 @@ def wants_spoken_target(source_lang: str, target_lang: str) -> bool:
     return lang_family(source_lang) != lang_family(target_lang)
 
 
-def should_dub(declared_source: str, detected_spoken: str, target_lang: str) -> bool:
-    """Dub when the target spoken language differs from the original track.
+def original_lang_votes(declared_source: str, detected_spoken: str, cues=None) -> set[str]:
+    """Languages the original soundtrack might still be in.
 
-    Use the user's source language when it is set. ASR detection is a second
-    vote so English-heard + Chinese-target still dubs, and Chinese-declared +
-    English-target still dubs even if Whisper's script vote flipped.
+    Declared source, ASR language, and transcript script are votes. A Chinese
+    transcript still votes zh even if the user set source=English.
     """
-    if wants_spoken_target(declared_source, target_lang):
-        return True
-    heard = (detected_spoken or "").strip() or declared_source
-    return wants_spoken_target(heard, target_lang)
+    votes: set[str] = set()
+    if declared_source and declared_source != "auto":
+        votes.add(lang_family(declared_source))
+    heard = (detected_spoken or "").strip()
+    if heard and heard != "auto":
+        votes.add(lang_family(heard))
+    if cues:
+        votes.add(spoken_family(cues, declared_source or "zh"))
+        for cue in cues:
+            raw = getattr(cue, "zh", None) or getattr(cue, "en", None) or ""
+            fam = text_family(raw)
+            if fam:
+                votes.add(fam)
+    return votes
+
+
+def should_dub(declared_source: str, detected_spoken: str, target_lang: str, cues=None) -> bool:
+    """Dub unless every signal says the original track is already the target.
+
+    Target language is the spoken language of the export. A Chinese video
+    must be dubbed to English even when Whisper or the source combo said en.
+    """
+    target = lang_family(target_lang)
+    votes = original_lang_votes(declared_source, detected_spoken, cues)
+    if not votes:
+        return wants_spoken_target(declared_source, target_lang)
+    return any(vote != target for vote in votes)
+
+
+def job_needs_dub(
+    declared_source: str,
+    detected_spoken: str,
+    target_lang: str,
+    *,
+    cues=None,
+    enable_dub: bool = False,
+    tts_provider: str = "",
+) -> bool:
+    """Target language is the spoken language. The checkbox cannot skip that.
+
+    Same-language jobs keep the original track even if enable_dub is set.
+    """
+    return should_dub(declared_source, detected_spoken, target_lang, cues=cues)
 
 
 def output_stem_suffix(mode: str) -> str:
@@ -326,12 +364,23 @@ def has_distinct_target_line(cues) -> bool:
 
 
 def spoken_line(cue, target_lang: str) -> str:
-    """Text the dubber should speak. Target language is the spoken language."""
+    """Text the dubber should speak. Pick the line that matches the target script."""
     zh = (getattr(cue, "zh", None) or "").strip()
     en = (getattr(cue, "en", None) or "").strip()
-    if lang_family(target_lang) == "zh":
+    target = lang_family(target_lang)
+    if target == "zh":
+        if text_family(zh) == "zh":
+            return zh
+        if text_family(en) == "zh":
+            return en
         return zh
-    if en:
+    if target == "en":
+        if text_family(en) == "en":
+            return en
+        if text_family(zh) == "en":
+            return zh
+        return ""
+    if en and text_family(en) != "zh":
         return en
     if zh and text_family(zh) != "zh":
         return zh

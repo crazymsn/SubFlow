@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
         self._preview_worker: VoicePreviewWorker | None = None
         self._preview_player = PreviewPlayer(self)
         self._preview_player.finished.connect(self._on_preview_played)
+        self._preview_player.failed.connect(self._on_preview_fail)
         self._dl_worker: DownloadWorker | None = None
         self._last_output: Path | None = None
         self._last_result: JobResult | None = None
@@ -242,10 +243,18 @@ class MainWindow(QMainWindow):
         self._theme = str(self.theme_combo.currentData() or "dark")
         self._apply_theme(persist=True)
 
-    def _sync_dub_default(self) -> None:
+    def _target_requires_dub(self) -> bool:
         source_lang = str(self.source_lang_combo.currentData() or "zh")
         target_lang = str(self.target_lang_combo.currentData() or "zh")
-        self.dub_check.setChecked(wants_spoken_target(source_lang, target_lang))
+        return should_dub(source_lang, source_lang, target_lang)
+
+    def _sync_dub_default(self) -> None:
+        if self._target_requires_dub():
+            self.dub_check.setChecked(True)
+        else:
+            source_lang = str(self.source_lang_combo.currentData() or "zh")
+            target_lang = str(self.target_lang_combo.currentData() or "zh")
+            self.dub_check.setChecked(wants_spoken_target(source_lang, target_lang))
 
     def _toggle_more(self, checked: bool) -> None:
         self.more_box.setVisible(checked)
@@ -584,11 +593,16 @@ class MainWindow(QMainWindow):
             self._relayout_deck()
 
     def _toggle_dub(self, checked: bool) -> None:
+        if not checked and self._target_requires_dub():
+            self.dub_check.blockSignals(True)
+            self.dub_check.setChecked(True)
+            self.dub_check.blockSignals(False)
+            checked = True
         self.dub_box.setVisible(checked)
         self._sync_tts_fields()
 
     def _sync_tts_fields(self) -> None:
-        on = self.dub_check.isChecked()
+        on = self.dub_check.isChecked() or self._target_requires_dub()
         sovits = str(self.tts_combo.currentData() or "openai") == "gptsovits"
         self.tts_combo.setEnabled(on)
         self.tts_voice_edit.setEnabled(on and not sovits)
@@ -611,7 +625,7 @@ class MainWindow(QMainWindow):
 
     def _set_preview_busy(self, busy: bool) -> None:
         self.tts_preview_btn.setText(tr("tts_previewing") if busy else tr("tts_preview"))
-        on = self.dub_check.isChecked()
+        on = self.dub_check.isChecked() or self._target_requires_dub()
         sovits = str(self.tts_combo.currentData() or "openai") == "gptsovits"
         self.tts_preview_btn.setEnabled(on and not sovits and not busy)
 
@@ -788,7 +802,6 @@ class MainWindow(QMainWindow):
         if self._try_relocate_outputs(out_mp4, log=True):
             return
         self._last_log_stage = None
-        tts = str(self.tts_combo.currentData() or "openai") if self.dub_check.isChecked() else "none"
         subtitle_mode = str(self.mode_combo.currentData() or "bilingual")
         source_lang = str(self.source_lang_combo.currentData() or "zh")
         target_lang = effective_target_lang(
@@ -796,6 +809,10 @@ class MainWindow(QMainWindow):
             str(self.target_lang_combo.currentData() or "zh"),
             subtitle_mode,
         )
+        must_dub = should_dub(source_lang, source_lang, target_lang)
+        tts = str(self.tts_combo.currentData() or "openai")
+        if not must_dub and not self.dub_check.isChecked():
+            tts = "none"
         cfg = JobConfig(
             input_video=self._video or Path(url),
             output_video=out_mp4 if self.burn_check.isChecked() else None,
@@ -812,7 +829,7 @@ class MainWindow(QMainWindow):
             source_url=url or None,
             glossary_path=None,
             glossary_generate=False,
-            enable_dub=self.dub_check.isChecked() and tts != "none",
+            enable_dub=must_dub or (self.dub_check.isChecked() and tts != "none"),
             tts_provider=tts,  # type: ignore[arg-type]
             tts_voice="" if tts != "openai" else str(self.tts_voice_edit.currentData() or "alloy"),
             tts_endpoint="" if tts != "gptsovits" else self.tts_endpoint_edit.text().strip(),

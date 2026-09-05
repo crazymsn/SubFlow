@@ -41,7 +41,7 @@ def preview_cache_dir() -> Path:
 
 def preview_cache_path(voice: str, lang: str, provider: str = "openai") -> Path:
     token = _SAFE.sub("_", f"{provider}-{voice or 'default'}-{lang or 'zh'}")
-    return preview_cache_dir() / f"{token}.mp3"
+    return preview_cache_dir() / f"{token}.wav"
 
 
 def synth_voice_preview(
@@ -54,9 +54,23 @@ def synth_voice_preview(
 ) -> Path:
     dest = dest or preview_cache_path(voice, lang, provider)
     if dest.is_file() and dest.stat().st_size > 64:
-        return dest
+        try:
+            from bilingual_sub.adapters.ffmpeg import is_pcm_wav
+
+            if is_pcm_wav(dest) or dest.suffix.lower() != ".wav":
+                return dest
+        except Exception:
+            return dest
     text = preview_sample(lang)
     engine = (provider or "openai").lower()
     tts = GptSovitsTts(endpoint) if engine == "gptsovits" else select_tts("openai")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    return tts.synth(TtsRequest(text=text, lang=lang or "zh", voice=voice or "alloy", dest=dest))
+    raw = tts.synth(TtsRequest(text=text, lang=lang or "zh", voice=voice or "alloy", dest=dest))
+    try:
+        from bilingual_sub.adapters.ffmpeg import is_pcm_wav, to_pcm_wav
+
+        if dest.suffix.lower() in {".wav", ".wave"} and not is_pcm_wav(Path(raw)):
+            return to_pcm_wav(Path(raw), dest)
+    except Exception:
+        pass
+    return Path(raw)

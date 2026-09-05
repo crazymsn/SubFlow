@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from bilingual_sub.core.voice_preview import preview_sample, synth_voice_preview
+from bilingual_sub.core.voice_preview import preview_cache_path, preview_sample, synth_voice_preview
 
 
 def test_preview_sample_follows_target_language():
@@ -10,6 +10,10 @@ def test_preview_sample_follows_target_language():
     assert preview_sample("en").startswith("Hello")
     assert "試聴" in preview_sample("ja")
     assert preview_sample("unknown-xx").startswith("Hello")
+
+
+def test_preview_cache_is_wav():
+    assert preview_cache_path("alloy", "en").suffix == ".wav"
 
 
 def test_synth_voice_preview_uses_voice_and_sample(tmp_path, monkeypatch):

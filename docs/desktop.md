@@ -1,6 +1,6 @@
 # 桌面客户端 — SubFlow 语幕
 
-当前发布包：[`SubFlow-Windows-1.2.2.zip`](https://github.com/crazymsn/SubFlow/releases/latest) · [`SubFlow-macOS-1.2.2.zip`](https://github.com/crazymsn/SubFlow/releases/latest)
+当前发布包：[`SubFlow-Windows-1.2.6.zip`](https://github.com/crazymsn/SubFlow/releases/latest) · [`SubFlow-macOS-1.2.6.zip`](https://github.com/crazymsn/SubFlow/releases/latest)
 
 窗口标题为 **深度云创科技**，界面品牌为 **SubFlow 语幕**。
 

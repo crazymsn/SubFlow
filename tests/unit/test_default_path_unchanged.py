@@ -324,8 +324,9 @@ def test_pipeline_dubs_onto_burned_output(tmp_path: Path, monkeypatch):
         target_lang="en",
     )
     result = run(cfg)
-    assert seen["burn"] == dest
-    assert seen["dub_src"] == dest
+    assert seen["burn"] != dest
+    assert seen["burn"].name == "burned.mp4"
+    assert seen["dub_src"] == seen["burn"]
     assert result.output_mp4 == dest
     assert dest.read_bytes() == b"dubbed"
     assert result.output_dub is None
@@ -648,6 +649,70 @@ def test_dub_failure_does_not_keep_original_audio_quietly(tmp_path: Path, monkey
         assert "tts-1" in str(exc)
     else:
         raise AssertionError("cross-language dub failure must surface")
+    assert not dest.is_file() or dest.read_bytes() != b"burned"
+
+
+def test_chinese_transcript_dubs_to_english_even_if_source_combo_is_en(tmp_path: Path, monkeypatch):
+    from bilingual_sub.core.translate import TranslateStats
+    from bilingual_sub.models import Cue, Segment
+    from bilingual_sub.pipeline import run
+
+    video = tmp_path / "a.mp4"
+    video.write_bytes(b"x")
+    dest = tmp_path / "out.mp4"
+    seen = {"dub": 0, "lang": None}
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.probe_video",
+        lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
+    )
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.write_subtitles",
+        lambda cues, preset, ass_path, srt_path, **k: (
+            Path(ass_path).write_text("[Script Info]\n", encoding="utf-8"),
+            Path(srt_path).write_text("1\n", encoding="utf-8"),
+        ),
+    )
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.transcribe",
+        lambda wav, **kwargs: [Segment(0.2, 1.6, "大家好，欢迎回来")],
+    )
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.translate_cues",
+        lambda cues, **k: ([Cue(c.start, c.end, c.zh, "Hello, welcome back") for c in cues], TranslateStats(), []),
+    )
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.burn_subtitles",
+        lambda src, ass, out, **k: Path(out).write_bytes(b"burned"),
+    )
+
+    def fake_dub(cues, *, output, lang, **k):
+        seen["dub"] += 1
+        seen["lang"] = lang
+        Path(output).write_bytes(b"en-dub")
+        return Path(output)
+
+    monkeypatch.setattr("bilingual_sub.pipeline.dub_cues", fake_dub)
+    monkeypatch.setattr("bilingual_sub.adapters.tts.select_tts", lambda *_a, **_k: object())
+    cfg = JobConfig(
+        input_video=video,
+        output_video=dest,
+        output_srt=tmp_path / "o.srt",
+        work_dir=tmp_path / "work",
+        burn=True,
+        enable_dub=False,
+        tts_provider="none",
+        source_lang="en",
+        target_lang="en",
+        subtitle_mode="bilingual",
+    )
+    result = run(cfg)
+    assert seen["dub"] == 1
+    assert seen["lang"] == "en"
+    assert dest.read_bytes() == b"en-dub"
+    assert result.output_mp4 == dest
 
 
 def test_artifact_key_changes_with_language(tmp_path: Path):

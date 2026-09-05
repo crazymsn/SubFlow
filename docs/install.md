@@ -4,13 +4,13 @@
 
 ## 1. Windows 发布包
 
-从 [Releases](https://github.com/crazymsn/SubFlow/releases/latest) 下载 `SubFlow-Windows-1.2.2.zip`，整夹解压后运行 `SubFlow\SubFlow.exe`。
+从 [Releases](https://github.com/crazymsn/SubFlow/releases/latest) 下载 `SubFlow-Windows-1.2.6.zip`，整夹解压后运行 `SubFlow\SubFlow.exe`。
 
 包内已带 FFmpeg。若启动报 Qt / VCRUNTIME 缺失，安装 [VC++ 2015–2022 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。
 
 ## 2. macOS 发布包
 
-从 Releases 下载 `SubFlow-macOS-1.2.2.zip`，解压后把 `SubFlow.app` 拖到「应用程序」。该包由 GitHub Actions 用 `scripts/build-macos.sh` 从同一仓库源码构建（Apple Silicon）。若 Gatekeeper 拦截，按住 Control 点击后选择打开。
+从 Releases 下载 `SubFlow-macOS-1.2.6.zip`，解压后把 `SubFlow.app` 拖到「应用程序」。该包由 GitHub Actions 用 `scripts/build-macos.sh` 从同一仓库源码构建（Apple Silicon）。若 Gatekeeper 拦截，按住 Control 点击后选择打开。
 
 ## 3. Docker Hub
 

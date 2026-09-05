@@ -34,12 +34,14 @@ from bilingual_sub.core.langs import (
     drop_target_if_unneeded,
     has_distinct_target_line,
     is_pair_mode,
+    job_needs_dub,
     normalize_pair_fields,
     pair_cues_polluted,
     screen_han_lang,
     screen_translate_lang,
     should_dub,
     spoken_family,
+    spoken_line,
     translation_needed,
     whisper_language,
 )
@@ -230,6 +232,15 @@ def _can_reexport(config: JobConfig, work: Path) -> bool:
         return False
     if is_pair_mode(config.subtitle_mode) and pair_cues_polluted(cues):
         return False
+    heard = str(report.get("detected_spoken") or config.source_lang)
+    if job_needs_dub(
+        config.source_lang,
+        heard,
+        config.target_lang,
+        enable_dub=config.enable_dub,
+        tts_provider=config.tts_provider,
+    ) and not (work / "dubbed.mp4").is_file():
+        return False
     return True
 
 
@@ -288,6 +299,20 @@ def _copy_or_burn(
         return None
     dest = config.output_video or config.output_srt.with_suffix(".mp4")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    heard = str(report.get("detected_spoken") or config.source_lang)
+    if job_needs_dub(
+        config.source_lang,
+        heard,
+        config.target_lang,
+        enable_dub=config.enable_dub,
+        tts_provider=config.tts_provider,
+    ):
+        dubbed = work / "dubbed.mp4"
+        if not dubbed.is_file():
+            raise FileNotFoundError("previous dub missing; cannot export without re-running")
+        if dubbed.resolve() != dest.resolve():
+            shutil.copy2(dubbed, dest)
+        return dest
     prev = Path(str(report["output_mp4"])) if report.get("output_mp4") else None
     style_same = _style_same(report, config)
     if prev and prev.is_file() and style_same:
@@ -355,6 +380,8 @@ def _result_from_work(
         "asr_backend": config.asr_backend,
         "refine": config.refine_translate,
         "source_url": config.source_url,
+        "detected_spoken": report.get("detected_spoken"),
+        "dubbed": bool(report.get("dubbed")),
         "last_stage": "done",
         "stopped": False,
         "reused": reused,
@@ -786,27 +813,38 @@ def _run_job(
     dest_mp4 = config.output_video or srt_out.with_suffix(".mp4")
     output_mp4: Path | None = None
     output_dub: Path | None = None
+    burned_mp4 = work / "burned.mp4"
+    need_dub = job_needs_dub(
+        config.source_lang,
+        detected_spoken,
+        config.target_lang,
+        cues=asr_cues,
+        enable_dub=config.enable_dub,
+        tts_provider=config.tts_provider,
+    )
     if config.burn and _should_run(config.resume_from, "burn"):
         _gate(control)
         prog("burn", 0.9)
         ts = time.time()
+        burn_dest = burned_mp4 if need_dub else dest_mp4
+        burn_dest.parent.mkdir(parents=True, exist_ok=True)
         dest_mp4.parent.mkdir(parents=True, exist_ok=True)
         burn_subtitles(
             source,
             ass_path,
-            dest_mp4,
+            burn_dest,
             encoder=settings.burn.encoder,
             cq=settings.burn.cq,
             preset=settings.burn.preset,
             control=control,
         )
-        output_mp4 = dest_mp4
+        if not need_dub:
+            output_mp4 = dest_mp4
         stages["burn_sec"] = time.time() - ts
         _save_state(work, "burn", {"job_id": job_id}, control=control)
-    elif config.burn and dest_mp4.is_file():
+    elif config.burn and not need_dub and dest_mp4.is_file():
         output_mp4 = dest_mp4
 
-    need_dub = should_dub(config.source_lang, detected_spoken, config.target_lang)
     if need_dub and _should_run(config.resume_from, "dub"):
         _gate(control)
         prog("dub", 0.94)
@@ -819,12 +857,19 @@ def _run_job(
             from bilingual_sub.adapters.tts.gptsovits import GptSovitsTts
 
             provider = GptSovitsTts(config.tts_endpoint)
-        video_for_dub = dest_mp4 if config.burn and dest_mp4.is_file() else source
+        if config.burn and burned_mp4.is_file():
+            video_for_dub = burned_mp4
+        elif config.burn and dest_mp4.is_file():
+            video_for_dub = dest_mp4
+        else:
+            video_for_dub = source
         sidecar = (config.output_video or srt_out).with_name(
             (config.output_video or srt_out).stem + "-dub.mp4"
         )
         dub_tmp = work / "dubbed.mp4"
         try:
+            if not any(spoken_line(cue, config.target_lang) for cue in cues):
+                raise RuntimeError("没有目标语种台词，无法配音")
             dubbed = dub_cues(
                 cues,
                 video=video_for_dub,
@@ -839,6 +884,7 @@ def _run_job(
             if dubbed is None or not Path(dubbed).is_file():
                 raise RuntimeError("配音失败，没有生成目标语种音轨")
             if config.burn:
+                dest_mp4.parent.mkdir(parents=True, exist_ok=True)
                 if Path(dubbed).resolve() != dest_mp4.resolve():
                     shutil.copy2(dubbed, dest_mp4)
                 output_mp4 = dest_mp4

@@ -133,11 +133,15 @@ def test_single_subtitle_modes():
     assert spoken_line(english_src[0], "zh") == "你好"
     assert spoken_line(Cue(0.0, 1.0, "大家好", None), "en") == ""
     assert spoken_line(Cue(0.0, 1.0, "Hello everyone", None), "en") == "Hello everyone"
+    assert spoken_line(Cue(0.0, 1.0, "Hello everyone", "大家好"), "en") == "Hello everyone"
+    assert spoken_line(Cue(0.0, 1.0, "大家好", "大家好"), "en") == ""
     assert should_dub("zh", "zh", "en") is True
     assert should_dub("zh", "en", "en") is True
     assert should_dub("zh", "en", "zh") is True
     assert should_dub("zh", "zh", "zh") is False
     assert should_dub("en", "en", "en") is False
+    assert should_dub("en", "en", "en", cues=[Cue(0.0, 1.0, "大家好")]) is True
+    assert should_dub("en", "en", "en", cues=[Cue(0.0, 1.0, "Hello everyone")]) is False
     assert output_stem_suffix("bilingual") == "-中英字幕"
     assert output_stem_suffix("enzh") == "-英中字幕"
     assert output_stem_suffix("single:en") == "-English"
