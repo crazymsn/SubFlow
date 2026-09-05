@@ -8,10 +8,11 @@ import subprocess
 import sys
 import tempfile
 import wave
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
-from bilingual_sub.adapters.procwin import hidden_run_kwargs
+from bilingual_sub.adapters.process_capture import capture_process
 from bilingual_sub.core.file_io import Checkpoint, copy_file
 
 logger = logging.getLogger(__name__)
@@ -68,38 +69,13 @@ def filter_script_option(binary: str) -> str:
 
 
 def run_cmd(args: list[str], *, check: bool = True, control=None,
-            cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            cwd: Path | None = None,
+            stderr_callback: Callable[[str], None] | None = None) -> subprocess.CompletedProcess[str]:
     logger.debug("run: %s", " ".join(args))
-    if control is None:
-        proc = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            **hidden_run_kwargs(),
-        )
-        if check and proc.returncode != 0:
-            raise FfmpegError((proc.stderr.strip() or proc.stdout.strip() or "ffmpeg failed")[-8192:])
-        return proc
-
-    control.check()
-    popen = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=cwd,
-        **hidden_run_kwargs(),
-    )
-    out, err = control.run_attached(popen)
-    code = 0 if popen.returncode is None else popen.returncode
-    if check and code != 0:
-        raise FfmpegError(((err or "").strip() or (out or "").strip() or "ffmpeg failed")[-8192:])
-    return subprocess.CompletedProcess(args, code, out, err)
+    proc = capture_process(args, control=control, cwd=cwd, stderr_callback=stderr_callback)
+    if check and proc.returncode != 0:
+        raise FfmpegError((proc.stderr.strip() or proc.stdout.strip() or "ffmpeg failed")[-8192:])
+    return proc
 
 
 def ffmpeg_version() -> str:

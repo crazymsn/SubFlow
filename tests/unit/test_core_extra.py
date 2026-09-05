@@ -17,7 +17,11 @@ def test_detect_silences_parses_stderr():
         "silence_start: 5.0\n"
         "silence_end: 5.8 | silence_duration: 0.8\n"
     )
-    with patch("bilingual_sub.core.audio.run_cmd", return_value=mock_proc):
+    def stream(*args, stderr_callback, **kwargs):
+        for line in mock_proc.stderr.splitlines():
+            stderr_callback(line)
+        return mock_proc
+    with patch("bilingual_sub.core.audio.run_cmd", side_effect=stream):
         out = detect_silences(Path("x.wav"))
     assert out == [(1.5, 2.0), (5.0, 5.8)]
 

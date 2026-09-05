@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 
 from bilingual_sub.adapters.ffmpeg import FfmpegError, find_ffmpeg, run_cmd
@@ -54,7 +55,26 @@ def detect_silences(
     control=None,
 ) -> list[tuple[float, float]]:
     """Parse ffmpeg silencedetect output into (start, end) silence islands."""
-    proc = run_cmd(
+    start: float | None = None
+    silences: list[tuple[float, float]] = []
+    def consume(line: str) -> None:
+        nonlocal start
+        if "silence_start:" in line:
+            try:
+                value = float(line.split("silence_start:")[-1].strip().split()[0])
+            except (ValueError, IndexError):
+                return
+            if math.isfinite(value) and value >= 0:
+                start = value
+        elif "silence_end:" in line and start is not None:
+            try:
+                end = float(line.split("silence_end:")[-1].split("|")[0].strip())
+            except ValueError:
+                return
+            if math.isfinite(end) and end >= start:
+                silences.append((round(start, 3), round(end, 3)))
+                start = None
+    run_cmd(
         [
             find_ffmpeg(),
             "-y",
@@ -67,22 +87,8 @@ def detect_silences(
             "-",
         ],
         control=control,
+        stderr_callback=consume,
     )
-    text = proc.stderr or ""
-    starts: list[float] = []
-    silences: list[tuple[float, float]] = []
-    for line in text.splitlines():
-        if "silence_start:" in line:
-            m = line.split("silence_start:")[-1].strip().split()[0]
-            try:
-                starts.append(float(m))
-            except ValueError:
-                pass
-        elif "silence_end:" in line and starts:
-            part = line.split("silence_end:")[-1].strip()
-            end = float(part.split("|")[0].strip())
-            start = starts.pop(0)
-            silences.append((round(start, 3), round(end, 3)))
     silences.sort()
     logger.info("detected %d silence islands", len(silences))
     return silences
