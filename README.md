@@ -116,6 +116,7 @@ docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp
 | [架构](docs/architecture.md) | 模块边界与 JobConfig |
 | [meding 契约](docs/api-meding.md) | 翻译 API 的固定地址与错误码 |
 | [社区版本验收](docs/community-qa-2026-09-05.md) | Windows / Mac / Docker 构建结果与首次安装验证 |
+| [Apple GPU 验证](docs/apple-gpu-qa-2026-09-05.md) | MPS 自动环境、兼容修复与实机验收范围 |
 | [贡献](CONTRIBUTING.md) | 分支、测试与约束 |
 
 ## 系统要求
