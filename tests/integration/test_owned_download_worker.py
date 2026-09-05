@@ -3,6 +3,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import psutil
@@ -65,7 +66,8 @@ def test_stop_interrupts_real_blocked_http_request(tmp_path):
         worker.join(timeout=10)
         assert time.monotonic() - started < 10
         assert not worker.is_alive()
-        assert len(errors) == 1 and isinstance(errors[0], JobStopped)
+        assert len(errors) == 1 and isinstance(errors[0], JobStopped), "".join(
+            traceback.format_exception(errors[0])) if errors else "worker returned without cancellation"
         eventually(lambda: all(not alive(pid) for pid in pids))
         assert old.read_bytes() == b"old video"
         assert not list(tmp_path.glob(".subflow-download-*"))
@@ -123,7 +125,8 @@ while True:
         ctl.stop()
         worker.join(timeout=10)
         assert not worker.is_alive()
-        assert len(errors) == 1 and isinstance(errors[0], JobStopped)
+        assert len(errors) == 1 and isinstance(errors[0], JobStopped), "".join(
+            traceback.format_exception(errors[0])) if errors else "worker returned without cancellation"
         eventually(lambda: not alive(int(pid_file.read_text())))
         assert not list((tmp_path / "download").glob(".subflow-download-*"))
     finally:

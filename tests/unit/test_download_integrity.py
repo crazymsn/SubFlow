@@ -9,6 +9,42 @@ from filelock import FileLock
 from bilingual_sub.adapters import ytdlp
 from bilingual_sub.adapters.ffmpeg import FfmpegError, remux_to_mp4
 from bilingual_sub.core.control import JobControl, JobStopped
+from bilingual_sub.core.resource_claims import claim_resources
+
+
+@pytest.mark.parametrize("name", ["source.mp4", "ytdlp.log", "download-worker.log"])
+def test_active_processing_blocks_download_publish(tmp_path, monkeypatch, name):
+    calls = []
+    monkeypatch.setattr("bilingual_sub.adapters.download_worker.run_download_worker", lambda *a, **kw: calls.append(1))
+    with claim_resources(reads=[tmp_path / name], writes=[]):
+        with pytest.raises(RuntimeError):
+            ytdlp.download("https://example.invalid/video", tmp_path)
+    assert not calls
+    assert not list(tmp_path.glob(".subflow-download-*"))
+
+
+def test_pipeline_download_reuses_parent_reservation(tmp_path, monkeypatch):
+    def worker(url, staging, **kwargs):
+        result = staging / "source.mp4"
+        result.write_bytes(b"downloaded")
+        return result
+    monkeypatch.setattr("bilingual_sub.adapters.download_worker.run_download_worker", worker)
+    with claim_resources(reads=[], writes=[], trees=[tmp_path]):
+        result = ytdlp.download("https://example.invalid/video", tmp_path / "download", _resources_claimed=True)
+    assert result.read_bytes() == b"downloaded"
+
+
+def test_diagnostic_copy_failure_does_not_mask_stop(tmp_path, monkeypatch):
+    def worker(url, staging, **kwargs):
+        (staging / "worker.log").write_text("stopped")
+        raise JobStopped()
+    def fail_copy(*args, **kwargs):
+        raise PermissionError("log destination busy")
+    monkeypatch.setattr("bilingual_sub.adapters.download_worker.run_download_worker", worker)
+    monkeypatch.setattr(ytdlp, "copy_file", fail_copy)
+    with pytest.raises(JobStopped):
+        ytdlp.download("https://example.invalid/video", tmp_path)
+    assert not list(tmp_path.glob(".subflow-download-*"))
 
 
 @pytest.fixture

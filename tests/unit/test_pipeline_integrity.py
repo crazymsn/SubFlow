@@ -215,6 +215,7 @@ def test_corrupt_cached_url_video_cannot_resume_by_size_only(tmp_path):
 
 
 def test_gui_no_burn_relocation_ignores_unrelated_existing_mp4(tmp_path):
+    from bilingual_sub.core.file_io import file_digest
     pytest.importorskip("PySide6")
     from bilingual_sub.gui.app import MainWindow
     from bilingual_sub.gui.output_path import sidecar_dub
@@ -226,13 +227,14 @@ def test_gui_no_burn_relocation_ignores_unrelated_existing_mp4(tmp_path):
     for path in (srt, ass, dub):
         path.write_bytes(b"exported")
     report = tmp_path / "report.json"
-    report.write_text(json.dumps({"output_dub": str(dub)}))
+    report.write_text(json.dumps({"job_id": "test", "output_dub": str(dub),
+                                 "output_hashes": {"srt": file_digest(srt), "ass": file_digest(ass), "dub": file_digest(dub)}}))
+    report.with_name("job_state.json").write_text('{"job_id":"test","stage":"done"}')
     result = JobResult("test", None, srt, ass, 1, [], 1, report, output_dub=dub)
     dest = tmp_path / "new.mp4"
     dest.write_bytes(b"unrelated existing movie")
     window = SimpleNamespace(_last_result=result, _video=None, open_btn=Mock(), out_edit=Mock())
     window._reuse_sources = lambda: (None, srt, ass, dub)
-    window._patch_report_outputs = lambda: MainWindow._patch_report_outputs(window)
     assert MainWindow._try_relocate_outputs(window, dest)
     assert dest.read_bytes() == b"unrelated existing movie"
     assert window._last_result.output_mp4 is None

@@ -629,6 +629,8 @@ def _result_from_work(
     control: JobControl | None = None,
 ) -> JobResult:
     missing = list(report.get("missing_en_samples") or [])
+    output_hashes = {kind: file_digest(path, checkpoint=lambda: _gate(control)) for kind, path in
+                     (("mp4", output_mp4), ("srt", config.output_srt), ("ass", ass_out), ("dub", output_dub)) if path}
     payload: dict = {
         "job_id": job_id,
         "input": str(config.input_video),
@@ -645,8 +647,8 @@ def _result_from_work(
         "work_dir": str(work),
         "play_res": report.get("play_res") or [2560, 1600],
         "output_mp4": str(output_mp4) if output_mp4 else None,
-        "output_video_sha256": (file_digest(output_mp4, checkpoint=lambda: _gate(control))
-                                if output_mp4 else None),
+        "output_video_sha256": output_hashes.get("mp4"),
+        "output_hashes": output_hashes,
         "output_dub": str(output_dub) if output_dub else None,
         "output_srt": str(config.output_srt),
         "input_fingerprint": report.get("input_fingerprint"),
@@ -805,7 +807,7 @@ def _download_source(config: JobConfig, work: Path, prog, control: JobControl | 
     staging = work / "downloads" / hashlib.sha256(url.encode()).hexdigest()[:16]
     staging.mkdir(parents=True, exist_ok=True)
     downloaded = ytdlp_download(url, staging, on_progress=prog, control=control,
-                               source_lang=config.source_lang)
+                               source_lang=config.source_lang, _resources_claimed=True)
     _gate(control)
     pending = work / "source.download.mp4"
     pending_manifest = work / "source.download.pending.json"
@@ -1497,6 +1499,8 @@ def _run_job(
     if processing_profile(config, settings) != process_identity:
         raise RuntimeError("处理期间术语或配置内容发生变化，请重新处理")
     elapsed = time.time() - t0
+    output_hashes = {kind: file_digest(path, checkpoint=lambda: _gate(control)) for kind, path in
+                     (("mp4", output_mp4), ("srt", srt_out), ("ass", ass_out), ("dub", output_dub)) if path}
     report = {
         "job_id": job_id,
         "input": str(config.input_video),
@@ -1513,8 +1517,8 @@ def _run_job(
         "work_dir": str(work),
         "play_res": list(play_res),
         "output_mp4": str(output_mp4) if output_mp4 else None,
-        "output_video_sha256": (file_digest(output_mp4, checkpoint=lambda: _gate(control))
-                                if output_mp4 else None),
+        "output_video_sha256": output_hashes.get("mp4"),
+        "output_hashes": output_hashes,
         "output_srt": str(srt_out),
         "input_fingerprint": input_identity,
         "whisper_model": config.whisper_model,

@@ -9,6 +9,7 @@ import stat
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 
 Checkpoint = Callable[[], None] | None
@@ -99,7 +100,50 @@ def write_text_files(
     This is rollback for reported I/O errors, not a filesystem-wide atomic
     transaction or protection against process termination during the commit.
     """
-    paths = [path for path, _, _ in files]
+    _commit_files([(path, partial(_write_text, text=text, encoding=encoding))
+                   for path, text, encoding in files], checkpoint=checkpoint)
+
+
+def _write_text(path: Path, text: str, encoding: str) -> None:
+    with path.open("wb") as stream:
+        stream.write(text.encode(encoding))
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def copy_files(files: list[tuple[Path, Path]], *, texts: list[tuple[Path, str, str]] | None = None,
+               checkpoint: Checkpoint = None, expected: dict[Path, str] | None = None,
+               before_commit: Checkpoint = None) -> None:
+    """Prepare an output set, then commit or roll back all reported failures."""
+    from bilingual_sub.core.output_guard import same_file, validate_outputs
+
+    for source, _ in files:
+        if not source.is_file():
+            raise FileNotFoundError(f"需要复制的成品文件已不存在：{source}")
+    changed = [(source, dest) for source, dest in files if not same_file(source, dest)]
+    for source, dest in files:
+        if same_file(source, dest) and expected is not None:
+            if file_digest(source, checkpoint=checkpoint) != expected.get(source):
+                raise ValueError(f"成品内容与任务记录不符：{source}")
+    protected = [source for source, _ in files]
+    validate_outputs({str(i): dest for i, (_, dest) in enumerate(changed)}, protected)
+    validate_outputs({str(i): path for i, (path, _, _) in enumerate(texts or [])}, protected)
+    def stage_copy(source: Path, pending: Path) -> None:
+        copy_file(source, pending, checkpoint=checkpoint)
+        if expected is not None and file_digest(pending, checkpoint=checkpoint) != expected.get(source):
+            raise ValueError(f"成品内容与任务记录不符：{source}")
+    producers: list[tuple[Path, Callable[[Path], object]]] = [
+        (dest, partial(stage_copy, source))
+        for source, dest in changed
+    ]
+    producers.extend((path, partial(_write_text, text=text, encoding=encoding))
+                     for path, text, encoding in texts or [])
+    _commit_files(producers, checkpoint=checkpoint, before_commit=before_commit)
+
+
+def _commit_files(files: list[tuple[Path, Callable[[Path], object]]], *, checkpoint: Checkpoint = None,
+                  before_commit: Checkpoint = None) -> None:
+    paths = [path for path, _ in files]
     for i, path in enumerate(paths):
         for other in paths[:i]:
             if path.resolve() == other.resolve() or (
@@ -111,41 +155,42 @@ def write_text_files(
     committed: list[Path] = []
     retained: set[Path] = set()
     try:
-        for path, text, encoding in files:
+        for path, produce in files:
             _check(checkpoint)
             path.parent.mkdir(parents=True, exist_ok=True)
             fd, name = tempfile.mkstemp(dir=path.parent, prefix=".subflow-output-", suffix=".tmp")
             pending[path] = Path(name)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(text.encode(encoding))
-                stream.flush()
-                os.fsync(stream.fileno())
+            os.close(fd)
+            produce(pending[path])
             backups[path] = None
             if path.exists():
                 fd, name = tempfile.mkstemp(dir=path.parent, prefix=".subflow-backup-", suffix=".tmp")
                 os.close(fd)
                 backups[path] = Path(name)
-                shutil.copy2(path, name)
+                copy_file(path, Path(name), checkpoint=checkpoint)
         _check(checkpoint)
+        _check(before_commit)
         try:
             for path in paths:
                 pending[path].replace(path)
                 committed.append(path)
-        except OSError as exc:
+        except Exception as exc:
             failures = []
             for path in reversed(committed):
                 backup = backups[path]
                 try:
                     if backup is None:
-                        path.unlink(missing_ok=True)
+                        discard_temporary(path)
                     else:
+                        if path.is_file() and not path.stat().st_mode & stat.S_IWUSR:
+                            path.chmod(path.stat().st_mode | stat.S_IWUSR)
                         backup.replace(path)
                 except OSError:
                     if backup is not None:
                         retained.add(backup)
                     failures.append(f"{path} (备份：{backup})")
             if failures:
-                raise OSError("字幕提交失败，部分文件需从保留备份恢复：" + "; ".join(failures)) from exc
+                raise OSError("文件提交失败，部分文件需从保留备份恢复：" + "; ".join(failures)) from exc
             raise
     finally:
         for temp in [*pending.values(), *backups.values()]:

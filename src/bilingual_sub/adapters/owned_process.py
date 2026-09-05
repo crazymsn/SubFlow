@@ -13,6 +13,24 @@ import psutil
 from bilingual_sub.adapters.procwin import hidden_run_kwargs
 
 
+def _kill_owned_group(pid: int) -> None:
+    if sys.platform == "win32":
+        raise NotImplementedError("POSIX process groups are unavailable on Windows")
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        # Darwin can report EPERM for a group containing only exiting zombies.
+        # Suppress that race only after verifying that no live member remains.
+        for candidate in psutil.pids():
+            try:
+                if os.getpgid(candidate) == pid and psutil.Process(candidate).status() != psutil.STATUS_ZOMBIE:
+                    raise
+            except (ProcessLookupError, psutil.NoSuchProcess):
+                continue
+
+
 class _WindowsJob:
     def __init__(self) -> None:
         from ctypes import wintypes as w
@@ -87,10 +105,7 @@ def owned_process(args: list[str], **kwargs):
         elif proc is not None and sys.platform != "win32":
             # This context created the session. Kill descendants even if the
             # worker exited or crashed before they did.
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            _kill_owned_group(proc.pid)
         if proc is not None:
             if proc.poll() is None:
                 proc.kill()

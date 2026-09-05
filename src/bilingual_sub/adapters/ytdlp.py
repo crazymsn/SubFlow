@@ -10,12 +10,15 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
+from contextlib import nullcontext
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from filelock import FileLock, Timeout
 
 from bilingual_sub.core.control import JobControl, JobStopped
+from bilingual_sub.core.file_io import copy_file
+from bilingual_sub.core.resource_claims import claim_resources
 
 logger = logging.getLogger(__name__)
 _harvest_hint = ""
@@ -1155,6 +1158,7 @@ def download(
     control: JobControl | None = None,
     progress_range: tuple[float, float] = (0.03, 0.20),
     source_lang: str = "",
+    _resources_claimed: bool = False,
 ) -> Path:
     from bilingual_sub.adapters.download_worker import run_download_worker
 
@@ -1169,24 +1173,31 @@ def download(
     try:
         with tempfile.TemporaryDirectory(prefix=".subflow-download-", dir=dest_dir) as scratch:
             staging = Path(scratch)
-            try:
-                result = run_download_worker(url, staging, on_progress=on_progress, control=control,
-                                             progress_range=progress_range, source_lang=source_lang)
-                if not result.is_file() or result.stat().st_size == 0:
-                    raise DownloadError("下载没有生成有效文件")
-                if control:
-                    control.wait_if_paused()
-                target = dest_dir / "source.mp4"
-                result.replace(target)
-                return target
-            except Exception:
-                log = staging / "ytdlp.log"
-                if log.is_file():
-                    shutil.copy2(log, dest_dir / "ytdlp.log")
-                worker_log = staging / "worker.log"
-                if worker_log.is_file():
-                    shutil.copy2(worker_log, dest_dir / "download-worker.log")
-                raise
+            target = dest_dir / "source.mp4"
+            # Pipeline callers already reserve their complete work tree.
+            reservation = nullcontext() if _resources_claimed else claim_resources(
+                reads=[], writes=[target, dest_dir / "ytdlp.log", dest_dir / "download-worker.log"],
+                trees=[staging], checkpoint=control.wait_if_paused if control else None,
+            )
+            with reservation:
+                try:
+                    result = run_download_worker(url, staging, on_progress=on_progress, control=control,
+                                                 progress_range=progress_range, source_lang=source_lang)
+                    if not result.is_file() or result.stat().st_size == 0:
+                        raise DownloadError("下载没有生成有效文件")
+                    if control:
+                        control.wait_if_paused()
+                    result.replace(target)
+                    return target
+                except Exception:
+                    for source_name, dest_name in (("ytdlp.log", "ytdlp.log"), ("worker.log", "download-worker.log")):
+                        log = staging / source_name
+                        if log.is_file():
+                            try:
+                                copy_file(log, dest_dir / dest_name)
+                            except OSError:
+                                logger.warning("无法保存下载诊断日志：%s", dest_dir / dest_name, exc_info=True)
+                    raise
     finally:
         lock.release()
 

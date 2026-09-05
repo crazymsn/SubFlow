@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -568,34 +567,11 @@ class MainWindow(QMainWindow):
             return None
         return mp4, srt, ass, dub
 
-    def _patch_report_outputs(self) -> None:
-        result = self._last_result
-        if result is None or not result.report_path.is_file():
-            return
-        try:
-            data = json.loads(result.report_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        if not isinstance(data, dict):
-            return
-        data["output_mp4"] = str(result.output_mp4) if result.output_mp4 else None
-        data["output_srt"] = str(result.output_srt)
-        data["output_ass"] = str(result.output_ass)
-        data["output_dub"] = str(result.output_dub) if result.output_dub else None
-        try:
-            result.report_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            return
-
     def _try_relocate_outputs(self, dest_mp4: Path, *, log: bool = False) -> bool:
         sources = self._reuse_sources()
         if sources is None or self._last_result is None:
             return False
         src_mp4, src_srt, src_ass, src_dub = sources
-        same_mp4 = src_mp4 is not None and src_mp4.resolve() == dest_mp4.resolve()
-        same_srt = src_srt is not None and src_srt.resolve() == sidecar_srt(dest_mp4).resolve()
-        if same_mp4 and same_srt:
-            return True
         try:
             copied = copy_finished_outputs(
                 dest_mp4,
@@ -604,8 +580,11 @@ class MainWindow(QMainWindow):
                 src_ass=src_ass,
                 src_dub=src_dub,
                 protected_inputs=(self._video,) if self._video is not None else (),
+                report_path=self._last_result.report_path,
+                job_id=self._last_result.job_id,
+                source_video=self._video,
             )
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.warning(self, PRODUCT_ZH, tr("out_mkdir").format(exc=exc))
             return False
         if not copied:
@@ -621,7 +600,6 @@ class MainWindow(QMainWindow):
         )
         self._last_output = self._last_result.output_mp4 or self._last_result.output_dub or dest_srt
         self.open_btn.setEnabled(True)
-        self._patch_report_outputs()
         self.out_edit.setText(str(dest_mp4))
         if log and self._last_result is not None:
             self._log_line(tr("reused_log").format(n=self._last_result.cue_count))

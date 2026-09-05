@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
-from bilingual_sub.core.file_io import copy_file
+from bilingual_sub.core.file_io import Checkpoint, copy_files, file_digest
 from bilingual_sub.core.langs import output_stem_suffix, output_stem_suffixes
 from bilingual_sub.core.resource_claims import claim_resources
 
@@ -111,17 +112,6 @@ def resolve_dub_sidecar(output_video: Path | None, output_srt: Path) -> Path:
     return output_srt.with_name(stem + "-dub.mp4")
 
 
-def _copy_if_needed(src: Path | None, dest: Path) -> Path | None:
-    if src is None:
-        return None
-    if not src.is_file():
-        raise FileNotFoundError(f"需要复制的成品文件已不存在：{src}")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if src.resolve() != dest.resolve():
-        copy_file(src, dest)
-    return dest
-
-
 def copy_finished_outputs(
     dest_mp4: Path,
     *,
@@ -130,6 +120,10 @@ def copy_finished_outputs(
     src_ass: Path | None,
     src_dub: Path | None = None,
     protected_inputs: tuple[Path, ...] = (),
+    report_path: Path | None = None,
+    job_id: str | None = None,
+    source_video: Path | None = None,
+    checkpoint: Checkpoint = None,
 ) -> dict[str, Path]:
     """Copy an already-finished job to a new folder/name. No ASR or translate."""
     from bilingual_sub.core.output_guard import same_file, validate_outputs
@@ -137,22 +131,50 @@ def copy_finished_outputs(
     plan = [("mp4", src_mp4, dest_mp4), ("srt", src_srt, sidecar_srt(dest_mp4)),
             ("ass", src_ass, sidecar_ass(dest_mp4)), ("dub", src_dub, sidecar_dub(dest_mp4))]
     active = [(kind, src, dest) for kind, src, dest in plan if src is not None]
-    validate_outputs({kind: dest for kind, src, dest in active}, list(protected_inputs))
+    inputs = list(protected_inputs) + ([source_video] if source_video else [])
+    validate_outputs({kind: dest for kind, src, dest in active}, inputs)
     for kind, src, dest in active:
         for other_kind, other_src, _ in active:
             if kind != other_kind and same_file(dest, other_src):
                 raise ValueError(f"{kind}输出路径会覆盖已有{other_kind}文件：{dest}")
-    copied: dict[str, Path] = {}
-    with claim_resources(reads=[src for _, src, _ in active] + list(protected_inputs),
-                         writes=[dest for _, _, dest in active]):
+    state_path = report_path.with_name("job_state.json") if report_path else None
+    validate_outputs({"report": report_path} if report_path else {}, inputs)
+    with claim_resources(reads=[src for _, src, _ in active] + inputs + ([state_path] if state_path else []),
+                         writes=[dest for _, _, dest in active] + ([report_path] if report_path else []),
+                         checkpoint=checkpoint):
         for _, src, _ in active:
             if not src.is_file():
                 raise FileNotFoundError(f"需要复制的成品文件已不存在：{src}")
-        for kind, src, dest in active:
-            result = _copy_if_needed(src, dest)
-            if result is not None:
-                copied[kind] = result
-    return copied
+        texts = []
+        expected = None
+        verify_input = None
+        if report_path:
+            assert state_path is not None
+            data = json.loads(report_path.read_text(encoding="utf-8"))
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if (not isinstance(data, dict) or not isinstance(state, dict) or not job_id
+                    or data.get("job_id") != job_id or state.get("job_id") != job_id or state.get("stage") != "done"):
+                raise ValueError("任务记录已更新或未完成，不能另存旧结果；请重新处理")
+            hashes = data.get("output_hashes")
+            if not isinstance(hashes, dict) or any(not isinstance(hashes.get(kind), str) for kind, _, _ in active):
+                raise ValueError("成品缺少内容校验记录，请先重新导出或处理")
+            expected = {src: hashes[kind] for kind, src, _ in active}
+            if source_video:
+                identity = data.get("input_fingerprint")
+                digest = identity.get("sha256") if isinstance(identity, dict) else None
+                def verify_input():
+                    if file_digest(source_video, checkpoint=checkpoint) != digest:
+                        raise ValueError("源视频内容已改变，不能复用旧结果；请重新处理")
+                verify_input()
+            for kind, _, dest in active:
+                data["output_" + kind] = str(dest)
+            if src_mp4 is None:
+                data["output_mp4"] = None
+            data["output_video_sha256"] = hashes.get("mp4") if src_mp4 else None
+            texts.append((report_path, json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False), "utf-8"))
+        copy_files([(src, dest) for _, src, dest in active], texts=texts,
+                   expected=expected, checkpoint=checkpoint, before_commit=verify_input)
+    return {kind: dest for kind, _, dest in active}
 
 
 def next_output_path(

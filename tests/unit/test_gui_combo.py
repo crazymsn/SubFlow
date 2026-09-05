@@ -621,6 +621,9 @@ def test_empty_counter_download_gate_and_more_overlay():
 
 
 def test_same_video_new_path_copies_without_worker(tmp_path):
+    import json
+
+    from bilingual_sub.core.file_io import file_digest
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
     from PySide6.QtWidgets import QApplication
@@ -644,7 +647,10 @@ def test_same_video_new_path_copies_without_worker(tmp_path):
     src_srt.write_text("srt", encoding="utf-8")
     src_ass.write_text("ass", encoding="utf-8")
     report = tmp_path / "old" / "report.json"
-    report.write_text("{}", encoding="utf-8")
+    report.write_text(json.dumps({"job_id": "r", "input_fingerprint": {"sha256": file_digest(video)},
+                                 "output_hashes": {"mp4": file_digest(src_mp4), "srt": file_digest(src_srt),
+                                                   "ass": file_digest(src_ass)}}), encoding="utf-8")
+    report.with_name("job_state.json").write_text('{"job_id":"r","stage":"done"}', encoding="utf-8")
     win._video = video
     win._last_result = JobResult(
         job_id="r",
