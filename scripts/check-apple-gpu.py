@@ -20,12 +20,20 @@ def worker(kind: str) -> dict:
     built = torch.backends.mps.is_built()
     available = torch.backends.mps.is_available()
     result = {"kind": kind, "torch": torch.__version__, "mps_built": built,
-              "mps_available": available, "gpu_checks": []}
+              "mps_available": available, "gpu_usable": False, "gpu_checks": []}
     if sys.platform == "darwin" and not built:
         raise RuntimeError("The installed PyTorch wheel lacks MPS support")
     if not available:
         return result
-    a = torch.ones((16, 16), device="mps")
+    try:
+        a = torch.ones((16, 16), device="mps")
+        torch.mps.synchronize()
+    except RuntimeError as exc:
+        # Some hosted Mac VMs advertise MPS but cannot allocate even one tensor.
+        # This is an unavailable test device, never a successful GPU acceptance.
+        result["gpu_unavailable_reason"] = str(exc)
+        return result
+    result["gpu_usable"] = True
     assert torch.allclose((a @ a).cpu(), torch.full((16, 16), 16.0))
     checks = ["metal_matmul"]
     if kind == "asr":

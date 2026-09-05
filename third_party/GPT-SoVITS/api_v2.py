@@ -457,6 +457,21 @@ async def tts_handle(req: dict):
             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
             return Response(audio_data, media_type=f"audio/{media_type}")
     except Exception as e:
+        # Reference preprocessing can fail before TTS.run's synthesis guard.
+        # Recover those MPS errors too, but never restart a partly streamed reply.
+        if (not streaming_mode and str(tts_pipeline.configs.device) == "mps"
+                and isinstance(e, (RuntimeError, NotImplementedError))):
+            print(f"Apple GPU preprocessing failed ({e}); retrying once on CPU.")
+            config = tts_pipeline.configs
+            config.device = torch.device("cpu")
+            config.is_half = False
+            try:
+                tts_pipeline.__init__(config)
+                sr, audio_data = next(tts_pipeline.run(req))
+                audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
+                return Response(audio_data, media_type=f"audio/{media_type}")
+            except Exception as retry_error:
+                return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(retry_error)})
         return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
 
 

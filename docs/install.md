@@ -88,4 +88,4 @@ python scripts/prepare-runtime.py gptsovits
 bash scripts/build-macos.sh
 ```
 
-推送 main 自动运行 Windows x64、macOS arm64/x64 的测试、CPU 环境安装、打包与真实启动检查，以及 Docker 构建检查。推送 v* 标签且所有检查成功后自动上传 ZIP 到 Releases。社区包不携带用户配置、API Key、Cookie 或预下载的模型权重。
+推送 main 自动运行 Windows x64、macOS arm64/x64 的测试、对应 CPU/MPS 环境安装、打包与真实启动检查，以及 Docker 构建检查。Apple GPU 探测报告单独记录依赖是否支持 MPS、GPU 是否可分配内存以及计算检查结果；托管虚拟机不能使用 GPU 时不会标记为 GPU 验收通过。真实 Mac 的严格验收应运行 `python scripts/check-apple-gpu.py --require-gpu`，再进行实际视频识别和配音。推送 v* 标签且所有检查成功后自动上传 ZIP 到 Releases。社区包不携带用户配置、API Key、Cookie 或预下载的模型权重。
