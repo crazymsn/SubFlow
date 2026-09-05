@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "subflow"
-version = "1.3.23"
+version = "1.3.24"
 description = "SubFlow 语幕 — 新一代 AI 视频语音识别、自动翻译、字幕生成工具（深度云创科技）"
 readme = "README.md"
 license = "MIT"
@@ -40,7 +40,7 @@ dependencies = [
 [project.optional-dependencies]
 cuda = ["openai-whisper", "torch"]
 gui = ["pyside6>=6.6"]
-dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "pillow>=10", "fastapi>=0.115.2"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "pillow>=10", "fastapi>=0.115.2", "numpy>=1.26"]
 packaging = ["pyinstaller>=6.10", "curl_cffi>=0.7"]
 nlp = ["spacy"]
 

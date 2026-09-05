@@ -6,5 +6,7 @@ Reference features are keyed by file content and prompt language, with preproces
 Inference validates numeric inputs and reports empty speech or cancellation instead of fabricating silence.
 Model replacement is staged with deferred configuration writes, preserving serving state on load or publication failure.
 Committed model generations are exposed to clients, pinning synthesis and invalidating stale audio caches after reloads.
+Waveform conversion saturates positive PCM16 peaks, rejects non-finite samples, and preserves input tensors and output-rate pause timing.
+OGG worker errors and AAC child-process failures propagate instead of returning empty successful responses.
 Original license and authorship notices are retained.
 Large model weights and Python environments are downloaded separately, not committed.

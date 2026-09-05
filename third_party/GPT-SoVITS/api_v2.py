@@ -216,9 +216,13 @@ def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int):
     # Suggestion:
     #   Or split the whole audio data into smaller audio segment to avoid stack overflow?
 
+    errors = []
     def handle_pack_ogg():
-        with sf.SoundFile(io_buffer, mode="w", samplerate=rate, channels=1, format="ogg") as audio_file:
-            audio_file.write(data)
+        try:
+            with sf.SoundFile(io_buffer, mode="w", samplerate=rate, channels=1, format="ogg") as audio_file:
+                audio_file.write(data)
+        except Exception as exc:
+            errors.append(exc)
 
 
 
@@ -228,20 +232,23 @@ def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int):
     # stack_size = n * 4096, where n should be a positive integer.
     # Here we chose n = 4096.
     stack_size = 4096 * 4096
+    previous_stack_size = threading.stack_size()
+    stack_changed = False
     try:
         threading.stack_size(stack_size)
+        stack_changed = True
         pack_ogg_thread = threading.Thread(target=handle_pack_ogg)
         pack_ogg_thread.start()
-        pack_ogg_thread.join()
-    except RuntimeError as e:
-        # If changing the thread stack size is unsupported, a RuntimeError is raised.
-        print("RuntimeError: {}".format(e))
-        print("Changing the thread stack size is unsupported.")
-    except ValueError as e:
-        # If the specified stack size is invalid, a ValueError is raised and the stack size is unmodified.
-        print("ValueError: {}".format(e))
-        print("The specified stack size is invalid.")
-
+    except (RuntimeError, ValueError) as exc:
+        raise ValueError("Cannot start OGG encoder thread") from exc
+    finally:
+        if stack_changed:
+            threading.stack_size(previous_stack_size)
+    pack_ogg_thread.join()
+    if errors:
+        raise ValueError(f"OGG encoding failed: {errors[0]}") from errors[0]
+    if not io_buffer.getbuffer().nbytes:
+        raise ValueError("OGG encoder produced no audio")
     return io_buffer
 
 
@@ -280,8 +287,17 @@ def pack_aac(io_buffer: BytesIO, data: np.ndarray, rate: int):
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
-    out, _ = process.communicate(input=data.tobytes())
+    try:
+        out, error = process.communicate(input=data.tobytes(), timeout=300)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.communicate()
+        raise ValueError("AAC encoding timed out") from exc
+    if process.returncode or not out:
+        detail = error.decode("utf-8", errors="replace")[-1000:]
+        raise ValueError(f"AAC encoding failed (exit {process.returncode}): {detail}")
     io_buffer.write(out)
     return io_buffer
 

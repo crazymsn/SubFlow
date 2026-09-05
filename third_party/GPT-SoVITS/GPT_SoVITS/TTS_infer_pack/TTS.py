@@ -31,6 +31,7 @@ from process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 from tools.audio_sr import AP_BWE
+from tools.subflow_audio import InvalidAudioError, float_to_pcm16, validate_sample_rate
 from tools.subflow_model_transaction import atomic_config_write, model_update
 from tools.subflow_validation import NoSpeechError, SynthesisStopped, require_speech_segments, validate_request
 from tools.i18n.i18n import I18nAuto, scan_language_list
@@ -1469,7 +1470,7 @@ class TTS:
                     super_sampling if self.configs.use_vocoder and self.configs.version == "v3" else False,
                 )
 
-        except (NoSpeechError, SynthesisStopped):
+        except (NoSpeechError, SynthesisStopped, InvalidAudioError):
             raise
         except Exception as e:
             traceback.print_exc()
@@ -1508,18 +1509,25 @@ class TTS:
         fragment_interval: float = 0.3,
         super_sampling: bool = False,
     ) -> Tuple[int, np.ndarray]:
+        sr = validate_sample_rate(sr)
         if fragment_interval>0:
             zero_wav = torch.zeros(
-                int(self.configs.sampling_rate * fragment_interval), dtype=self.precision, device=self.configs.device
+                int(sr * fragment_interval), dtype=self.precision, device=self.configs.device
             )
 
-        for i, batch in enumerate(audio):
-            for j, audio_fragment in enumerate(batch):
+        processed = []
+        for batch in audio:
+            fragments = []
+            for audio_fragment in batch:
+                if audio_fragment.ndim != 1 or audio_fragment.numel() == 0 or not torch.isfinite(audio_fragment).all():
+                    raise InvalidAudioError("Model produced empty, non-mono or non-finite audio")
                 max_audio = torch.abs(audio_fragment).max()  # 简单防止16bit爆音
                 if max_audio > 1:
-                    audio_fragment /= max_audio
+                    audio_fragment = audio_fragment / max_audio
                 audio_fragment: torch.Tensor = torch.cat([audio_fragment, zero_wav], dim=0) if fragment_interval>0 else audio_fragment
-                audio[i][j] = audio_fragment
+                fragments.append(audio_fragment)
+            processed.append(fragments)
+        audio = processed
 
         if split_bucket:
             audio = self.recovery_order(audio, batch_index_list)
@@ -1527,6 +1535,8 @@ class TTS:
             # audio = [item for batch in audio for item in batch]
             audio = sum(audio, [])
 
+        if not audio:
+            raise InvalidAudioError("Model produced no audio fragments")
         audio = torch.cat(audio, dim=0)
 
         if super_sampling:
@@ -1535,18 +1545,15 @@ class TTS:
             self.init_sr_model()
             if not self.sr_model_not_exist:
                 audio, sr = self.sr_model(audio.unsqueeze(0), sr)
-                max_audio = np.abs(audio).max()
-                if max_audio > 1:
-                    audio /= max_audio
-                audio = (audio * 32768).astype(np.int16)
             else:
-                audio = audio.cpu().numpy()
-                audio = (audio * 32768).astype(np.int16)
+                audio = audio.detach().float().cpu().numpy()
             t2 = time.perf_counter()
             print(f"超采样用时：{t2 - t1:.3f}s")
         else:
-            audio = audio.cpu().numpy()
-            audio = (audio * 32768).astype(np.int16)
+            audio = audio.detach().float().cpu().numpy()
+
+        sr = validate_sample_rate(sr)
+        audio = float_to_pcm16(audio)
 
 
         # try:

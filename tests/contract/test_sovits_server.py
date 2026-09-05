@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import io
 import json
 import sys
 import threading
@@ -78,6 +79,64 @@ def test_invalid_request_rejected_before_model_execution(api, monkeypatch, metho
 def test_supported_zero_boundaries_are_accepted(api):
     response = asyncio.run(api.tts_handle(payload(top_k=0, top_p=0, fragment_interval=0, batch_threshold=0)))
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("mode", ["error", "empty", "success"])
+def test_ogg_encoder_propagates_worker_error_and_restores_stack(api, monkeypatch, mode):
+    previous = threading.stack_size()
+    class Writer:
+        def __init__(self, buffer, **kwargs):
+            self.buffer = buffer
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def write(self, data):
+            if mode == "error":
+                raise OSError("codec unavailable")
+            if mode == "success":
+                self.buffer.write(b"encoded")
+    monkeypatch.setattr(api.sf, "SoundFile", Writer, raising=False)
+    if mode == "success":
+        assert api.pack_ogg(io.BytesIO(), b"input", 32000).getvalue() == b"encoded"
+    else:
+        with pytest.raises(ValueError, match="OGG"):
+            api.pack_ogg(io.BytesIO(), b"input", 32000)
+    assert threading.stack_size() == previous
+
+
+def test_unsupported_ogg_stack_size_does_not_return_success(api, monkeypatch):
+    def stack(*args):
+        if args:
+            raise RuntimeError("unsupported stack size")
+        return 0
+    monkeypatch.setattr(api.threading, "stack_size", stack)
+    with pytest.raises(ValueError, match="OGG encoder"):
+        api.pack_ogg(io.BytesIO(), b"input", 32000)
+
+
+@pytest.mark.parametrize("mode", ["error", "empty", "timeout", "success"])
+def test_aac_checks_exit_and_reaps_timed_out_child(api, monkeypatch, mode):
+    class Process:
+        returncode = 1 if mode == "error" else 0
+        killed = False
+        calls = 0
+        def communicate(self, **kwargs):
+            self.calls += 1
+            if mode == "timeout" and self.calls == 1:
+                raise api.subprocess.TimeoutExpired("ffmpeg", 300)
+            return (b"encoded" if mode == "success" else b""), b"encoder unavailable"
+        def kill(self):
+            self.killed = True
+    process = Process()
+    monkeypatch.setattr(api.subprocess, "Popen", lambda *args, **kwargs: process)
+    if mode == "success":
+        assert api.pack_aac(io.BytesIO(), SimpleNamespace(tobytes=lambda: b"pcm"), 32000).getvalue() == b"encoded"
+    else:
+        with pytest.raises(ValueError, match="AAC"):
+            api.pack_aac(io.BytesIO(), SimpleNamespace(tobytes=lambda: b"pcm"), 32000)
+    if mode == "timeout":
+        assert process.killed and process.calls == 2
 
 
 @pytest.mark.parametrize("method", ["get", "post"])

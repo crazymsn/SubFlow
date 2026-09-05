@@ -54,6 +54,14 @@ jobs:
         run: python scripts/prepare-runtime.py asr
       - name: Prepare dubbing dependencies from scratch
         run: python scripts/prepare-runtime.py gptsovits --skip-models
+      - name: Verify audio postprocessing and codecs
+        run: python scripts/check-sovits-audio.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sovits-audio-${{ matrix.label }}
+          path: sovits-audio-report.json
+          if-no-files-found: ignore
       - name: Probe Apple GPU dependencies and available hardware
         if: matrix.backend == 'mps'
         run: python scripts/check-apple-gpu.py
@@ -112,6 +120,7 @@ jobs:
           docker compose run --rm subflow --help
           docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py asr
           docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py gptsovits --skip-models
+          docker compose run --rm --entrypoint python subflow /app/scripts/check-sovits-audio.py
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [clients, docker]
