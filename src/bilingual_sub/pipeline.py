@@ -57,7 +57,7 @@ from bilingual_sub.core.langs import (
     whisper_language,
 )
 from bilingual_sub.core.netflix import fit_cues, fit_warnings
-from bilingual_sub.core.persistence import write_json
+from bilingual_sub.core.persistence import write_json, write_json_files
 from bilingual_sub.core.render import (
     SUBTITLE_PACK,
     apply_subtitle_colors,
@@ -116,7 +116,7 @@ def _should_run(resume_from: str | None, stage: str) -> bool:
     return _stage_index(stage) >= _stage_index(resume_from)
 
 
-def _save_state(
+def _state_record(
     work_dir: Path,
     stage: str,
     extra: dict | None = None,
@@ -125,7 +125,7 @@ def _save_state(
     produced: dict[str, list[str]] | None = None,
     artifact_context: dict | None = None,
     context_stage: str | None = None,
-) -> None:
+) -> dict:
     previous = _load_json(work_dir / "job_state.json")
     completed = stage if stage in STAGES else previous.get("completed_stage", previous.get("stage", "init"))
     data: dict = {"stage": stage, "completed_stage": completed, "paused": False, "stopped": False,
@@ -144,7 +144,26 @@ def _save_state(
         data["stopped"] = control.is_stopped()
     if extra:
         data.update(extra)
+    return data
+
+
+def _save_state(
+    work_dir: Path, stage: str, extra: dict | None = None, *,
+    control: JobControl | None = None, produced: dict[str, list[str]] | None = None,
+    artifact_context: dict | None = None, context_stage: str | None = None,
+) -> None:
+    data = _state_record(work_dir, stage, extra, control=control, produced=produced,
+                         artifact_context=artifact_context, context_stage=context_stage)
     write_json(work_dir / "job_state.json", data)
+
+
+def _complete_job(work: Path, report: dict, control: JobControl | None = None) -> None:
+    _gate(control)
+    state = _state_record(work, "done", {"job_id": report["job_id"]})
+    # Stop remains effective throughout preparation. Once replacement starts,
+    # finish the pair or roll it back rather than publishing half a completion.
+    write_json_files([(work / "report.json", report), (work / "job_state.json", state)],
+                      checkpoint=lambda: _gate(control))
 
 
 def _verify_cache(work: Path, stage: str, control: JobControl | None = None) -> dict:
@@ -734,9 +753,8 @@ def _result_from_work(
         "render_profile": render_profile(config, settings),
     }
     report_path = work / "report.json"
-    write_json(report_path, payload)
-    _save_state(work, "done", {"job_id": job_id})
     save_last_job(work, job_id)
+    _complete_job(work, payload, control)
     return JobResult(
         job_id=job_id,
         output_mp4=output_mp4,
@@ -939,7 +957,13 @@ def run(
 def _run_in_work(config: JobConfig, settings: AppSettings, work: Path,
                  on_progress: ProgressCb, control: JobControl | None, t0: float) -> JobResult:
     stages: dict[str, float] = {}
-    reused = _reexport_if_possible(config, settings, work, on_progress, t0, control=control)
+    try:
+        reused = _reexport_if_possible(config, settings, work, on_progress, t0, control=control)
+    except JobStopped:
+        state = _load_json(work / "job_state.json")
+        _save_state(work, "stopped", {"job_id": state.get("job_id"), "stopped": True, "note": "stopped"},
+                    control=control)
+        raise
     if reused:
         return reused
     state = _load_json(work / "job_state.json")
@@ -1593,8 +1617,7 @@ def _run_job(
         "render_profile": render_profile(config, settings),
     }
     report_path = work / "report.json"
-    write_json(report_path, report)
-    _save_state(work, "done", {"job_id": job_id}, control=control)
+    _complete_job(work, report, control)
 
     prog("done", 1.0)
     return JobResult(

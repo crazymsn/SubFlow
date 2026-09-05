@@ -8,7 +8,7 @@ from bilingual_sub import pipeline as p
 from bilingual_sub.adapters.ffmpeg import FfmpegError
 from bilingual_sub.config import AppSettings
 from bilingual_sub.core.audio import detect_silences
-from bilingual_sub.core.control import JobStopped
+from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.models import JobConfig, Segment
 
 
@@ -606,18 +606,18 @@ def test_reexport_emits_done_only_after_report_is_saved(job, monkeypatch, fail_r
     first = p.run(cfg, settings)
     previous = first.report_path.read_bytes()
     cfg.output_srt = cfg.output_srt.with_name("new.srt")
-    write = p.write_json
-    def write_report(path, data):
-        if fail_report and path == first.report_path:
+    replace = Path.replace
+    def write_report(path, destination):
+        if fail_report and destination == first.report_path:
             raise OSError("report disk error")
-        return write(path, data)
-    monkeypatch.setattr(p, "write_json", write_report)
+        return replace(path, destination)
+    monkeypatch.setattr(Path, "replace", write_report)
     progress = []
     saved_at_done = []
     def observe(stage, pct):
         progress.append((stage, pct))
         if stage == "done":
-            saved_at_done.append(json.loads(first.report_path.read_text())["output_srt"])
+            saved_at_done.append(json.loads(first.report_path.read_text(encoding="utf-8"))["output_srt"])
     if fail_report:
         with pytest.raises(OSError, match="report disk error"):
             p.run(cfg, settings, on_progress=observe)
@@ -627,6 +627,96 @@ def test_reexport_emits_done_only_after_report_is_saved(job, monkeypatch, fail_r
         assert p.run(cfg, settings, on_progress=observe).reused
         assert saved_at_done == [str(cfg.output_srt)]
         assert progress[-1] == ("done", 1.0)
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+def test_final_state_write_failure_restores_previous_report(job, monkeypatch, reuse):
+    cfg, settings, calls, _, _ = job
+    if reuse:
+        settings.video.work_dir, cfg.work_dir = str(cfg.work_dir), Path("auto")
+    first = p.run(cfg, settings)
+    previous_report = first.report_path.read_bytes()
+    state_path = first.report_path.with_name("job_state.json")
+    cfg.output_srt = cfg.output_srt.with_name("new.srt")
+    replace = Path.replace
+    previous_state = []
+    def fail_state(path, destination):
+        if (destination == state_path and json.loads(path.read_text(encoding="utf-8"))["stage"] == "done"
+                and json.loads(first.report_path.read_text(encoding="utf-8"))["output_srt"] == str(cfg.output_srt)):
+            previous_state.append(state_path.read_bytes())
+            raise PermissionError("final state disk error")
+        return replace(path, destination)
+    monkeypatch.setattr(Path, "replace", fail_state)
+    with pytest.raises(PermissionError, match="final state disk error"):
+        p.run(cfg, settings)
+    assert first.report_path.read_bytes() == previous_report
+    assert previous_state and state_path.read_bytes() == previous_state[-1]
+    asr_before = calls["asr"]
+    monkeypatch.setattr(Path, "replace", replace)
+    cfg.resume_from = "done" if reuse else "burn"
+    result = p.run(cfg, settings)
+    assert calls["asr"] == asr_before
+    assert json.loads(result.report_path.read_text(encoding="utf-8"))["output_srt"] == str(cfg.output_srt)
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+def test_stop_after_last_output_hash_does_not_save_completion(job, monkeypatch, reuse):
+    cfg, settings, _, _, _ = job
+    if reuse:
+        settings.video.work_dir, cfg.work_dir = str(cfg.work_dir), Path("auto")
+    first = p.run(cfg, settings)
+    previous_report = first.report_path.read_bytes()
+    cfg.output_srt = cfg.output_srt.with_name("new.srt")
+    control = JobControl()
+    digest = p.file_digest
+    def stop_after_hash(path, **kwargs):
+        result = digest(path, **kwargs)
+        if path == cfg.output_srt.with_suffix(".ass"):
+            control.stop()
+        return result
+    monkeypatch.setattr(p, "file_digest", stop_after_hash)
+    progress = []
+    with pytest.raises(JobStopped):
+        p.run(cfg, settings, control=control, on_progress=lambda s, pct: progress.append((s, pct)))
+    assert first.report_path.read_bytes() == previous_report
+    assert ("done", 1.0) not in progress
+    state = json.loads(first.report_path.with_name("job_state.json").read_text(encoding="utf-8"))
+    assert state["stage"] == "stopped" and state["stopped"]
+
+
+def test_first_completion_failure_does_not_leave_a_success_report(job, monkeypatch):
+    cfg, settings, _, _, _ = job
+    state_path = cfg.work_dir / "job_state.json"
+    replace = Path.replace
+    def fail_state(path, destination):
+        if destination == state_path and json.loads(path.read_text(encoding="utf-8"))["stage"] == "done":
+            raise PermissionError("first completion failed")
+        return replace(path, destination)
+    monkeypatch.setattr(Path, "replace", fail_state)
+    with pytest.raises(PermissionError, match="first completion failed"):
+        p.run(cfg, settings)
+    assert not (cfg.work_dir / "report.json").exists()
+    assert json.loads(state_path.read_text(encoding="utf-8"))["completed_stage"] == "render"
+    assert not list(cfg.work_dir.glob(".subflow-*.tmp"))
+
+
+def test_stop_once_completion_replace_starts_finishes_consistent_pair(job, monkeypatch):
+    cfg, settings, _, _, _ = job
+    control = JobControl()
+    replace = Path.replace
+    def stop_at_commit(path, destination):
+        result = replace(path, destination)
+        if destination == cfg.work_dir / "report.json":
+            control.stop()
+        return result
+    monkeypatch.setattr(Path, "replace", stop_at_commit)
+    result = p.run(cfg, settings, control=control)
+    state = json.loads(result.report_path.with_name("job_state.json").read_text(encoding="utf-8"))
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert control.is_stopped()
+    assert state["stage"] == report["last_stage"] == "done"
+    assert state["job_id"] == report["job_id"] == result.job_id
+    assert not state["stopped"] and not report["stopped"] and not state["paused"]
 
 
 def test_cached_movie_export_cancels_before_replacing_existing_movie(tmp_path, monkeypatch):

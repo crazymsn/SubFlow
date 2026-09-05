@@ -1,10 +1,19 @@
-"""Commit one JSON record without truncating the previous valid file."""
+"""Stage JSON records and preserve previous records on reported I/O failures."""
 from __future__ import annotations
 
 import json
 import os
 import tempfile
 from pathlib import Path
+
+from bilingual_sub.core.file_io import Checkpoint, write_text_files
+
+
+def write_json_files(files: list[tuple[Path, object]], *, checkpoint: Checkpoint = None) -> None:
+    """Roll back reported I/O errors; this is not atomic across a process crash."""
+    encoded = [(path, json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False), "utf-8")
+               for path, data in files]
+    write_text_files(encoded, checkpoint=checkpoint)
 
 
 def write_json(path: Path, data) -> None:
