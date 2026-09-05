@@ -455,3 +455,21 @@ def test_changed_style_file_content_reencodes_same_named_preset(tmp_path, video,
     result = run(cfg, AppSettings())
     assert result.reused and len(burns) == 1
     assert cfg.output_video.read_bytes() == b"new style"
+
+
+@pytest.mark.parametrize("key,value", [("job_id", "old-attempt"), ("cue_count", 0),
+    ("play_res", []), ("duration_sec", float("nan")), ("translate_api_calls", "broken"),
+    ("missing_en_samples", {}), ("burn", "false")])
+def test_invalid_cached_report_cannot_be_reexported(tmp_path, video, key, value):
+    from bilingual_sub.pipeline import _can_reexport
+
+    cfg = JobConfig(video, tmp_path / "out.mp4", tmp_path / "out.srt", Path("auto"))
+    work = tmp_path / "cache"
+    _plant_job(work, video, cfg.output_video, whisper=cfg.whisper_model,
+               translate=cfg.translate_model, cfg=cfg)
+    assert _can_reexport(cfg, work, AppSettings())
+    report = work / "report.json"
+    data = json.loads(report.read_text())
+    data[key] = value
+    report.write_text(json.dumps(data))
+    assert not _can_reexport(cfg, work, AppSettings())

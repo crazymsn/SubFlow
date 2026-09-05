@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -62,26 +63,52 @@ class Cue:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Cue:
-        src = str(d.get("source") or d.get("zh") or "")
+        if not isinstance(d, dict):
+            raise ValueError("字幕条目必须是对象")
+        def text(value, name):
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"字幕 {name} 必须是文本")
+            return value
+        def time(value):
+            try:
+                result = float(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("字幕时间必须是有限非负数") from exc
+            if isinstance(value, bool) or not math.isfinite(result) or result < 0:
+                raise ValueError("字幕时间必须是有限非负数")
+            return result
+        src = text(d.get("source"), "source") or text(d.get("zh"), "zh") or ""
         tgt = d.get("target") if "target" in d else d.get("en")
-        spoken = d.get("spoken")
+        tgt = text(tgt, "target")
+        spoken = text(d.get("spoken"), "spoken")
+        start, end = time(d.get("start")), time(d.get("end"))
+        if end <= start:
+            raise ValueError("字幕结束时间必须大于开始时间")
         words: list[WordSpan] = []
-        for raw in d.get("words") or []:
+        raw_words = d.get("words") or []
+        if not isinstance(raw_words, list):
+            raise ValueError("字幕 words 必须是列表")
+        for raw in raw_words:
+            if not isinstance(raw, dict):
+                raise ValueError("字幕词条必须是对象")
+            a, b = time(raw.get("start")), time(raw.get("end"))
+            if b < a:
+                raise ValueError("字幕词结束时间不能早于开始时间")
             words.append(
                 WordSpan(
-                    start=float(raw["start"]),
-                    end=float(raw["end"]),
-                    text=str(raw.get("text") or ""),
-                    score=float(raw["score"]) if raw.get("score") is not None else None,
+                    start=a,
+                    end=b,
+                    text=text(raw.get("text"), "word") or "",
+                    score=time(raw["score"]) if raw.get("score") is not None else None,
                 )
             )
         return cls(
-            start=float(d["start"]),
-            end=float(d["end"]),
+            start=start,
+            end=end,
             zh=src,
-            en=None if tgt is None else str(tgt),
+            en=tgt,
             words=words,
-            spoken=None if spoken is None else str(spoken),
+            spoken=spoken,
         )
 
 

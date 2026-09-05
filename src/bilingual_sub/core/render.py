@@ -13,6 +13,7 @@ from bilingual_sub.core.langs import (
     screen_line,
     single_subtitle_lang,
 )
+from bilingual_sub.core.persistence import write_json
 from bilingual_sub.models import Cue
 
 SUBTITLE_PACK = "han-layout-v3"
@@ -612,12 +613,14 @@ def write_subtitles(
 
 
 def save_cues_json(cues: list[Cue], path: Path) -> None:
-    path.write_text(
-        json.dumps([c.to_dict() for c in cues], ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    records = [c.to_dict() for c in cues]
+    for record in records:
+        Cue.from_dict(record)
+    write_json(path, records)
 
 
 def load_cues_json(path: Path) -> list[Cue]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError(f"字幕缓存格式错误：{path}；请重新处理该任务")
     return [Cue.from_dict(d) for d in data]

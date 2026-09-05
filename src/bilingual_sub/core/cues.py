@@ -155,7 +155,7 @@ def cues_from_words(segments: list[Segment], glossary: Glossary) -> list[Cue] | 
                 out.append(
                     Cue(
                         start=round(buf[0].start, 2),
-                        end=round(buf[-1].end, 2),
+                        end=max(round(buf[-1].end, 2), round(round(buf[0].start, 2) + 0.01, 2)),
                         zh=text,
                         words=list(buf),
                     )
@@ -167,7 +167,7 @@ def cues_from_words(segments: list[Segment], glossary: Glossary) -> list[Cue] | 
             out.append(
                 Cue(
                     start=round(buf[0].start, 2),
-                    end=round(buf[-1].end, 2),
+                    end=max(round(buf[-1].end, 2), round(round(buf[0].start, 2) + 0.01, 2)),
                     zh=text,
                     words=list(buf),
                 )
@@ -234,7 +234,7 @@ def _build_segment_cues(
         if b <= a:
             continue
         b = min(b, a + max_duration)
-        out.append(Cue(start=round(a, 2), end=round(b, 2), zh=zh))
+        out.append(Cue(start=round(a, 2), end=max(round(b, 2), round(round(a, 2) + 0.01, 2)), zh=zh))
     return out
 
 

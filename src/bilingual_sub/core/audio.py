@@ -66,7 +66,6 @@ def detect_silences(
             "null",
             "-",
         ],
-        check=False,
         control=control,
     )
     text = proc.stderr or ""

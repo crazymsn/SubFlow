@@ -1101,6 +1101,7 @@ def test_resume_uses_cached_source_when_url_input_missing(tmp_path: Path, monkey
         "input_fingerprint": video_fingerprint(cached), "source_url": cfg.source_url,
         "subtitle_mode": cfg.subtitle_mode, "processing_profile": processing_profile(cfg, load_settings()),
     }), encoding="utf-8")
+    (work / "job_state.json").write_text('{"stage":"transcribe","job_id":"cached-asr"}', encoding="utf-8")
     result = run(cfg)
     assert dest.read_bytes() == b"ok"
     assert result.output_mp4 == dest

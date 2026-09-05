@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import tempfile
@@ -53,6 +54,7 @@ from bilingual_sub.core.langs import (
     whisper_language,
 )
 from bilingual_sub.core.netflix import fit_cues
+from bilingual_sub.core.persistence import write_json
 from bilingual_sub.core.render import (
     SUBTITLE_PACK,
     apply_subtitle_colors,
@@ -82,10 +84,7 @@ def last_job_pointer() -> Path:
 
 
 def save_last_job(work_dir: Path, job_id: str) -> None:
-    last_job_pointer().write_text(
-        json.dumps({"work_dir": str(work_dir), "job_id": job_id}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    write_json(last_job_pointer(), {"work_dir": str(work_dir), "job_id": job_id})
 
 
 def load_last_job() -> Path | None:
@@ -96,7 +95,7 @@ def load_last_job() -> Path | None:
         data = json.loads(path.read_text(encoding="utf-8"))
         wd = Path(data["work_dir"])
         return wd if wd.is_dir() else None
-    except (json.JSONDecodeError, KeyError, OSError):
+    except (KeyError, OSError, TypeError, ValueError):
         return None
 
 
@@ -120,15 +119,15 @@ def _save_state(
     *,
     control: JobControl | None = None,
 ) -> None:
-    data = {"stage": stage, "paused": False, "stopped": False}
+    previous = _load_json(work_dir / "job_state.json")
+    completed = stage if stage in STAGES else previous.get("completed_stage", previous.get("stage", "init"))
+    data = {"stage": stage, "completed_stage": completed, "paused": False, "stopped": False}
     if control:
         data["paused"] = control.is_paused()
         data["stopped"] = control.is_stopped()
     if extra:
         data.update(extra)
-    (work_dir / "job_state.json").write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    write_json(work_dir / "job_state.json", data)
 
 
 def video_fingerprint(path: Path) -> dict:
@@ -291,12 +290,35 @@ def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
 def _load_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
 
 
+def _load_silences(path: Path) -> list[tuple[float, float]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("静音缓存必须是时间区间列表；请从 silence 重新处理")
+    out: list[tuple[float, float]] = []
+    for pair in data:
+        if (not isinstance(pair, list) or len(pair) != 2
+                or any(not isinstance(v, (int, float)) or isinstance(v, bool)
+                       or not math.isfinite(v) or v < 0 for v in pair)
+                or pair[1] < pair[0] or (out and pair[0] < out[-1][0])):
+            raise ValueError("静音缓存包含无效时间区间；请从 silence 重新处理")
+        out.append((float(pair[0]), float(pair[1])))
+    return out
+
+
 def _can_reexport(config: JobConfig, work: Path, settings: AppSettings | None = None) -> bool:
+    try:
+        return _can_reexport_checked(config, work, settings)
+    except (OSError, ValueError, TypeError, KeyError, IndexError) as exc:
+        logger.warning("Invalid cached job; processing again: %s", exc)
+        return False
+
+
+def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings | None = None) -> bool:
     if config.resume_from or not _auto_work_dir(config):
         return False
     cues_path = work / "cues.bilingual.json"
@@ -305,7 +327,35 @@ def _can_reexport(config: JobConfig, work: Path, settings: AppSettings | None = 
     state = _load_json(work / "job_state.json")
     if state.get("stage") not in {"render", "burn", "done"}:
         return False
+    if state.get("completed_stage", state["stage"]) != state["stage"]:
+        return False
     report = _load_json(work / "report.json")
+    if not state.get("job_id") or report.get("job_id") != state["job_id"]:
+        return False
+    fitted = work / "cues.fitted.json"
+    fitted_cues = None
+    if config.subtitle_mode == "netflix_single" and fitted.is_file():
+        fitted_cues = load_cues_json(fitted)
+    play = report.get("play_res")
+    if play is not None and (not isinstance(play, list) or len(play) != 2
+                            or any(not isinstance(v, int) or isinstance(v, bool)
+                                   or not 0 < v < 100000 for v in play)):
+        return False
+    for key in ("cue_count", "missing_en_count", "translate_cache_hits", "translate_api_calls"):
+        value = report.get(key)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+            return False
+    for key in ("duration_sec", "elapsed_sec"):
+        value = report.get(key)
+        if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool)
+                                  or not math.isfinite(value) or value < 0):
+            return False
+    for key in ("burn", "dubbed", "refine", "translated"):
+        if report.get(key) is not None and not isinstance(report[key], bool):
+            return False
+    missing = report.get("missing_en_samples", [])
+    if not isinstance(missing, list) or any(not isinstance(s, str) for s in missing):
+        return False
     settings = settings or load_settings()
     if report.get("processing_profile") != processing_profile(config, settings):
         return False
@@ -340,6 +390,8 @@ def _can_reexport(config: JobConfig, work: Path, settings: AppSettings | None = 
     if report.get("translated") is not None and bool(report.get("translated")) != need_screen:
         return False
     cues = load_cues_json(cues_path)
+    if report.get("cue_count") is not None and report["cue_count"] != len(fitted_cues if fitted_cues is not None else cues):
+        return False
     if not need_any and has_distinct_target_line(cues):
         return False
     if is_pair_mode(config.subtitle_mode) and pair_cues_polluted(cues):
@@ -540,7 +592,7 @@ def _result_from_work(
         "render_profile": render_profile(config, settings),
     }
     report_path = work / "report.json"
-    report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(report_path, payload)
     _save_state(work, "done", {"job_id": job_id})
     save_last_job(work, job_id)
     return JobResult(
@@ -692,6 +744,8 @@ def run(
     on_progress: ProgressCb = None,
     control: JobControl | None = None,
 ) -> JobResult:
+    if config.resume_from and config.resume_from not in STAGES:
+        raise ValueError(f"未知恢复阶段：{config.resume_from}")
     _gate(control)
     _validate_output_paths(config)
     setup_logging(api_key=get_api_key())
@@ -718,13 +772,17 @@ def _run_in_work(config: JobConfig, settings: AppSettings, work: Path,
     reused = _reexport_if_possible(config, settings, work, on_progress, t0, control=control)
     if reused:
         return reused
-    state_path = work / "job_state.json"
+    state = _load_json(work / "job_state.json")
     job_id = uuid.uuid4().hex[:12]
-    if state_path.is_file():
-        try:
-            job_id = str(json.loads(state_path.read_text(encoding="utf-8")).get("job_id") or job_id)
-        except json.JSONDecodeError:
-            pass
+    resume_index = _stage_index(config.resume_from) if config.resume_from else 0
+    if resume_index > _stage_index("ingest"):
+        completed = state.get("completed_stage", state.get("stage"))
+        if completed not in STAGES or _stage_index(completed) < resume_index - 1:
+            raise ValueError("恢复阶段之前的步骤尚未完成或记录缺失；请从上次完成的阶段或 ingest 重新处理")
+        # Rewinding invalidates downstream completion before any new work.
+        _save_state(work, STAGES[resume_index - 1], {"job_id": job_id}, control=control)
+    else:
+        _save_state(work, "init", {"job_id": job_id}, control=control)
     save_last_job(work, job_id)
     logger.info("job %s work_dir=%s", job_id, work)
 
@@ -799,7 +857,7 @@ def _run_job(
                 "source_lang": config.source_lang, "target_lang": config.target_lang,
                 "subtitle_mode": config.subtitle_mode, "whisper_model": config.whisper_model,
                 "translate_model": config.translate_model, "asr_backend": config.asr_backend}
-    (work / "job_input.json").write_text(json.dumps(identity, ensure_ascii=False), encoding="utf-8")
+    write_json(work / "job_input.json", identity)
 
     speech = work / "speech.wav"
     silences_path = work / "silences.json"
@@ -833,20 +891,17 @@ def _run_job(
         _gate(control)
         prog("silence", 0.12)
         ts = time.time()
-        if silences_path.is_file() and config.resume_from:
-            silences = [tuple(x) for x in json.loads(silences_path.read_text(encoding="utf-8"))]
-        else:
-            silences = detect_silences(
-                speech,
-                noise_db=settings.silence.noise_db,
-                min_duration=settings.silence.min_duration,
-                control=control,
-            )
-            silences_path.write_text(json.dumps(silences), encoding="utf-8")
+        silences = detect_silences(
+            speech,
+            noise_db=settings.silence.noise_db,
+            min_duration=settings.silence.min_duration,
+            control=control,
+        )
+        write_json(silences_path, silences)
         stages["silence_sec"] = time.time() - ts
         _save_state(work, "silence", {"job_id": job_id}, control=control)
     else:
-        silences = [tuple(x) for x in json.loads(silences_path.read_text(encoding="utf-8"))]
+        silences = _load_silences(silences_path)
 
     asr_lang = whisper_language(config.source_lang)
     if _should_run(config.resume_from, "transcribe"):
@@ -1294,7 +1349,7 @@ def _run_job(
         "render_profile": render_profile(config, settings),
     }
     report_path = work / "report.json"
-    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json(report_path, report)
     _save_state(work, "done", {"job_id": job_id}, control=control)
 
     prog("done", 1.0)
