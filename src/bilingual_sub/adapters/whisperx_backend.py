@@ -12,10 +12,12 @@ from bilingual_sub.adapters.whisper_backend import (
     _python_candidates,
     _python_has_module,
     _segments_from_payload,
+    asr_output_paths,
     run_asr_worker,
 )
 from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.langs import whisper_language
+from bilingual_sub.core.output_guard import validate_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,7 @@ class WhisperXBackend:
         on_progress: Callable[[str, float], None] | None = None,
         control: JobControl | None = None,
     ) -> AsrResult:
+        validate_outputs(asr_output_paths(out_json, "whisperx"), [wav])
         python = find_whisperx_python()
         if python is None:
             raise RuntimeError("WhisperX 不可用")

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -17,7 +19,12 @@ from bilingual_sub.adapters.ffmpeg import (
     parse_ffmpeg_major,
 )
 from bilingual_sub.adapters.meding import MedingAuthError, create_client
-from bilingual_sub.adapters.whisper_backend import load_transcript, probe_whisper, transcribe
+from bilingual_sub.adapters.whisper_backend import (
+    asr_output_paths,
+    load_transcript,
+    probe_whisper,
+    transcribe,
+)
 from bilingual_sub.brand import CLI_NAME, PRODUCT_FULL, TAGLINE
 from bilingual_sub.config import (
     bundled_fonts_dir,
@@ -52,6 +59,13 @@ console = Console()
 
 def _exit(code: int) -> NoReturn:
     raise typer.Exit(code)
+
+
+@contextmanager
+def _command_files(outputs: dict[str, Path], inputs: list[Path]) -> Iterator[None]:
+    validate_outputs(outputs, inputs)
+    with claim_resources(reads=inputs, writes=list(outputs.values())):
+        yield
 
 
 @config_app.command("set-api-key")
@@ -401,9 +415,8 @@ def extract(
 ) -> None:
     wav = output_dir / "speech.wav"
     sil_path = output_dir / "silences.json"
-    validate_outputs({"提取音频": wav, "静音记录": sil_path}, [input_video])
     preview = preview_minutes * 60 if preview_minutes is not None else None
-    with claim_resources(reads=[input_video], writes=[wav, sil_path]):
+    with _command_files({"提取音频": wav, "静音记录": sil_path}, [input_video]):
         with tempfile.TemporaryDirectory(prefix="sf-extract-") as temp:
             pending = Path(temp) / "speech.wav"
             extract_wav(input_video, pending, preview_sec=preview)
@@ -421,7 +434,8 @@ def transcribe_cmd(
     model: Annotated[str, typer.Option("--model")] = "medium",
     device: Annotated[str, typer.Option("--device")] = "auto",
 ) -> None:
-    transcribe(wav, model_name=model, device=device, out_json=output)
+    with _command_files(asr_output_paths(output, "whisper"), [wav]):
+        transcribe(wav, model_name=model, device=device, out_json=output)
     console.print(f"Wrote {output}")
 
 
@@ -432,20 +446,22 @@ def build_cues_cmd(
     output: Annotated[Path, typer.Option("-o", "--output")],
     glossary: Annotated[Path | None, typer.Option("--glossary")] = None,
 ) -> None:
-    settings = load_settings()
-    segments = load_transcript(transcript)
-    sil = [tuple(x) for x in json.loads(silences.read_text())]
-    glo = Glossary.load(glossary or default_glossary_path())
-    cues = build_cues(
-        segments,
-        sil,
-        glo,
-        snap_tolerance=settings.cues.snap_tolerance,
-        min_duration=settings.cues.min_duration,
-        max_duration=settings.cues.max_duration,
-        silence_split_threshold=settings.cues.silence_split_threshold,
-    )
-    save_cues_json(cues, output)
+    glossary_path = glossary or default_glossary_path()
+    with _command_files({"字幕数据": output}, [transcript, silences, glossary_path]):
+        settings = load_settings()
+        segments = load_transcript(transcript)
+        sil = [tuple(x) for x in json.loads(silences.read_text(encoding="utf-8"))]
+        glo = Glossary.load(glossary_path)
+        cues = build_cues(
+            segments,
+            sil,
+            glo,
+            snap_tolerance=settings.cues.snap_tolerance,
+            min_duration=settings.cues.min_duration,
+            max_duration=settings.cues.max_duration,
+            silence_split_threshold=settings.cues.silence_split_threshold,
+        )
+        save_cues_json(cues, output)
     console.print(f"Wrote {len(cues)} cues -> {output}")
 
 
@@ -455,15 +471,16 @@ def translate_cmd(
     output: Annotated[Path, typer.Option("-o", "--output")],
     model: Annotated[str | None, typer.Option("--model")] = None,
 ) -> None:
-    cues = load_cues_json(cues_path)
-    settings = load_settings()
-    out, stats, missing = translate_cues(
-        cues,
-        model=model or settings.translate.model,
-        batch_size=settings.translate.batch_size,
-        max_en_chars=settings.translate.max_en_chars,
-    )
-    save_cues_json(out, output)
+    with _command_files({"翻译字幕": output}, [cues_path]):
+        cues = load_cues_json(cues_path)
+        settings = load_settings()
+        out, stats, missing = translate_cues(
+            cues,
+            model=model or settings.translate.model,
+            batch_size=settings.translate.batch_size,
+            max_en_chars=settings.translate.max_en_chars,
+        )
+        save_cues_json(out, output)
     console.print(f"Translated -> {output} (missing={len(missing)}, api_calls={stats.api_calls})")
 
 
@@ -474,10 +491,11 @@ def render(
     srt: Annotated[Path | None, typer.Option("--srt")] = None,
     preset: Annotated[str, typer.Option("--preset")] = "no-plate-large",
 ) -> None:
-    cues = load_cues_json(cues_path)
-    p = load_style_preset(preset)
     srt_path = srt or output_ass.with_suffix(".srt")
-    write_subtitles(cues, p, output_ass, srt_path)
+    with _command_files({"ASS 字幕": output_ass, "SRT 字幕": srt_path}, [cues_path]):
+        cues = load_cues_json(cues_path)
+        p = load_style_preset(preset)
+        write_subtitles(cues, p, output_ass, srt_path)
     console.print(f"Wrote {output_ass} and {srt_path}")
 
 
@@ -487,15 +505,16 @@ def burn(
     ass_file: Path,
     output: Annotated[Path, typer.Option("-o", "--output")],
 ) -> None:
-    settings = load_settings()
-    burn_subtitles(
-        video,
-        ass_file,
-        output,
-        encoder=settings.burn.encoder,
-        cq=settings.burn.cq,
-        preset=settings.burn.preset,
-    )
+    with _command_files({"烧录视频": output}, [video, ass_file]):
+        settings = load_settings()
+        burn_subtitles(
+            video,
+            ass_file,
+            output,
+            encoder=settings.burn.encoder,
+            cq=settings.burn.cq,
+            preset=settings.burn.preset,
+        )
     console.print(f"Wrote {output}")
 
 

@@ -24,6 +24,7 @@ from bilingual_sub.adapters.transcript_io import (
     write_transcript,
 )
 from bilingual_sub.core.control import wait_for_process
+from bilingual_sub.core.output_guard import validate_outputs
 from bilingual_sub.models import Segment, WordSpan
 
 logger = logging.getLogger(__name__)
@@ -298,15 +299,23 @@ def _transcribe_external(
     return _segments_from_payload(data)
 
 
-def run_asr_worker(python: Path, script: Path, wav: Path, *, model_name: str,
+def asr_output_paths(out_json: Path, backend: str) -> dict[str, Path]:
+    return {"识别结果": out_json, "识别日志": out_json.with_name(f"{backend}.log")}
+
+
+def run_asr_worker(python: Path | str, script: Path, wav: Path, *, model_name: str,
                    language: str, device: str, out_json: Path, backend: str,
                    on_progress=None, control=None) -> dict:
     from bilingual_sub.adapters.runtime_bootstrap import inference_env
 
     if control:
         control.wait_if_paused()
+    python = Path(python)
+    outputs = asr_output_paths(out_json, backend)
+    executable = gui_python(python)
+    validate_outputs(outputs, [wav, script, python, executable])
     out_json.parent.mkdir(parents=True, exist_ok=True)
-    log_path = out_json.with_name(f"{backend}.log")
+    log_path = outputs["识别日志"]
     env = inference_env()
     env["TQDM_DISABLE"] = "1"
     started = time.monotonic()
@@ -319,7 +328,7 @@ def run_asr_worker(python: Path, script: Path, wav: Path, *, model_name: str,
     with tempfile.TemporaryDirectory(prefix=".asr-", dir=out_json.parent) as scratch:
         pending = Path(scratch) / "transcript.json"
         with log_path.open("wb") as log, owned_process([
-            str(gui_python(python)), str(script), "--wav", str(wav), "--out", str(pending),
+            str(executable), str(script), "--wav", str(wav), "--out", str(pending),
             "--model", model_name, "--language", language, "--device", device,
         ], stdout=log, stderr=subprocess.STDOUT, env=env) as proc:
             code = wait_for_process(proc, control=control, on_tick=tick)
@@ -353,6 +362,8 @@ def transcribe(
 ) -> list[Segment]:
     if control:
         control.wait_if_paused()
+    if out_json is not None:
+        validate_outputs(asr_output_paths(out_json, "whisper"), [wav])
     from bilingual_sub.adapters.runtime_bootstrap import auto_install_enabled, ensure_python_env
 
     explicit = _explicit_whisper_python()
