@@ -75,6 +75,23 @@ def test_resume_rejects_same_size_different_video_even_with_explicit_work(tmp_pa
     assert not p._resume_dir_matches(correct, cfg.work_dir)
 
 
+def test_upgrade_rejects_legacy_cues_for_resume_and_reexport(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    cfg.work_dir.mkdir()
+    settings = AppSettings()
+    old_profile = processing_profile(cfg, settings)
+    del old_profile["processing_revision"]
+    (cfg.work_dir / "report.json").write_text(json.dumps({
+        "input_fingerprint": p.video_fingerprint(cfg.input_video),
+        "processing_profile": old_profile,
+    }))
+    (cfg.work_dir / "job_state.json").write_text('{"stage":"done"}')
+    (cfg.work_dir / "cues.bilingual.json").write_text("[]")
+    monkeypatch.setattr(p, "_auto_work_dir", lambda config: True)
+    assert not p._can_reexport(cfg, cfg.work_dir, settings)
+    assert not p._resume_dir_matches(replace(cfg, resume_from="translate"), cfg.work_dir, settings)
+
+
 def test_missing_input_does_not_silently_use_old_work_video(tmp_path):
     cfg = config(tmp_path)
     cfg.input_video.unlink()
