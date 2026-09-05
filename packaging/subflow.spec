@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 # 语幕 SubFlow desktop client — slim, no Torch/UPX/ICU (they break Qt6Core on Windows)
 from pathlib import Path
+import shutil
+import sys
 
 ROOT = Path(SPECPATH).resolve().parent
 SRC = ROOT / "src"
 
 datas = []
+datas.append((str(SRC / "bilingual_sub" / "_data" / "bootstrap"), "bilingual_sub/_data/bootstrap"))
 if (ROOT / "config").is_dir():
     datas.append((str(ROOT / "config"), "bilingual_sub/_data/config"))
 if (ROOT / "fonts").is_dir():
@@ -55,6 +58,7 @@ hidden = [
     "bilingual_sub.adapters.tts.openai_tts",
     "bilingual_sub.adapters.tts.azure_tts",
     "bilingual_sub.adapters.tts.gptsovits",
+    "bilingual_sub.adapters.tts.gptsovits_runtime",
     "bilingual_sub.i18n",
     "bilingual_sub.core.control",
     "bilingual_sub.core.langs",
@@ -135,10 +139,21 @@ excludes = [
     "PySide6.QtQuick",
 ]
 
+installer = shutil.which("uv")
+if not installer:
+    raise RuntimeError("uv is required to build automatic-install clients (pip install uv==0.11.8)")
+external_bins = [(installer, ".")]
+if sys.platform == "darwin":
+    for name in ("ffmpeg", "ffprobe"):
+        binary = shutil.which(name)
+        if not binary:
+            raise RuntimeError(f"Missing {name}; brew install ffmpeg before building")
+        external_bins.append((str(Path(binary).resolve()), "."))
+
 a = Analysis(
     [str(ROOT / "packaging" / "gui_entry.py")],
     pathex=[str(SRC)],
-    binaries=occ_bins,
+    binaries=occ_bins + external_bins,
     datas=datas,
     hiddenimports=hidden,
     hookspath=[],

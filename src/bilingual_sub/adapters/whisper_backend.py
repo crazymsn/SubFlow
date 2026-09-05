@@ -17,6 +17,13 @@ from bilingual_sub.models import Segment, WordSpan
 
 logger = logging.getLogger(__name__)
 
+
+def _whisper_language(language: str | None) -> str | None:
+    raw = (language or "").strip().lower()
+    if raw in {"", "auto"}:
+        return None
+    return language
+
 MISSING_WHISPER_MSG = (
     "未找到可用的 Whisper 识别环境。客户端不内置 Torch。\n"
     "请任选其一：\n"
@@ -142,6 +149,9 @@ def _python_candidates() -> list[Path]:
         found.append(p)
 
     add(os.environ.get("SUBFLOW_PYTHON") or os.environ.get("SUBFLOW_WHISPER_PYTHON"))
+    from bilingual_sub.adapters.runtime_bootstrap import managed_python
+
+    add(managed_python("asr"))
     cached = _cache_path()
     if cached.is_file():
         add(cached.read_text(encoding="utf-8").strip())
@@ -226,7 +236,7 @@ def _transcribe_inprocess(
     logger.info("loading whisper model=%s device=%s", model_name, dev)
     result: dict[str, Any] = model.transcribe(
         str(wav),
-        language=language,
+        language=_whisper_language(language),
         fp16=dev == "cuda",
         word_timestamps=False,
         verbose=False,
@@ -270,8 +280,9 @@ def _transcribe_external(
     runner = gui_python(python)
     log_path = out_json.with_name("whisper.log")
     logger.info("whisper via %s (%s)", runner, script)
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
+    from bilingual_sub.adapters.runtime_bootstrap import inference_env
+
+    env = inference_env()
     env["TQDM_DISABLE"] = "1"
     with log_path.open("w", encoding="utf-8") as log:
         proc = subprocess.Popen(
@@ -285,7 +296,7 @@ def _transcribe_external(
                 "--model",
                 model_name,
                 "--language",
-                language,
+                _whisper_language(language) or "auto",
                 "--device",
                 device,
             ],
@@ -347,7 +358,15 @@ def transcribe(
     except ImportError:
         python = find_whisper_python()
         if python is None:
-            raise RuntimeError(MISSING_WHISPER_MSG) from None
+            from bilingual_sub.adapters.runtime_bootstrap import (
+                auto_install_enabled,
+                ensure_python_env,
+            )
+
+            if not auto_install_enabled():
+                raise RuntimeError(MISSING_WHISPER_MSG) from None
+            python = ensure_python_env("asr", control=control,
+                progress=lambda message: on_progress(message, 0.20) if on_progress else None)
         target = out_json or (wav.with_name(wav.stem + ".transcript.json"))
         return _transcribe_external(
             python,

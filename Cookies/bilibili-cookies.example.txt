@@ -1,0 +1,3 @@
+# Netscape HTTP Cookie File
+# Copy to bilibili-cookies.txt after exporting from your browser.
+# Do not commit real session cookies.

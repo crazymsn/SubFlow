@@ -1,6 +1,6 @@
 # API 令牌 — SubFlow 语幕
 
-翻译与云端配音走 [meding](https://api.meding.site) 的 OpenAI 兼容接口。识别在本机完成，不消耗该令牌。
+翻译走 [meding](https://api.meding.site) 的 OpenAI 兼容接口。识别与配音在本机完成；配音只走内置 GPT-SoVITS，不消耗该令牌。
 
 ## 获取
 

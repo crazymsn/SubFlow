@@ -105,11 +105,45 @@ def _user_config_path() -> Path:
     return user_config_dir() / "config.yaml"
 
 
+def load_gptsovits_settings() -> dict[str, str]:
+    data = _load_yaml(_user_config_path())
+    block = _mapping(data.get("tts"))
+    sovits = _mapping(block.get("gptsovits"))
+    endpoint = str(sovits.get("endpoint") or os.environ.get("SUBFLOW_GPTSOVITS_URL") or "").strip()
+    return {
+        "endpoint": endpoint,
+        "ref_audio": str(sovits.get("ref_audio") or os.environ.get("SUBFLOW_GPTSOVITS_REF") or "").strip(),
+        "prompt_text": str(sovits.get("prompt_text") or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT") or ""),
+        "prompt_lang": str(sovits.get("prompt_lang") or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT_LANG") or "").strip(),
+    }
+
+
+def save_gptsovits_settings(
+    *,
+    endpoint: str = "",
+    ref_audio: str = "",
+    prompt_text: str = "",
+    prompt_lang: str = "",
+) -> Path:
+    return save_user_overrides(
+        {
+            "tts": {
+                "gptsovits": {
+                    "endpoint": endpoint,
+                    "ref_audio": ref_audio,
+                    "prompt_text": prompt_text,
+                    "prompt_lang": prompt_lang,
+                }
+            }
+        }
+    )
+
+
 def load_subtitle_colors() -> tuple[str, str]:
     from bilingual_sub.core.render import DEFAULT_EN_COLOR, DEFAULT_ZH_COLOR, normalize_hex
 
     data = _load_yaml(_user_config_path())
-    style = data.get("style") if isinstance(data.get("style"), dict) else {}
+    style = _mapping(data.get("style"))
     return (
         normalize_hex(style.get("zh_color"), DEFAULT_ZH_COLOR),
         normalize_hex(style.get("en_color"), DEFAULT_EN_COLOR),
@@ -128,6 +162,10 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     return data if isinstance(data, dict) else {}
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -187,7 +225,7 @@ def default_glossary_path() -> Path:
 
 def load_ui_theme() -> str:
     data = _load_yaml(_user_config_path())
-    ui = data.get("ui") if isinstance(data.get("ui"), dict) else {}
+    ui = _mapping(data.get("ui"))
     theme = str(ui.get("theme") or "dark")
     return theme if theme in {"light", "dark"} else "dark"
 

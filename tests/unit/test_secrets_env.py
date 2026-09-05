@@ -27,6 +27,7 @@ def test_api_keys_are_isolated_per_os_user(tmp_path, monkeypatch):
     monkeypatch.delenv("SUBFLOW_API_KEY", raising=False)
     monkeypatch.delenv("MEDING_API_KEY", raising=False)
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(store, "_config_bases", lambda: [tmp_path / "SubFlow"])
     monkeypatch.setitem(sys.modules, "keyring", _NoKeyring())
 
     monkeypatch.setenv("USERNAME", "alice")

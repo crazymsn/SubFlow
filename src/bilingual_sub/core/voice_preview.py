@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
 from bilingual_sub.adapters.tts.base import TtsRequest, select_tts
-from bilingual_sub.adapters.tts.gptsovits import GptSovitsTts
 from bilingual_sub.config import user_config_dir
+from bilingual_sub.core.control import JobControl
 
 PREVIEW_SAMPLES = {
     "zh": "你好，这是配音音色试听。",
@@ -39,9 +40,18 @@ def preview_cache_dir() -> Path:
     return path
 
 
-def preview_cache_path(voice: str, lang: str, provider: str = "openai") -> Path:
-    token = _SAFE.sub("_", f"{provider}-{voice or 'default'}-{lang or 'zh'}")
-    return preview_cache_dir() / f"{token}.wav"
+def preview_cache_path(voice: str, lang: str, provider: str = "gptsovits", extra: str = "") -> Path:
+    token = _SAFE.sub("_", f"{provider}-{voice or 'default'}-{lang or 'zh'}-{extra}")
+    digest = hashlib.sha256(token.encode()).hexdigest()[:16]
+    return preview_cache_dir() / f"{token[:64]}-{digest}.wav"
+
+
+def _preview_extra(provider: str, ref_audio: str, prompt_text: str, prompt_lang: str = "") -> str:
+    if (provider or "").lower() != "gptsovits":
+        return ""
+    digest = hashlib.sha1(f"{ref_audio}|{prompt_text}|{prompt_lang}".encode()).hexdigest()[:10]
+    name = Path(ref_audio).stem if ref_audio else "noref"
+    return f"{name}-{digest}"
 
 
 def synth_voice_preview(
@@ -51,26 +61,39 @@ def synth_voice_preview(
     lang: str,
     endpoint: str = "",
     dest: Path | None = None,
+    ref_audio: str = "",
+    prompt_text: str = "",
+    prompt_lang: str = "",
+    control: JobControl | None = None,
 ) -> Path:
-    dest = dest or preview_cache_path(voice, lang, provider)
-    if dest.is_file() and dest.stat().st_size > 64:
-        try:
-            from bilingual_sub.adapters.ffmpeg import is_pcm_wav
+    from bilingual_sub.adapters.tts.gptsovits import tts_job_fingerprint
 
-            if is_pcm_wav(dest) or dest.suffix.lower() != ".wav":
-                return dest
-        except Exception:
+    if control:
+        control.check()
+    extra = tts_job_fingerprint(provider, voice=voice, endpoint=endpoint, ref_audio=ref_audio, prompt_text=prompt_text, prompt_lang=prompt_lang)
+    dest = dest or preview_cache_path(voice, lang, provider, extra)
+    if dest.is_file() and dest.stat().st_size > 64:
+        from bilingual_sub.adapters.ffmpeg import is_pcm_wav
+
+        if is_pcm_wav(dest) or dest.suffix.lower() not in {".wav", ".wave"}:
             return dest
     text = preview_sample(lang)
-    engine = (provider or "openai").lower()
-    tts = GptSovitsTts(endpoint) if engine == "gptsovits" else select_tts("openai")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    raw = tts.synth(TtsRequest(text=text, lang=lang or "zh", voice=voice or "alloy", dest=dest))
-    try:
-        from bilingual_sub.adapters.ffmpeg import is_pcm_wav, to_pcm_wav
+    engine = (provider or "gptsovits").lower()
+    if engine == "gptsovits":
+        from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
 
-        if dest.suffix.lower() in {".wav", ".wave"} and not is_pcm_wav(Path(raw)):
-            return to_pcm_wav(Path(raw), dest)
-    except Exception:
-        pass
+        ensure_running(endpoint or None, wait_sec=300, control=control)
+    tts = select_tts(
+        engine,
+        endpoint=endpoint,
+        ref_audio=ref_audio,
+        prompt_text=prompt_text,
+        prompt_lang=prompt_lang,
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    raw = tts.synth(TtsRequest(text=text, lang=lang or "zh", voice=voice or "", dest=dest), control=control)
+    from bilingual_sub.adapters.ffmpeg import is_pcm_wav, to_pcm_wav
+
+    if dest.suffix.lower() in {".wav", ".wave"} and not is_pcm_wav(Path(raw)):
+        return to_pcm_wav(Path(raw), dest, control=control)
     return Path(raw)

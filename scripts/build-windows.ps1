@@ -1,13 +1,18 @@
 #Requires -Version 5.1
+param([switch]$SourceOnly, [switch]$SkipInstall, [string]$DistPath = "dist")
 # 构建语幕 SubFlow Windows 客户端（onedir）
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-python -m pip install -e ".[gui,packaging]"
-python -m PyInstaller --noconfirm --clean "$Root\packaging\subflow.spec"
+if (-not $SkipInstall) {
+    python -m pip install -e ".[gui,packaging]"
+    if ($LASTEXITCODE -ne 0) { throw "Package installation failed" }
+}
+python -m PyInstaller --noconfirm --clean --distpath $DistPath "$Root\packaging\subflow.spec"
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
-$dist = Join-Path $Root "dist\SubFlow"
+$dist = Join-Path $DistPath "SubFlow"
 
 function Resolve-RealExe([string]$Name) {
     $cmd = Get-Command $Name -ErrorAction SilentlyContinue
@@ -43,5 +48,16 @@ $readme = Join-Path $dist "请先读我.txt"
     $readme,
     "请从本文件夹启动 SubFlow.exe，不要只复制 exe 到别处。`r`n若仍报 Qt DLL 错误，请安装 Microsoft Visual C++ 2015-2022 Redistributable (x64)。`r`n"
 )
+
+$sovits = Join-Path $Root "third_party\GPT-SoVITS"
+$sovitsOut = Join-Path $dist "GPT-SoVITS"
+if (Test-Path (Join-Path $sovits "api_v2.py")) {
+    $bundleArgs = @("$Root\scripts\bundle-gptsovits.py", $sovits, $sovitsOut)
+    if ($SourceOnly) { $bundleArgs += "--source-only" }
+    python @bundleArgs
+    if ($LASTEXITCODE -ne 0) { throw "GPT-SoVITS bundling failed" }
+} else {
+    throw "Missing GPT-SoVITS source: $sovits"
+}
 
 Write-Host "Windows client: $dist\SubFlow.exe"

@@ -11,6 +11,7 @@ python3 -m PyInstaller --noconfirm --clean "$ROOT/packaging/subflow.spec"
 
 APP="$ROOT/dist/SubFlow.app"
 BUNDLE="$ROOT/dist/SubFlow"
+python3 scripts/bundle-gptsovits.py third_party/GPT-SoVITS "$BUNDLE/GPT-SoVITS" --source-only
 if [[ ! -d "$BUNDLE" ]]; then
   echo "PyInstaller onedir missing: $BUNDLE" >&2
   exit 1
@@ -51,21 +52,14 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>SubFlow</string>
   <key>CFBundleIconFile</key><string>SubFlow</string>
-  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>LSMinimumSystemVersion</key><string>$(sw_vers -productVersion | cut -d. -f1).0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>Copyright © 深度云创科技</string>
 </dict>
 </plist>
 EOF
 
-if command -v ffmpeg >/dev/null; then
-  cp "$(command -v ffmpeg)" "$APP/Contents/MacOS/ffmpeg"
-  chmod +x "$APP/Contents/MacOS/ffmpeg"
-  if command -v ffprobe >/dev/null; then
-    cp "$(command -v ffprobe)" "$APP/Contents/MacOS/ffprobe"
-    chmod +x "$APP/Contents/MacOS/ffprobe"
-  fi
-fi
+# FFmpeg/ffprobe and their dylibs are collected and relocated by subflow.spec.
 
 # --deep fails on .dist-info folders inside _internal. Sign the launcher only.
 if command -v codesign >/dev/null; then
@@ -78,4 +72,4 @@ if [[ ! -f "$APP/Contents/MacOS/SubFlow" ]]; then
 fi
 
 echo "macOS client: $APP ($VERSION)"
-echo "ASR 需本机 Whisper，或使用 docker compose。"
+echo "First use automatically installs Python, CPU inference dependencies and models."

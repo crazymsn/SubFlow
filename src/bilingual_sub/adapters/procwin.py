@@ -26,6 +26,21 @@ def gui_python(python: Path) -> Path:
     return python
 
 
+def terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Windows venv launchers spawn another python.exe; stop that child too."""
+    if proc.poll() is not None:
+        return
+    pid = getattr(proc, "pid", None)
+    if os.name == "nt" and pid:
+        killer = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32" / "taskkill.exe"
+        subprocess.run(
+            [str(killer), "/PID", str(pid), "/T", "/F"],
+            capture_output=True, timeout=10, check=False, **hidden_run_kwargs(),
+        )
+    if proc.poll() is None and hasattr(proc, "terminate"):
+        proc.terminate()
+
+
 def is_hidden_kwargs(kwargs: dict) -> bool:
     if sys.platform != "win32":
         return True

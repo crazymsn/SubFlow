@@ -13,15 +13,36 @@ from urllib.parse import parse_qs, urlparse
 from bilingual_sub.core.control import JobControl, JobStopped
 
 logger = logging.getLogger(__name__)
+_harvest_hint = ""
+
+
+def harvest_hint() -> str:
+    return _harvest_hint
+
+
+def _set_harvest_hint(msg: str) -> None:
+    global _harvest_hint
+    _harvest_hint = msg
 
 # Prefer the original spoken track. YouTube/Bilibili `ba` is often an English auto-dub.
-ORIGINAL_AUDIO = (
-    "ba[format_note*=original]/"
-    "ba[language^=zh]/"
-    "ba[language^=yue]/"
-    "ba[format_note!*=dub]/"
-    "ba"
-)
+def original_audio_selector(source_lang: str = "") -> str:
+    """Prefer the original spoken track. Default is Chinese-first when source is unknown."""
+    fam = ""
+    raw = (source_lang or "").strip().lower()
+    if raw and raw != "auto":
+        if raw in {"zh", "zh-hans", "zh-hant", "zh-cn", "zh-tw"}:
+            fam = "zh"
+        else:
+            fam = raw.split("-", 1)[0]
+    extras: list[str] = []
+    if fam == "zh":
+        extras = ["ba[language^=zh]", "ba[language^=yue]"]
+    elif fam:
+        extras = [f"ba[language^={fam}]"]
+    return "/".join(["ba[format_note*=original]", *extras, "ba[format_note!*=dub]", "ba"])
+
+
+ORIGINAL_AUDIO = original_audio_selector("zh")
 # Highest video + original audio. Prefer HTTPS at the same height; never fall back to `/b`.
 BEST_AV_FORMAT = f"bv*[protocol^=http]+({ORIGINAL_AUDIO})/bv*+({ORIGINAL_AUDIO})"
 LIST_FORMAT = "bv*+ba/bv*/bestvideo*"
@@ -243,7 +264,7 @@ def _is_subflow_cookie_dir(path: Path) -> bool:
 
 
 def cookie_folder_dirs() -> list[Path]:
-    """Cookies folders: exe/repo, parent walks (dist → repo), cwd, APPDATA."""
+    """Cookies folders: user config first, then repo/exe templates."""
     dirs: list[Path] = []
     seen: set[Path] = set()
 
@@ -257,6 +278,15 @@ def cookie_folder_dirs() -> list[Path]:
         seen.add(resolved)
         dirs.append(resolved)
 
+    try:
+        from bilingual_sub.config import user_config_dir
+
+        add(user_config_dir() / "Cookies")
+    except Exception:
+        pass
+    local = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME")
+    if local:
+        add(Path(local) / "SubFlow" / "Cookies")
     root = _project_root()
     add(root / "Cookies")
     here = root
@@ -267,15 +297,6 @@ def cookie_folder_dirs() -> list[Path]:
         add(Path.cwd() / "Cookies")
     except OSError:
         pass
-    try:
-        from bilingual_sub.config import user_config_dir
-
-        add(user_config_dir() / "Cookies")
-    except Exception:
-        pass
-    local = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME")
-    if local:
-        add(Path(local) / "SubFlow" / "Cookies")
     return dirs
 
 
@@ -378,7 +399,7 @@ def _as_float(value: object) -> float | None:
     try:
         if value is None:
             return None
-        return float(value)
+        return float(str(value))
     except (TypeError, ValueError):
         return None
 
@@ -498,11 +519,12 @@ def quality_target(listed: int) -> int:
     return int(listed) if listed > 0 else HD_FLOOR
 
 
-def format_for_height(height: int) -> str:
+def format_for_height(height: int, source_lang: str = "") -> str:
     pin = quality_target(height)
+    audio = original_audio_selector(source_lang or "zh")
     return (
-        f"bv*[height>={pin}][protocol^=http]+({ORIGINAL_AUDIO})/"
-        f"bv*[height>={pin}]+({ORIGINAL_AUDIO})/"
+        f"bv*[height>={pin}][protocol^=http]+({audio})/"
+        f"bv*[height>={pin}]+({audio})/"
         f"b[height>={pin}][format_note*=original]/"
         f"b[height>={pin}]"
     )
@@ -555,8 +577,8 @@ def original_audio_format_id(info: dict | None) -> str | None:
     return best_id
 
 
-def prefer_audio_format(info: dict | None, height: int) -> str:
-    fmt = format_for_height(height)
+def prefer_audio_format(info: dict | None, height: int, source_lang: str = "") -> str:
+    fmt = format_for_height(height, source_lang)
     if not selected_audio_is_dubbed(info):
         return fmt
     orig = original_audio_format_id(info)
@@ -698,6 +720,21 @@ def _cdp_cookies(port: int, timeout: float = 18.0) -> list[dict]:
                 return list((msg.get("result") or {}).get("cookies") or [])
 
 
+def _adopt_harvested_jar(dest: Path, cookies: list[dict], usable) -> Path | None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and usable(dest):
+        return dest
+    tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
+    try:
+        _write_netscape(tmp, cookies)
+        if usable(tmp):
+            tmp.replace(dest)
+            return dest
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _write_netscape(path: Path, cookies: list[dict]) -> Path:
     lines = ["# Netscape HTTP Cookie File"]
     for item in cookies:
@@ -739,16 +776,24 @@ def harvest_debug_cookies(url: str) -> Path | None:
         dest = _user_cookie_dir()
         if is_youtube_url(url):
             path = dest / "youtube-cookies.txt"
-            _write_netscape(path, cookies)
-            if not youtube_cookie_is_guest(path) and _usable_cookie(path):
+            adopted = _adopt_harvested_jar(
+                path,
+                cookies,
+                lambda jar: (not youtube_cookie_is_guest(jar)) and _usable_cookie(jar),
+            )
+            if adopted:
                 logger.info("harvested YouTube cookies from chrome debug port %s", port)
-                return path
+                return adopted
         if is_bilibili_url(url):
             path = dest / "bilibili-cookies.txt"
-            _write_netscape(path, cookies)
-            if cookie_has_site_login(path, url) and _usable_cookie(path):
+            adopted = _adopt_harvested_jar(
+                path,
+                cookies,
+                lambda jar: cookie_has_site_login(jar, url) and _usable_cookie(jar),
+            )
+            if adopted:
                 logger.info("harvested Bilibili cookies from chrome debug port %s", port)
-                return path
+                return adopted
     return None
 
 
@@ -780,7 +825,15 @@ def harvest_browser_cookies(url: str) -> Path | None:
         if not exe.is_file() or not user_data.is_dir():
             continue
         if _process_running(image):
-            logger.info("skip cookie harvest: %s is running (v20 cookies need a debug session)", image)
+            attached = harvest_debug_cookies(url)
+            if attached:
+                return attached
+            _set_harvest_hint(
+                f"{image} 已在运行，无法自动读取 Cookie。"
+                "请完全退出浏览器后重试，或开启远程调试端口，"
+                "或把 Netscape 格式 cookies 放到 %APPDATA%\\SubFlow\\Cookies。"
+            )
+            logger.info("skip launching %s for cookie harvest: already running", image)
             continue
         port = _free_port()
         cmd = [
@@ -811,16 +864,24 @@ def harvest_browser_cookies(url: str) -> Path | None:
         dest = _user_cookie_dir()
         if is_youtube_url(url):
             path = dest / "youtube-cookies.txt"
-            _write_netscape(path, cookies)
-            if not youtube_cookie_is_guest(path) and _usable_cookie(path):
+            adopted = _adopt_harvested_jar(
+                path,
+                cookies,
+                lambda jar: (not youtube_cookie_is_guest(jar)) and _usable_cookie(jar),
+            )
+            if adopted:
                 logger.info("harvested YouTube cookies from %s", exe.name)
-                return path
+                return adopted
         if is_bilibili_url(url):
             path = dest / "bilibili-cookies.txt"
-            _write_netscape(path, cookies)
-            if cookie_has_site_login(path, url) and _usable_cookie(path):
+            adopted = _adopt_harvested_jar(
+                path,
+                cookies,
+                lambda jar: cookie_has_site_login(jar, url) and _usable_cookie(jar),
+            )
+            if adopted:
                 logger.info("harvested Bilibili cookies from %s", exe.name)
-                return path
+                return adopted
     return None
 
 
@@ -892,11 +953,43 @@ def ydl_options(
     return opts
 
 
+def youtube_cookies_rejected(exc: BaseException) -> bool:
+    text = str(exc)
+    low = text.lower()
+    return "cookies are no longer valid" in low or "cookie 已失效" in text
+
+
+def listing_probes(attempts: list[dict], limit: int = 6) -> list[dict]:
+    """Always include a guest probe so a dead login jar cannot occupy every listing slot."""
+    picks: list[dict] = []
+
+    def take(pred) -> None:
+        for item in attempts:
+            if item in picks or not pred(item):
+                continue
+            picks.append(item)
+            return
+
+    take(lambda item: bool(item.get("cookiefile")))
+    take(lambda item: not item.get("cookiefile") and not item.get("cookiesfrombrowser"))
+    take(lambda item: bool(item.get("cookiesfrombrowser")))
+    for item in attempts:
+        if item not in picks:
+            picks.append(item)
+        if len(picks) >= limit:
+            break
+    return picks[:limit]
+
+
 def download_attempts(url: str) -> Iterator[dict]:
     """Logged-in Cookies jar first; harvested browser session; then guest."""
     cookie = cookie_file(url)
-    if cookie is None and (is_youtube_url(url) or is_bilibili_url(url)):
-        cookie = harvest_browser_cookies(url)
+    if is_youtube_url(url) or is_bilibili_url(url):
+        attached = harvest_debug_cookies(url)
+        if attached is not None:
+            cookie = attached
+        elif cookie is None:
+            cookie = harvest_browser_cookies(url)
     browsers = available_browsers() or ("firefox", "edge", "chrome")
 
     def emit(profile: dict) -> dict:
@@ -904,6 +997,7 @@ def download_attempts(url: str) -> Iterator[dict]:
 
     if is_youtube_url(url):
         if cookie:
+            clients: tuple[str, ...]
             for clients in YT_COOKIE_CLIENTS:
                 yield emit({"clients": clients, "cookiefile": cookie, "impersonate": True})
             for browser in browsers:
@@ -945,11 +1039,13 @@ def explain_download_error(exc: BaseException) -> str:
     if "cookies are no longer valid" in low:
         return "YouTube Cookie 已失效。请重新导出 youtube-cookies.txt 放到 Cookies 文件夹后再试。"
     if "could not copy chrome cookie" in low or "failed to decrypt with dpapi" in low:
+        extra = harvest_hint()
         return (
             "Chrome / Edge 的 Cookie 库已锁定或使用 v20 加密，无法直接读取。"
             "请把已登录的 Netscape 格式 youtube-cookies.txt / bilibili-cookies.txt "
             "放到 exe 同级、项目根或 %APPDATA%\\SubFlow\\Cookies；"
             "或完全退出浏览器后再点下载。"
+            + (f" {extra}" if extra else "")
         )
     if "page needs to be reloaded" in low or "requested format is not available" in low:
         return "YouTube 没有返回可下载地址。请再试一次；若仍失败，请更新 Cookies 文件夹里的 youtube-cookies.txt。"
@@ -959,10 +1055,11 @@ def explain_download_error(exc: BaseException) -> str:
             "请用已登录的浏览器打开 bilibili.com 后再点下载。"
         )
     if "not a bot" in low or "sign in to confirm" in low or "确认你不是聊天机器人" in text or "确认你不是机器人" in text:
+        extra = harvest_hint()
         return (
-            "YouTube 拦截了游客下载。当前 youtube-cookies.txt 若只有访客字段（没有 LOGIN_INFO），请重新导出已登录 Cookie；"
-            "Chrome 127+ 无法直接读浏览器 Cookie 库，请把 Netscape 文件放到 exe 同级 / 项目 / %APPDATA%\\SubFlow\\Cookies，"
-            "或完全退出 Chrome 后再点下载。"
+            "YouTube 拦截了下载。请重新从已登录浏览器导出 youtube-cookies.txt "
+            "（有 LOGIN_INFO 也可能已被轮换）；放到 exe 同级 / 项目 / %APPDATA%\\SubFlow\\Cookies。"
+            + (f" {extra}" if extra else "")
         )
     if any(token in low for token in ("bilibili", "b23.tv")) and any(
         token in low for token in ("412", "403", "login", "risk", "风控", "登录")
@@ -1041,6 +1138,7 @@ def download(
     on_progress: Callable[[str, float], None] | None = None,
     control: JobControl | None = None,
     progress_range: tuple[float, float] = (0.03, 0.20),
+    source_lang: str = "",
 ) -> Path:
     url = canonicalize_url(url)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1114,9 +1212,10 @@ def download(
     listed_ceiling = 0
     attempts = list(download_attempts(url))
     cookie_attempts = [item for item in attempts if item.get("cookiefile")]
+    stale_cookie = False
     emit(0.02)
 
-    for probe in attempts[:6]:
+    for probe in listing_probes(attempts):
         if control:
             control.wait_if_paused()
         try:
@@ -1126,6 +1225,8 @@ def download(
         except Exception as exc:
             notes.append(f"{label_of(probe)} list: {exc}")
             logger.warning("yt-dlp list %s failed: %s", label_of(probe), exc)
+            if youtube_cookies_rejected(exc) and probe.get("cookiefile"):
+                stale_cookie = True
             continue
         if height > listed_ceiling:
             listed_ceiling = height
@@ -1140,12 +1241,14 @@ def download(
             break
         if control:
             control.wait_if_paused()
+        if stale_cookie and attempt.get("cookiefile"):
+            continue
         if attempt.get("cookiefile"):
             logger.info("download with cookie file %s", Path(str(attempt["cookiefile"])).name)
         elif attempt.get("cookiesfrombrowser"):
             logger.info("download fallback: browser cookies %s", attempt["cookiesfrombrowser"])
         want = quality_target(listed_ceiling)
-        fmt = format_for_height(want)
+        fmt = format_for_height(want, source_lang)
         tracker.begin_attempt()
         started = time.time()
         try:
@@ -1168,10 +1271,10 @@ def download(
                         want = quality_target(listed_ceiling)
                         n = len((info or {}).get("requested_formats") or ()) or 1
                         tracker.set_expected(n)
-                        ydl.params["format"] = prefer_audio_format(info, want)
+                        ydl.params["format"] = prefer_audio_format(info, want, source_lang)
                         would = selected_height(info)
-                        if would and would < want:
-                            raise DownloadError(f"该通道只有 {would}p，低于 {want}p，已跳过")
+                        if would and would < HD_FLOOR:
+                            raise DownloadError(f"该通道只有 {would}p，低于 {HD_FLOOR}p，已跳过")
                     except DownloadError:
                         raise
                     except Exception as exc:
@@ -1182,6 +1285,8 @@ def download(
         except Exception as exc:
             last_error = exc
             notes.append(f"{label_of(attempt)}: {exc}")
+            if youtube_cookies_rejected(exc) and attempt.get("cookiefile"):
+                stale_cookie = True
             if isinstance(exc, DownloadError) and "已跳过" in str(exc):
                 logger.info("skip low-res %s: %s", label_of(attempt), exc)
             elif attempt.get("cookiesfrombrowser"):
@@ -1206,15 +1311,18 @@ def download(
             continue
         height = _video_height(picked)
         want = quality_target(listed_ceiling)
-        if height < want:
-            notes.append(f"{label_of(attempt)}: got {height}p < {want}p")
-            logger.warning("rejected %sp below target %sp", height, want)
-            last_error = DownloadError(f"禁止保存低清晰度视频（{height}p < {want}p）")
+        if height < HD_FLOOR:
+            notes.append(f"{label_of(attempt)}: got {height}p < {HD_FLOOR}p")
+            logger.warning("rejected %sp below HD floor %sp", height, HD_FLOOR)
+            last_error = DownloadError(f"禁止保存低清晰度视频（{height}p < {HD_FLOOR}p）")
             try:
                 picked.unlink(missing_ok=True)
             except OSError:
                 pass
             continue
+        if height < want:
+            notes.append(f"{label_of(attempt)}: got {height}p < listed {want}p")
+            logger.info("keeping reachable %sp below listed %sp", height, want)
         if height > best_height:
             stash = dest_dir / f".best{picked.suffix.lower()}"
             if picked.resolve() != stash.resolve():
@@ -1224,7 +1332,9 @@ def download(
             break
 
     want = quality_target(listed_ceiling)
-    if best_path and best_path.is_file() and best_height >= want:
+    if best_path and best_path.is_file() and (best_height >= want or best_height >= HD_FLOOR):
+        if best_height < want:
+            logger.warning("listed %sp unavailable; keeping reachable %sp", want, best_height)
         final = _ensure_mp4(best_path, dest_dir)
         try:
             best_path.unlink(missing_ok=True)
@@ -1235,6 +1345,14 @@ def download(
         return final
     if notes:
         log_path.write_text("\n".join(notes), encoding="utf-8")
+    if is_youtube_url(url) and (
+        stale_cookie or any("no longer valid" in note.lower() for note in notes)
+    ) and (best_path is None or listed_ceiling == 0):
+        raise DownloadError(
+            explain_download_error(
+                RuntimeError("The provided YouTube account cookies are no longer valid.")
+            )
+        ) from last_error
     if last_error and (best_path is None or listed_ceiling == 0):
         raise DownloadError(explain_download_error(last_error)) from last_error
     raise DownloadError(f"无法下载最高清（{want}p），已禁止保存低清晰度视频。")

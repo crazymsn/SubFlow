@@ -2,7 +2,7 @@
 
 > Base URL 固定为 `https://api.meding.site`，不可配置。实现只允许出现在 `adapters/meding.py`。
 
-翻译与 OpenAI 配音共用该站点。客户端「API 分发站」打开的就是这个地址。
+翻译走该站点。配音不再走云端，只走内置 GPT-SoVITS。客户端「API 分发站」打开的就是这个地址。
 
 ## 端点（OpenAI 兼容）
 

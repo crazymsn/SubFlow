@@ -40,4 +40,11 @@ _prepare_qt()
 from bilingual_sub.gui.app import main
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test":
+        from pathlib import Path
+
+        from bilingual_sub.gui.self_test import run
+
+        run(Path(sys.argv[2]))
+    else:
+        main()

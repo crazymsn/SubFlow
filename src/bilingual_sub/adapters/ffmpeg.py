@@ -5,6 +5,8 @@ import logging
 import shutil
 import subprocess
 import sys
+import tempfile
+import wave
 from pathlib import Path
 
 from bilingual_sub.adapters.procwin import hidden_run_kwargs
@@ -128,7 +130,7 @@ def probe_video(path: Path) -> dict[str, int | float | bool]:
 
     duration = 0.0
     for candidate in (video.get("duration"), (data.get("format") or {}).get("duration")):
-        if candidate not in (None, "N/A", ""):
+        if candidate is not None and candidate not in ("N/A", ""):
             try:
                 duration = float(candidate)
                 if duration > 0:
@@ -158,20 +160,32 @@ def is_pcm_wav(path: Path) -> bool:
     if not path.is_file() or path.stat().st_size < 44:
         return False
     try:
-        header = path.read_bytes()[:12]
-    except OSError:
+        with wave.open(str(path), "rb") as wav:
+            if wav.getcomptype() != "NONE" or wav.getnframes() <= 0:
+                return False
+            remaining = wav.getnframes() * wav.getnchannels() * wav.getsampwidth()
+            while remaining > 0:
+                block = wav.readframes(65536)
+                if not block:
+                    return False
+                remaining -= len(block)
+            return remaining == 0
+    except (OSError, wave.Error, EOFError):
         return False
-    return header.startswith(b"RIFF") and header[8:12] == b"WAVE"
 
 
-def to_pcm_wav(src: Path, dest: Path | None = None) -> Path:
+def to_pcm_wav(src: Path, dest: Path | None = None, *, control=None) -> Path:
     """Decode any ffmpeg audio into 16-bit PCM WAV for Windows playback."""
     src = Path(src)
     dest = Path(dest) if dest is not None else src.with_name(src.stem + ".pcm.wav")
     if dest.resolve() == src.resolve() and is_pcm_wav(src):
         return src
     dest.parent.mkdir(parents=True, exist_ok=True)
-    run_cmd(
+    # FFmpeg cannot decode into its own input. Publish only a complete WAV.
+    with tempfile.NamedTemporaryFile(suffix=".wav", prefix=".decode-", dir=dest.parent, delete=False) as tmp:
+        part = Path(tmp.name)
+    try:
+        run_cmd(
         [
             find_ffmpeg(),
             "-y",
@@ -183,11 +197,15 @@ def to_pcm_wav(src: Path, dest: Path | None = None) -> Path:
             "24000",
             "-c:a",
             "pcm_s16le",
-            str(dest),
+            str(part),
         ]
-    )
-    if not is_pcm_wav(dest):
-        raise FfmpegError(f"cannot decode preview audio: {src}")
+            , control=control,
+        )
+        if not is_pcm_wav(part):
+            raise FfmpegError(f"cannot decode preview audio: {src}")
+        part.replace(dest)
+    finally:
+        part.unlink(missing_ok=True)
     return dest
 
 

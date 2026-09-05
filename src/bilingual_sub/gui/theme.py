@@ -110,7 +110,7 @@ def type_font(*, size: int = 14, weight: int | None = None, display: bool = Fals
     font = QFont()
     font.setFamilies(list(DISPLAY_FAMILIES if display else UI_FAMILIES))
     font.setPixelSize(size)
-    font.setWeight(weight if weight is not None else QFont.Weight.Normal)
+    font.setWeight(QFont.Weight(weight) if weight is not None else QFont.Weight.Normal)
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     return font
 
@@ -142,11 +142,7 @@ def mix_hex(a: str, b: str, t: float) -> str:
 
     ar, ag, ab = channels(a)
     br, bg, bb = channels(b)
-    return "#{:02X}{:02X}{:02X}".format(
-        round(ar + (br - ar) * t),
-        round(ag + (bg - ag) * t),
-        round(ab + (bb - ab) * t),
-    )
+    return f"#{round(ar + (br - ar) * t):02X}{round(ag + (bg - ag) * t):02X}{round(ab + (bb - ab) * t):02X}"
 
 
 def qss_selector_colors(qss: str, selector: str) -> list[str]:

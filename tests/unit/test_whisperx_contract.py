@@ -103,3 +103,67 @@ def test_pipeline_falls_back_without_calling_x(tmp_path, monkeypatch):
     result = run(cfg)
     assert result.cue_count >= 1
     assert called["x"] == 0
+
+
+def test_pipeline_whisperx_gets_normalized_language(tmp_path, monkeypatch):
+    from bilingual_sub.adapters.asr_protocol import AsrResult
+    from bilingual_sub.core.translate import TranslateStats
+    from bilingual_sub.models import Cue
+    from bilingual_sub.pipeline import run
+
+    clip = tmp_path / "c.mp4"
+    clip.write_bytes(b"x")
+    seen = {"language": None}
+
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.probe_video",
+        lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
+    )
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.translate_cues",
+        lambda cues, **k: ([Cue(c.start, c.end, c.zh, "Hello") for c in cues], TranslateStats(), []),
+    )
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.write_subtitles",
+        lambda cues, preset, ass_path, srt_path, **k: (
+            Path(ass_path).write_text("[Script Info]\n", encoding="utf-8"),
+            Path(srt_path).write_text("1\n", encoding="utf-8"),
+        ),
+    )
+    monkeypatch.setattr(
+        "bilingual_sub.adapters.whisperx_backend.WhisperXBackend.available",
+        lambda self: True,
+    )
+
+    def fake_x(self, wav, **kwargs):
+        seen["language"] = kwargs.get("language")
+        if kwargs.get("out_json"):
+            kwargs["out_json"].write_text(
+                '{"language":"zh","segments":[{"start":0.2,"end":1.6,"text":"大家好"}]}',
+                encoding="utf-8",
+            )
+        return AsrResult(
+            language="zh",
+            segments=[Segment(0.2, 1.6, "大家好")],
+            detected_language="zh",
+            backend="whisperx",
+        )
+
+    monkeypatch.setattr("bilingual_sub.adapters.whisperx_backend.WhisperXBackend.transcribe", fake_x)
+
+    cfg = JobConfig(
+        input_video=clip,
+        output_video=None,
+        output_srt=tmp_path / "o.srt",
+        work_dir=tmp_path / "work",
+        burn=False,
+        asr_backend="whisperx",
+        source_lang="zh-Hant",
+        target_lang="zh",
+        subtitle_mode="single:zh",
+    )
+    run(cfg)
+    assert seen["language"] == "zh"

@@ -3,15 +3,23 @@ from bilingual_sub.core.langs import (
     SOURCE_LANGS,
     SUB_LANGS,
     UI_LOCALES,
+    coerce_requested_tts,
     convert_han,
     display_name,
     drop_target_if_unneeded,
     effective_target_lang,
+    effective_tts_provider,
     has_distinct_target_line,
     is_valid_subtitle_mode,
+    job_needs_dub,
+    job_needs_translation,
+    job_translation_langs,
     output_stem_suffix,
     prompt_name,
+    screen_line,
     should_dub,
+    spoken_translation_needed,
+    token_required_for_job,
     translation_needed,
     wants_spoken_target,
     whisper_language,
@@ -50,10 +58,19 @@ def test_screen_han_follows_target_then_style():
     assert screen_han_lang("zh-Hant", "en", "bilingual") == "zh-Hant"
     assert screen_han_lang("zh", "en", "single:zh") == "zh"
     assert screen_han_lang("zh", "zh", "single:zh-Hant") == "zh-Hant"
+    from bilingual_sub.core.langs import spoken_han_lang
+
+    assert spoken_han_lang("zh-Hant") == "zh-Hant"
+    assert spoken_han_lang("zh") == "zh"
+    assert spoken_han_lang("en") is None
+    assert spoken_han_lang("ja") is None
+    assert spoken_han_lang("zh-Hant") != screen_han_lang("zh", "zh-Hant", "single:zh")
     cues = [Cue(0.0, 1.0, "歡迎回來", "Welcome back")]
     apply_han_to_cues(cues, "zh")
     assert cues[0].zh == "欢迎回来"
     assert cues[0].en == "Welcome back"
+    assert spoken_han_lang("ja") is None
+    assert spoken_han_lang("en") is None
 
 
 def test_convert_han_t2s_for_simplified():
@@ -87,6 +104,10 @@ def test_single_subtitle_modes():
     assert translation_needed("zh", "zh", "single:zh") is False
     assert translation_needed("zh", "ja", "single:ja") is True
     assert translation_needed("auto", "zh", "single:zh") is False
+    assert job_needs_translation("zh", "en", "single:zh") is True
+    assert job_needs_translation("zh", "zh", "single:zh") is False
+    assert spoken_translation_needed("zh", "en") is True
+    assert spoken_translation_needed("zh", "zh") is False
     assert wants_spoken_target("zh", "en") is True
     assert wants_spoken_target("zh", "zh") is False
     assert wants_spoken_target("zh", "zh-Hant") is False
@@ -109,6 +130,21 @@ def test_single_subtitle_modes():
     assert text_family("Hello everyone") == "en"
     assert text_family("大家好") == "zh"
     assert text_family("这是 API 接口") == "zh"
+    assert text_family("今日は良い天気です") == "ja"
+    assert text_family("안녕하세요") == "ko"
+    assert spoken_family([Cue(0.0, 1.0, "今日は良い天気です")], "zh") == "ja"
+    assert spoken_line(Cue(0.0, 1.0, "大家好", "今日は良い天気です"), "ja") == "今日は良い天気です"
+    assert spoken_line(Cue(0.0, 1.0, "大家好", "Hello", spoken="今日は良い天気です"), "ja") == "今日は良い天気です"
+    assert spoken_line(Cue(0.0, 1.0, "大家好", "Hello", spoken="Hola a todos"), "es") == "Hola a todos"
+    assert screen_line(Cue(0.0, 1.0, "大家好", "Hello"), "single:zh") == "大家好"
+    assert screen_line(Cue(0.0, 1.0, "大家好", "Hello"), "single:en") == "Hello"
+    assert screen_line(Cue(0.0, 1.0, "大家好", "Hello", spoken="今日は良い天気です"), "single:ja") == "今日は良い天気です"
+    assert job_translation_langs("ja", "zh", "single:en", enable_dub=True, tts_provider="gptsovits") == ["en", "zh"]
+    assert job_translation_langs("zh", "ja", "bilingual") == ["en", "ja"]
+    assert token_required_for_job("auto", "zh", "bilingual") is True
+    assert token_required_for_job("auto", "zh", "single:zh") is False
+    assert token_required_for_job("auto", "zh", "single:zh", enable_dub=True, tts_provider="gptsovits") is False
+    assert token_required_for_job("zh", "zh", "single:zh", enable_dub=True, tts_provider="gptsovits") is False
     assert spoken_family([Cue(0.0, 1.0, "Hello everyone")], "zh") == "en"
     assert spoken_family([Cue(0.0, 1.0, "大家好")], "en") == "zh"
     assert pair_cues_polluted([Cue(0.0, 1.0, "Hello everyone", "Hello")]) is True
@@ -124,6 +160,9 @@ def test_single_subtitle_modes():
     assert leftover[0].en == "Hello"
     drop_target_if_unneeded(leftover, "zh", "zh", "single:zh")
     assert leftover[0].en is None
+    dubbed = [Cue(0.0, 1.0, "你好", "Hello")]
+    drop_target_if_unneeded(dubbed, "zh", "en", "single:zh")
+    assert dubbed[0].en == "Hello"
     assert has_distinct_target_line(leftover) is False
     english_src = [Cue(0.0, 1.0, "Hello", "你好")]
     assign_pair_fields(english_src, "en")
@@ -142,7 +181,66 @@ def test_single_subtitle_modes():
     assert should_dub("en", "en", "en") is False
     assert should_dub("en", "en", "en", cues=[Cue(0.0, 1.0, "大家好")]) is True
     assert should_dub("en", "en", "en", cues=[Cue(0.0, 1.0, "Hello everyone")]) is False
+    assert job_needs_dub("zh", "zh", "zh", enable_dub=True, tts_provider="openai") is False
+    assert job_needs_dub("zh", "zh", "zh", enable_dub=True, tts_provider="gptsovits") is False
+    assert job_needs_dub("zh", "zh", "zh", enable_dub=False, tts_provider="gptsovits") is False
+    assert job_needs_dub("zh", "zh", "en", enable_dub=False, tts_provider="none") is True
+    assert effective_tts_provider("zh", "zh", "en") == "gptsovits"
+    assert effective_tts_provider("zh", "zh", "en", tts_provider="openai") == "gptsovits"
+    assert effective_tts_provider("zh", "zh", "zh") == "none"
+    assert effective_tts_provider("zh", "zh", "zh", enable_dub=True, tts_provider="gptsovits") == "none"
+    assert effective_tts_provider("zh", "en", "zh") == "gptsovits"
+    assert effective_tts_provider("zh", "zh", "zh", enable_dub=True, tts_provider="none") == "none"
+    assert coerce_requested_tts("none", enable_dub=True) == "gptsovits"
+    assert coerce_requested_tts("openai", enable_dub=False) == "gptsovits"
+    assert coerce_requested_tts("none", enable_dub=False) == "none"
+    assert (
+        effective_tts_provider(
+            "zh",
+            "zh",
+            "zh",
+            enable_dub=True,
+            tts_provider=coerce_requested_tts("none", enable_dub=True),
+        )
+        == "none"
+    )
     assert output_stem_suffix("bilingual") == "-中英字幕"
     assert output_stem_suffix("enzh") == "-英中字幕"
     assert output_stem_suffix("single:en") == "-English"
     assert output_stem_suffix("netflix_single") == "-单行字幕"
+
+
+def test_translate_pair_fills_japanese_source():
+    from bilingual_sub.core.translate import TranslateStats, translate_pair_cues
+    from bilingual_sub.models import Cue
+
+    cues = [Cue(0.0, 1.0, "今日は良い天気です")]
+
+    def fake(batch, *, source_lang, target_lang, **_k):
+        out = []
+        for cue in batch:
+            text = "今天天气很好" if target_lang == "zh" else "The weather is nice today."
+            out.append(Cue(cue.start, cue.end, cue.zh, text))
+        return out, TranslateStats(), []
+
+    out, _stats, _missing = translate_pair_cues(cues, translator=fake)
+    assert out[0].zh == "今天天气很好"
+    assert "weather" in (out[0].en or "").lower()
+
+
+def test_fill_translated_languages_puts_third_lang_on_spoken():
+    from bilingual_sub.core.translate import TranslateStats, fill_translated_languages
+    from bilingual_sub.models import Cue
+
+    cues = [Cue(0.0, 1.0, "大家好")]
+
+    def fake(batch, *, source_lang, target_lang, **_k):
+        text = "Hello" if target_lang == "en" else "今日は良い天気です"
+        return [Cue(c.start, c.end, c.zh, text) for c in batch], TranslateStats(), []
+
+    out, _stats, _missing = fill_translated_languages(
+        cues, ["en", "ja"], translator=fake, source_lang="zh"
+    )
+    assert out[0].en == "Hello"
+    assert out[0].spoken == "今日は良い天気です"
+    assert out[0].zh == "大家好"

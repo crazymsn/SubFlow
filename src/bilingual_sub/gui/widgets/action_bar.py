@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+)
 
 from bilingual_sub.gui.widgets.field import expanding
 from bilingual_sub.gui.widgets.filament_btn import FilamentButton

@@ -28,6 +28,7 @@ class Cue:
     zh: str
     en: str | None = None
     words: list[WordSpan] = field(default_factory=list)
+    spoken: str | None = None
 
     @property
     def source(self) -> str:
@@ -51,6 +52,7 @@ class Cue:
             "end": self.end,
             "zh": self.zh,
             "en": self.en,
+            "spoken": self.spoken,
             "source": self.zh,
             "target": self.en,
             "words": [
@@ -62,6 +64,7 @@ class Cue:
     def from_dict(cls, d: dict[str, Any]) -> Cue:
         src = str(d.get("source") or d.get("zh") or "")
         tgt = d.get("target") if "target" in d else d.get("en")
+        spoken = d.get("spoken")
         words: list[WordSpan] = []
         for raw in d.get("words") or []:
             words.append(
@@ -78,6 +81,7 @@ class Cue:
             zh=src,
             en=None if tgt is None else str(tgt),
             words=words,
+            spoken=None if spoken is None else str(spoken),
         )
 
 
@@ -109,6 +113,9 @@ class JobConfig:
     tts_provider: Literal["none", "openai", "azure", "gptsovits"] = "none"
     tts_voice: str = ""
     tts_endpoint: str = ""
+    tts_ref_audio: str = ""
+    tts_prompt_text: str = ""
+    tts_prompt_lang: str = ""
     ui_locale: str = "zh-Hans"
 
 

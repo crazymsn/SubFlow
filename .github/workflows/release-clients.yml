@@ -1,104 +1,113 @@
 name: Release clients
-
 on:
   workflow_dispatch:
   push:
     branches: [main, master]
-    tags:
-      - "v*"
-
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: clients-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  test:
-    runs-on: windows-latest
+  clients:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows-x64
+          - os: macos-14
+            label: macOS-arm64
+          - os: macos-15-intel
+            label: macOS-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      QT_QPA_PLATFORM: offscreen
+      SUBFLOW_TORCH_BACKEND: cpu
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: Install FFmpeg
+          python-version: '3.11'
+      - name: Install Windows FFmpeg
+        if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
-      - name: Install package
-        run: python -m pip install -e ".[gui,dev]"
-      - name: Tests
-        run: python -m pytest tests/unit tests/contract tests/integration/test_pipeline_any_video.py -q --no-cov
-
-  windows:
-    needs: test
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install FFmpeg
-        run: choco install ffmpeg -y --no-progress
-      - name: Install package
-        run: python -m pip install -e ".[gui,packaging]"
-      - name: PyInstaller
-        run: python -m PyInstaller --noconfirm --clean packaging/subflow.spec
-      - name: Bundle ffmpeg and strip ICU
-        shell: pwsh
-        run: |
-          $dist = "dist/SubFlow"
-          $ffmpeg = (Get-Command ffmpeg).Source
-          $probe = (Get-Command ffprobe).Source
-          Copy-Item $ffmpeg (Join-Path $dist "ffmpeg.exe") -Force
-          Copy-Item $probe (Join-Path $dist "ffprobe.exe") -Force
-          $internal = Join-Path $dist "_internal"
-          if (Test-Path $internal) {
-            Get-ChildItem $internal -File -Filter "icu*.dll" | Remove-Item -Force
-          }
-          $ver = (Select-String -Path pyproject.toml -Pattern 'version = "([^"]+)"').Matches[0].Groups[1].Value
-          Compress-Archive -Path $dist -DestinationPath "SubFlow-Windows-$ver.zip" -Force
-      - uses: actions/upload-artifact@v4
-        with:
-          name: SubFlow-Windows
-          path: dist/SubFlow
-      - uses: actions/upload-artifact@v4
-        with:
-          name: SubFlow-Windows-zip
-          path: SubFlow-Windows-*.zip
-
-  macos:
-    needs: test
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install FFmpeg
+      - name: Install macOS FFmpeg
+        if: runner.os == 'macOS'
         run: brew install ffmpeg
-      - name: Build .app
-        run: bash scripts/build-macos.sh
-      - name: Zip .app
+      - name: Install build and test tools
+        run: python -m pip install -e '.[gui,dev,packaging]'
+      - name: Tests and lint
         run: |
-          VER=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          ditto -c -k --keepParent dist/SubFlow.app "SubFlow-macOS-${VER}.zip"
+          python -m pytest -q
+          ruff check src tests scripts
+      - name: Prepare CPU recognition runtime from scratch
+        run: python scripts/prepare-runtime.py asr
+      - name: Prepare CPU dubbing dependencies from scratch
+        run: python scripts/prepare-runtime.py gptsovits --skip-models
+      - name: Build Windows client with automatic installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -SourceOnly -SkipInstall
+      - name: Build macOS client with automatic installer
+        if: runner.os == 'macOS'
+        run: bash scripts/build-macos.sh
+      - name: Smoke test Windows launcher
+        if: runner.os == 'Windows'
+        run: python scripts/smoke-client.py dist/SubFlow/SubFlow.exe
+      - name: Smoke test macOS launcher
+        if: runner.os == 'macOS'
+        run: python scripts/smoke-client.py dist/SubFlow.app/Contents/MacOS/SubFlow
+      - name: Archive Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/SubFlow -DestinationPath SubFlow-${{ matrix.label }}.zip
+      - name: Archive macOS
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/SubFlow.app SubFlow-${{ matrix.label }}.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: SubFlow-macOS
-          path: dist/SubFlow.app
+          name: SubFlow-${{ matrix.label }}
+          path: SubFlow-${{ matrix.label }}.zip
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: SubFlow-macOS-zip
-          path: SubFlow-macOS-*.zip
-
+          name: smoke-${{ matrix.label }}
+          path: client-smoke.json
+          if-no-files-found: ignore
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: subflow:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Compose CPU smoke
+        run: |
+          docker compose config --quiet
+          docker compose run --rm subflow --help
+          docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py asr
+          docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py gptsovits --skip-models
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, macos]
+    needs: [clients, docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: SubFlow-*-zip
+          pattern: SubFlow-*
           merge-multiple: true
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            SubFlow-Windows-*.zip
-            SubFlow-macOS-*.zip
+          files: SubFlow-*.zip
           generate_release_notes: true

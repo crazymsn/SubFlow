@@ -16,6 +16,24 @@ def test_preview_cache_is_wav():
     assert preview_cache_path("alloy", "en").suffix == ".wav"
 
 
+def test_synth_gptsovits_preview_waits_for_runtime(tmp_path, monkeypatch, pcm_wav):
+    calls = {"boot": 0}
+
+    class FakeTts:
+        def synth(self, req, control=None):
+            req.dest.write_bytes(pcm_wav())
+            return req.dest
+
+    monkeypatch.setattr(
+        "bilingual_sub.adapters.tts.gptsovits_runtime.ensure_running",
+        lambda *a, **k: calls.__setitem__("boot", calls["boot"] + 1) or "ready",
+    )
+    monkeypatch.setattr("bilingual_sub.core.voice_preview.select_tts", lambda provider, **_k: FakeTts())
+    dest = tmp_path / "preview.wav"
+    synth_voice_preview(provider="gptsovits", voice="", lang="zh", dest=dest)
+    assert calls["boot"] == 1
+
+
 def test_synth_voice_preview_uses_voice_and_sample(tmp_path, monkeypatch):
     seen: list = []
 
@@ -25,7 +43,7 @@ def test_synth_voice_preview_uses_voice_and_sample(tmp_path, monkeypatch):
             req.dest.write_bytes(b"ID3fake")
             return req.dest
 
-    monkeypatch.setattr("bilingual_sub.core.voice_preview.select_tts", lambda provider: FakeTts())
+    monkeypatch.setattr("bilingual_sub.core.voice_preview.select_tts", lambda provider, **_k: FakeTts())
     dest = tmp_path / "nova-en.mp3"
     path = synth_voice_preview(provider="openai", voice="nova", lang="en", dest=dest)
     assert path == dest
@@ -44,7 +62,7 @@ def test_synth_voice_preview_reuses_cache(tmp_path, monkeypatch):
             req.dest.write_bytes(b"cached-audio-bytes" * 8)
             return req.dest
 
-    monkeypatch.setattr("bilingual_sub.core.voice_preview.select_tts", lambda provider: FakeTts())
+    monkeypatch.setattr("bilingual_sub.core.voice_preview.select_tts", lambda provider, **_k: FakeTts())
     dest = tmp_path / "alloy-zh.mp3"
     first = synth_voice_preview(provider="openai", voice="alloy", lang="zh", dest=dest)
     second = synth_voice_preview(provider="openai", voice="alloy", lang="zh", dest=dest)
@@ -68,23 +86,25 @@ def test_preview_request_uses_target_not_subtitle_style():
     win = MainWindow()
     win.mode_combo.setCurrentIndex(win.mode_combo.findData("single:en"))
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("zh"))
-    provider, voice, lang, endpoint = win._preview_request()
-    assert provider == "openai"
-    assert voice == "alloy"
-    assert lang == "zh"
-    assert endpoint == ""
+    req = win._preview_request()
+    assert req.provider == "gptsovits"
+    assert req.voice == ""
+    assert req.lang == "zh"
+    assert req.prompt_lang == "zh"
+    win.source_lang_combo.setCurrentIndex(win.source_lang_combo.findData("zh"))
+    win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
+    req = win._preview_request()
+    assert req.lang == "en"
+    assert req.prompt_lang == "zh"
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("ja"))
     win.mode_combo.setCurrentIndex(win.mode_combo.findData("enzh"))
-    _provider, _voice, lang, _endpoint = win._preview_request()
-    assert lang == "ja"
-    win.tts_voice_edit.setCurrentIndex(win.tts_voice_edit.findData("onyx"))
-    _provider, voice, _lang, _endpoint = win._preview_request()
-    assert voice == "onyx"
+    req = win._preview_request()
+    assert req.lang == "ja"
     win.close()
     _ = app
 
 
-def test_preview_without_token_asks_for_key(monkeypatch):
+def test_preview_without_ref_asks_for_clip(monkeypatch):
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -96,15 +116,23 @@ def test_preview_without_token_asks_for_key(monkeypatch):
 
     set_locale("zh-Hans")
     monkeypatch.setattr("bilingual_sub.gui.app.get_api_key", lambda: "")
+    monkeypatch.setattr(
+        "bilingual_sub.gui.app.load_gptsovits_settings",
+        lambda: {"endpoint": "", "ref_audio": "", "prompt_text": "", "prompt_lang": ""},
+    )
+    monkeypatch.setattr("bilingual_sub.gui.app.save_gptsovits_settings", lambda **k: None)
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(app_qss())
     win = MainWindow()
+    win.tts_ref_edit.clear()
+    win._video = None
     win.more_btn.setChecked(True)
+    win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
     win.dub_check.setChecked(True)
     app.processEvents()
     win.tts_preview_btn.click()
     app.processEvents()
-    assert "令牌" in win.key_status.text()
+    assert "参考音频" in win.key_status.text()
     assert win._preview_worker is None or not win._preview_busy()
     win.close()
     _ = app
@@ -145,14 +173,22 @@ def test_preview_click_starts_worker_with_current_voice(monkeypatch):
 
     set_locale("zh-Hans")
     monkeypatch.setattr("bilingual_sub.gui.app.get_api_key", lambda: "test-key")
+    monkeypatch.setattr(
+        "bilingual_sub.gui.app.load_gptsovits_settings",
+        lambda: {"endpoint": "", "ref_audio": "", "prompt_text": "", "prompt_lang": ""},
+    )
+    monkeypatch.setattr("bilingual_sub.gui.app.save_gptsovits_settings", lambda **k: None)
     started: list = []
 
     class FakeWorker:
-        def __init__(self, provider, voice, lang, endpoint=""):
+        def __init__(self, provider, voice, lang, endpoint="", ref_audio="", prompt_text="", prompt_lang=""):
             self.provider = provider
             self.voice = voice
             self.lang = lang
             self.endpoint = endpoint
+            self.ref_audio = ref_audio
+            self.prompt_text = prompt_text
+            self.prompt_lang = prompt_lang
             self.ok = _FakeSignal()
             self.fail = _FakeSignal()
 
@@ -176,10 +212,16 @@ def test_preview_click_starts_worker_with_current_voice(monkeypatch):
     win.more_btn.setChecked(True)
     win.dub_check.setChecked(True)
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
-    win.tts_voice_edit.setCurrentIndex(win.tts_voice_edit.findData("nova"))
+    ref = Path(win.tts_ref_edit.placeholderText() or "ref.wav")
+    clip = Path(os.environ.get("TEMP", ".")) / "subflow-sovits-ref.wav"
+    clip.write_bytes(b"RIFF....WAVE....")
+    win.tts_ref_edit.setText(str(clip))
     app.processEvents()
     win.tts_preview_btn.click()
     app.processEvents()
-    assert started == [("openai", "nova", "en", "")]
+    assert started[0][0] == "gptsovits"
+    assert started[0][1] == ""
+    assert started[0][2] == "en"
+    _ = ref
     win.close()
     _ = app

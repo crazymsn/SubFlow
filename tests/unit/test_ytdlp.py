@@ -6,33 +6,36 @@ import pytest
 
 from bilingual_sub.adapters.ytdlp import (
     BEST_AV_FORMAT,
-    ORIGINAL_AUDIO,
     HD_FLOOR,
+    ORIGINAL_AUDIO,
     YT_SAFE_CLIENTS,
     DownloadError,
     StreamProgress,
+    audio_track_kind,
     available_browsers,
     cookie_file,
     cookie_folder_dirs,
     cookie_search_dirs,
-    js_runtime_map,
-    youtube_cookie_is_guest,
     download,
     download_attempts,
     download_folder,
     download_fraction,
     explain_download_error,
-    audio_track_kind,
     format_for_height,
-    original_audio_format_id,
-    prefer_audio_format,
-    selected_audio_is_dubbed,
     is_bilibili_url,
     is_youtube_url,
+    js_runtime_map,
+    listing_probes,
     max_video_height,
+    original_audio_format_id,
+    original_audio_selector,
+    prefer_audio_format,
     quality_target,
+    selected_audio_is_dubbed,
     selected_height,
     ydl_options,
+    youtube_cookie_is_guest,
+    youtube_cookies_rejected,
 )
 from bilingual_sub.core.control import JobControl, JobStopped
 
@@ -291,7 +294,7 @@ def test_youtube_bot_error_is_human():
     )
     msg = explain_download_error(RuntimeError(raw))
     assert "YouTube" in msg
-    assert "登录" in msg
+    assert "导出" in msg
     assert "cookies-from-browser" not in msg
 
 
@@ -328,6 +331,55 @@ def test_download_retries_after_bot_check(tmp_path, monkeypatch):
     assert calls["n"] >= 2
 
 
+def test_stale_cookie_error_preferred_over_later_bot_check(tmp_path, monkeypatch):
+    jar = tmp_path / "youtube-cookies.txt"
+    jar.write_text(
+        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_file", lambda url=None: jar)
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.available_browsers", lambda: ())
+    seen = {"cookie_dl": 0}
+
+    class DeadJarYDL(_FakeYDL):
+        def extract_info(self, url, download=False):
+            if self.opts.get("cookiefile"):
+                raise RuntimeError("The provided YouTube account cookies are no longer valid.")
+            raise RuntimeError("Sign in to confirm you're not a bot")
+
+        def download(self, urls):
+            if self.opts.get("cookiefile"):
+                seen["cookie_dl"] += 1
+            raise RuntimeError("Sign in to confirm you're not a bot")
+
+    fake = type(sys)("yt_dlp")
+    fake.YoutubeDL = DeadJarYDL
+    with patch.dict(sys.modules, {"yt_dlp": fake}):
+        with pytest.raises(DownloadError) as err:
+            download("https://youtu.be/demo", tmp_path)
+    assert "Cookie 已失效" in str(err.value)
+    assert seen["cookie_dl"] == 0
+
+
+def test_cookie_folder_user_config_beats_repo(tmp_path, monkeypatch):
+    from bilingual_sub.adapters import ytdlp as ytdlp_mod
+
+    user = tmp_path / "appdata" / "SubFlow" / "Cookies"
+    user.mkdir(parents=True)
+    (user / "youtube-cookies.txt").write_text("# user\n", encoding="utf-8")
+    repo = tmp_path / "repo"
+    (repo / "Cookies").mkdir(parents=True)
+    (repo / "Cookies" / ".gitkeep").write_text("", encoding="utf-8")
+    monkeypatch.setattr(ytdlp_mod, "_project_root", lambda: repo)
+    monkeypatch.setattr("bilingual_sub.config.user_config_dir", lambda: user.parent)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    dirs = ytdlp_mod.cookie_folder_dirs()
+    assert dirs[0] == user.resolve()
+    assert (repo / "Cookies").resolve() in dirs
+    assert dirs.index(user.resolve()) < dirs.index((repo / "Cookies").resolve())
+
+
 def test_cookie_folder_beats_env_and_legacy(tmp_path, monkeypatch):
     folder = tmp_path / "Cookies"
     legacy = tmp_path / "legacy"
@@ -362,6 +414,9 @@ def test_youtube_attempts_use_cookie_file_before_guest(tmp_path, monkeypatch):
     last_file = max(i for i, kind in enumerate(kinds) if kind == "file")
     first_guest = kinds.index("guest")
     assert last_file < first_guest
+    probes = listing_probes(attempts)
+    assert any(not item.get("cookiefile") and not item.get("cookiesfrombrowser") for item in probes)
+    assert youtube_cookies_rejected(RuntimeError("The provided YouTube account cookies are no longer valid."))
     for item in attempts:
         if item.get("cookiefile"):
             used = item.get("clients") or ()
@@ -445,8 +500,14 @@ def test_download_keeps_going_until_listed_max(tmp_path, monkeypatch):
 def test_format_prefers_original_audio_over_dub():
     assert "format_note*=original" in ORIGINAL_AUDIO
     assert "language^=zh" in ORIGINAL_AUDIO
+    assert "language^=en" in original_audio_selector("en")
+    assert "language^=zh" not in original_audio_selector("en")
+    assert "language^=zh" not in original_audio_selector("auto")
+    assert "language^=zh" not in original_audio_selector("")
     assert "format_note*=original" in BEST_AV_FORMAT
     assert "format_note*=original" in format_for_height(2160)
+    assert "language^=en" in format_for_height(2160, "en")
+    assert "language^=zh" not in format_for_height(2160, "en")
     assert "ba[format_note!*=dub]" in ORIGINAL_AUDIO
     assert audio_track_kind({"format_note": "English (US) original", "acodec": "opus"}) == "original"
     assert audio_track_kind({"language_preference": 10, "acodec": "opus"}) == "original"
@@ -568,6 +629,67 @@ def test_low_res_selection_is_skipped_and_not_saved(tmp_path, monkeypatch):
     assert not dest.exists()
 
 
+def test_download_keeps_reachable_hd_when_listing_is_higher(tmp_path, monkeypatch):
+    dest = tmp_path / "source.mp4"
+
+    class HighListYDL(_FakeYDL):
+        def extract_info(self, url, download=False):
+            return {
+                "formats": [
+                    {"vcodec": "vp9", "acodec": "none", "height": 2160, "url": "http://v4k"},
+                    {"vcodec": "vp9", "acodec": "none", "height": 1080, "url": "http://vhd"},
+                    {"vcodec": "none", "acodec": "opus", "url": "http://a"},
+                ],
+                "requested_formats": [{"vcodec": "vp9", "height": 1080, "url": "http://vhd"}],
+                "height": 1080,
+            }
+
+        def download(self, urls):
+            dest.write_bytes(b"1080p")
+
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_file", lambda url=None: None)
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp._video_height", lambda path: 1080)
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp._audio_status", lambda path: True)
+    fake = type(sys)("yt_dlp")
+    fake.YoutubeDL = HighListYDL
+    with patch.dict(sys.modules, {"yt_dlp": fake}):
+        out = download("https://youtu.be/demo", tmp_path)
+    assert out == dest
+    assert dest.read_bytes() == b"1080p"
+
+
+def test_download_uses_source_lang_audio_selector(tmp_path, monkeypatch):
+    dest = tmp_path / "source.mp4"
+    seen: list[str] = []
+
+    class LangYDL(_FakeYDL):
+        def extract_info(self, url, download=False):
+            return {
+                "formats": [
+                    {"vcodec": "vp9", "acodec": "none", "height": 1080, "url": "http://v"},
+                    {"vcodec": "none", "acodec": "opus", "url": "http://a"},
+                ],
+                "requested_formats": [{"vcodec": "vp9", "height": 1080, "url": "http://v"}],
+                "height": 1080,
+            }
+
+        def download(self, urls):
+            seen.append(str(self.params.get("format") or ""))
+            dest.write_bytes(b"en-audio")
+
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_file", lambda url=None: None)
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp._video_height", lambda path: 1080)
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp._audio_status", lambda path: True)
+    fake = type(sys)("yt_dlp")
+    fake.YoutubeDL = LangYDL
+    with patch.dict(sys.modules, {"yt_dlp": fake}):
+        out = download("https://youtu.be/demo", tmp_path, source_lang="en")
+    assert out == dest
+    assert seen
+    assert any("language^=en" in fmt for fmt in seen)
+    assert all("language^=zh" not in fmt for fmt in seen)
+
+
 def test_download_folder_uses_video_id():
     root = Path("/tmp/subflow-dl")
     assert download_folder("https://www.youtube.com/watch?v=u00naZNsX8c", root).name == "u00naZNsX8c"
@@ -617,3 +739,30 @@ def test_hls_fragments_do_not_spike_the_bar():
             }
         ) or last
     assert last < 0.2
+
+
+def test_adopt_harvest_keeps_existing_usable_jar(tmp_path):
+    from bilingual_sub.adapters.ytdlp import _adopt_harvested_jar
+
+    dest = tmp_path / "youtube-cookies.txt"
+    dest.write_text("KEEP\n", encoding="utf-8")
+    out = _adopt_harvested_jar(
+        dest,
+        [{"domain": ".youtube.com", "name": "GUEST", "value": "1"}],
+        lambda path: path.read_text(encoding="utf-8").startswith("KEEP"),
+    )
+    assert out == dest
+    assert dest.read_text(encoding="utf-8") == "KEEP\n"
+
+
+def test_adopt_harvest_does_not_write_unusable_jar(tmp_path):
+    from bilingual_sub.adapters.ytdlp import _adopt_harvested_jar
+
+    dest = tmp_path / "youtube-cookies.txt"
+    out = _adopt_harvested_jar(
+        dest,
+        [{"domain": ".youtube.com", "name": "GUEST", "value": "1"}],
+        lambda path: False,
+    )
+    assert out is None
+    assert not dest.exists()

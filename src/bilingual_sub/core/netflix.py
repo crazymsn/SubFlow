@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bilingual_sub.core.langs import is_cjk
+from bilingual_sub.core.langs import is_cjk, lang_family, line_matching, spoken_line
 from bilingual_sub.models import Cue, WordSpan
 
 MAX_DURATION = 7.0
@@ -101,15 +101,31 @@ def split_text(
 def fit_cues(cues: list[Cue], lang: str, *, use_target: bool = True) -> list[Cue]:
     fitted: list[Cue] = []
     for cue in cues:
-        text = (cue.target if use_target else cue.source) or ""
+        if use_target:
+            text = line_matching(cue, lang) or spoken_line(cue, lang) or cue.source or cue.target or ""
+        else:
+            text = cue.source or cue.target or ""
         words = cue.words
         if not needs_split(text, cue.start, cue.end, lang):
             fitted.append(cue)
             continue
         parts = split_text(text, cue.start, cue.end, lang, words)
+        fam = lang_family(lang)
         for part in parts:
-            if use_target:
-                part.zh = cue.zh
-                part.en = part.en
-            fitted.append(part)
+            piece = (part.en or part.zh or "").strip()
+            cloned = Cue(
+                start=part.start,
+                end=part.end,
+                zh=cue.zh,
+                en=cue.en,
+                spoken=getattr(cue, "spoken", None),
+                words=list(part.words),
+            )
+            if fam == "zh":
+                cloned.zh = piece
+            elif fam == "en":
+                cloned.en = piece
+            else:
+                cloned.spoken = piece
+            fitted.append(cloned)
     return fitted

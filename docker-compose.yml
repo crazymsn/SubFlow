@@ -1,28 +1,33 @@
-# 语幕 SubFlow — 开箱即用
-# 1. 复制 .env.example 为 .env 并填入 SUBFLOW_API_KEY
-# 2. 把视频放到 ./data
-# 3. docker compose pull
-# 4. docker compose run --rm subflow run /data/你的视频.mp4 -o /data/out.mp4
-# 官方镜像：https://hub.docker.com/r/crazymsn/subflow
-
+# docker compose build
+# docker compose run --rm subflow run /data/input.mp4 -o /data/output.mp4
+# CPU works without a graphics card. Models download once into named volumes.
 services:
   subflow:
-    image: crazymsn/subflow:latest
-    pull_policy: missing
+    image: subflow:local
     build:
       context: .
       dockerfile: Dockerfile
     environment:
       SUBFLOW_API_KEY: ${SUBFLOW_API_KEY:-}
       SUBFLOW_TRANSLATE_MODEL: ${SUBFLOW_TRANSLATE_MODEL:-}
+      SUBFLOW_GPTSOVITS_DEVICE: cpu
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
     volumes:
       - ./data:/data
       - whisper-cache:/root/.cache/whisper
       - subflow-cache:/root/.cache/bilingual-sub
+      - huggingface-cache:/root/.cache/huggingface
+      - sovits-models:/opt/GPT-SoVITS/GPT_SoVITS/pretrained_models
+      - sovits-g2pw:/opt/GPT-SoVITS/GPT_SoVITS/text/G2PWModel
+      - sovits-nltk:/opt/GPT-SoVITS/nltk_data
     working_dir: /data
+    init: true
     stdin_open: true
     tty: true
-
 volumes:
   whisper-cache:
   subflow-cache:
+  huggingface-cache:
+  sovits-models:
+  sovits-g2pw:
+  sovits-nltk:

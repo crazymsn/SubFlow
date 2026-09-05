@@ -26,6 +26,11 @@
 | 429 / 5xx | 配额或服务端抖动 | 客户端会按 1s / 2s / 4s 重试三次 |
 | 无音轨 | 视频没有音频 | 工具报错退出，需有语音轨 |
 | 无网不能翻译 | 翻译走 meding | 可对已译作业 `--resume-from render` |
+| 配音提示未开通 `tts-1` | 旧版还在走 OpenAI | 换用已去掉 OpenAI 的客户端；配音只走内置 GPT-SoVITS |
+| GPT-SoVITS 未检测到服务 | `api_v2.py` 没起来，或缺 FastAPI / 预训练权重 | 客户端会自动拉起；进程秒退看 `%APPDATA%\SubFlow\gptsovits.log`。在 `third_party/GPT-SoVITS` 跑官方 `install.ps1`，或设 `SUBFLOW_GPTSOVITS_HOME` / `SUBFLOW_GPTSOVITS_PYTHON` 指向整合包 |
+| 配音时 WinError 206 | 长视频的片段路径和混音滤镜超过 Windows 命令长度 | 使用修复后的客户端；混音每批最多 24 段，滤镜写入文件。中文原片输出中文简繁字幕会跳过配音 |
+| GPT-SoVITS 要参考音频 | 官方 `/tts` 必填 `ref_audio_path` | 选 3–10 秒清晰人声 wav，并尽量填写参考文本 |
+| GPT-SoVITS 失败仍是原声 | 配音没合成成功，成片不会被覆盖 | 看状态栏；确认服务已起来且参考音频在本机路径可读 |
 | `docker compose` 仍本地构建 | 本机没有 `crazymsn/subflow:latest` | 先 `docker compose pull`，或保留 `pull_policy: missing` 后的首次构建 |
 
 ## 退出码

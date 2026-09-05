@@ -5,9 +5,13 @@ from __future__ import annotations
 import sys
 import wave
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
+
+if TYPE_CHECKING:
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 
 def _wav_ms(path: Path) -> int:
@@ -35,9 +39,9 @@ class PreviewPlayer(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._player = None
-        self._output = None
-        self._watch = None
+        self._player: QMediaPlayer | None = None
+        self._output: QAudioOutput | None = None
+        self._watch: QTimer | None = None
 
     def play(self, path: Path) -> None:
         self.stop()

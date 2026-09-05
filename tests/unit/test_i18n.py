@@ -1,6 +1,5 @@
 from bilingual_sub.i18n import available_locales, set_locale, tr
 
-
 REQUIRED = (
     "url_ph",
     "download",
@@ -29,6 +28,12 @@ REQUIRED = (
     "tts_preview_ok",
     "tts_preview_fail",
     "tts_endpoint",
+    "tts_ref_audio",
+    "tts_prompt",
+    "tts_sovits_probe",
+    "tts_sovits_start",
+    "tts_sovits_need_ref",
+    "select_ref",
     "out",
     "browse",
     "start",

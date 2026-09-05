@@ -52,9 +52,10 @@ def main() -> None:
     print(f"START model={args.model} device={dev} wav={wav}", flush=True)
     model, dev = load_model(args.model, dev)
     print(f"MODEL_LOADED device={dev}", flush=True)
+    lang = None if (args.language or "").strip().lower() in {"", "auto"} else args.language
     result = model.transcribe(
         str(wav),
-        language=args.language,
+        language=lang,
         fp16=dev == "cuda",
         word_timestamps=False,
         verbose=False,

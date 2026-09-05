@@ -16,7 +16,7 @@ CLI / GUI / Docker
         ├── core.translate_refine   （可选电影级润色）
         ├── core.render     ASS / SRT（中英各 1 行；简繁；subtitle_zh_color / subtitle_en_color）
         ├── core.burn       adapters.ffmpeg
-        └── core.dub        OpenAI TTS / GPT-SoVITS
+        └── core.dub        内置 GPT-SoVITS（启动客户端自动拉起）
 ```
 
 桌面层：`gui/app.py` 组窗口；`gui/theme.py` 管颜色与字阶；`gui/widgets/color_chip.py` 是字幕色块；`gui/workers.py` 把流水线丢到后台线程。`core/*` 不得依赖 `cli` / `gui`。
@@ -42,6 +42,7 @@ CLI / GUI / Docker
 | `glossary_path` / `glossary_generate` | 术语表 / 从视频抽术语（CLI；桌面端不暴露） |
 | `burn` | 是否烧录 |
 | `enable_dub` / `tts_provider` / `tts_voice` / `tts_endpoint` | 配音 |
+| `tts_ref_audio` / `tts_prompt_text` / `tts_prompt_lang` | GPT-SoVITS 参考音与参考文本（官方 `/tts` 必填路径） |
 | `resume_from` | 从某阶段继续 |
 | `preview_minutes` | 只处理前 N 分钟 |
 

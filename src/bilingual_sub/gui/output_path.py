@@ -100,6 +100,16 @@ def sidecar_dub(dest_mp4: Path) -> Path:
     return dest_mp4.with_name(dest_mp4.stem + "-dub.mp4")
 
 
+def resolve_dub_sidecar(output_video: Path | None, output_srt: Path) -> Path:
+    """No-burn dub next to the intended MP4 stem, never `*.bilingual-dub.mp4`."""
+    if output_video is not None:
+        return sidecar_dub(output_video)
+    stem = output_srt.stem
+    if stem.endswith(".bilingual"):
+        stem = stem[: -len(".bilingual")]
+    return output_srt.with_name(stem + "-dub.mp4")
+
+
 def _copy_if_needed(src: Path | None, dest: Path) -> Path | None:
     if src is None or not src.is_file():
         return None

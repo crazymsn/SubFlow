@@ -3,7 +3,6 @@ from bilingual_sub.core.netflix import cpl_ok, cps_ok, fit_cues, needs_split, sp
 from bilingual_sub.core.render import render_ass_srt
 from bilingual_sub.models import Cue, WordSpan
 
-
 PRESET = StylePreset(
     name="test",
     style={
@@ -65,11 +64,26 @@ def test_enzh_english_above_chinese():
 
 def test_netflix_single_one_dialogue():
     cues = [Cue(1.0, 3.0, "大家好", "Hello.")]
-    ass, srt = render_ass_srt(cues, PRESET, play_res=(1920, 1080), mode="netflix_single")
+    ass, srt = render_ass_srt(
+        cues, PRESET, play_res=(1920, 1080), mode="netflix_single", target_lang="en", source_lang="zh"
+    )
     assert ass.count("Dialogue:") == 1
     assert "Hello." in ass
     assert "大家好" not in ass or ass.count("大家好") == 0
     assert "Hello." in srt
+
+
+def test_netflix_single_uses_target_lang_not_en_field():
+    # English ASR parked in cue.en; Chinese translation in cue.zh.
+    cues = [Cue(1.0, 3.0, "大家好", "Hello everyone")]
+    ass, srt = render_ass_srt(
+        cues, PRESET, play_res=(1920, 1080), mode="netflix_single", target_lang="zh", source_lang="en"
+    )
+    assert ass.count("Dialogue:") == 1
+    assert "大家好" in ass
+    assert "Hello everyone" not in ass
+    assert "大家好" in srt
+    assert "Hello" not in srt
 
 
 def test_single_english_one_dialogue():
@@ -82,8 +96,26 @@ def test_single_english_one_dialogue():
     assert "大家好" not in srt
 
 
+def test_single_zh_keeps_chinese_when_en_dub_exists():
+    cues = [Cue(1.0, 3.0, "大家好", "Hello.")]
+    ass, srt = render_ass_srt(cues, PRESET, play_res=(1920, 1080), mode="single:zh")
+    assert ass.count("Dialogue:") == 1
+    assert "大家好" in ass
+    assert "Hello." not in ass
+    assert "大家好" in srt
+    assert "Hello." not in srt
+
+
 def test_fit_cues_splits_long():
     long = "This English line is intentionally longer than the Netflix CPL limit for sure."
     cues = [Cue(0.0, 2.0, "源", long)]
     fitted = fit_cues(cues, "en", use_target=True)
     assert len(fitted) >= 1
+
+
+def test_fit_cues_falls_back_to_source_when_target_empty():
+    long = "这是一句超过七秒还没有目标译文的中文对白所以必须按源语拆开。"
+    cues = [Cue(0.0, 8.0, long, None)]
+    fitted = fit_cues(cues, "zh", use_target=True)
+    assert all(part.zh for part in fitted)
+    assert sum(part.end - part.start for part in fitted) > 0

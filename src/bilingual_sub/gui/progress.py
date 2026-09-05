@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from bilingual_sub.i18n import tr
 
-
 BAR_ONLY_STAGES = frozenset({"transcribe", "burn"})
 
 _STAGE_KEYS = {

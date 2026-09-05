@@ -15,7 +15,6 @@ from bilingual_sub.adapters.ffmpeg import FfmpegError, copy_to_ascii_workdir, pr
 from bilingual_sub.adapters.whisper_backend import load_transcript, transcribe
 from bilingual_sub.adapters.whisperx_backend import WhisperXBackend, ensure_whisperx_runtime
 from bilingual_sub.adapters.ytdlp import download as ytdlp_download
-from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.config import (
     AppSettings,
     default_glossary_path,
@@ -24,6 +23,7 @@ from bilingual_sub.config import (
 )
 from bilingual_sub.core.audio import detect_silences, extract_wav
 from bilingual_sub.core.burn import burn_subtitles
+from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.cues import build_cues
 from bilingual_sub.core.dub import dub_cues
 from bilingual_sub.core.glossary import Glossary
@@ -32,21 +32,24 @@ from bilingual_sub.core.langs import (
     apply_han_to_cues,
     assign_pair_fields,
     drop_target_if_unneeded,
+    effective_tts_provider,
     has_distinct_target_line,
     is_pair_mode,
     job_needs_dub,
+    job_needs_translation,
+    job_translation_langs,
+    lang_family,
     normalize_pair_fields,
     pair_cues_polluted,
     screen_han_lang,
-    screen_translate_lang,
     should_dub,
     spoken_family,
+    spoken_han_lang,
     spoken_line,
     translation_needed,
     whisper_language,
 )
 from bilingual_sub.core.netflix import fit_cues
-from bilingual_sub.core.translate_refine import translate_cues_refined
 from bilingual_sub.core.render import (
     SUBTITLE_PACK,
     apply_subtitle_colors,
@@ -54,7 +57,12 @@ from bilingual_sub.core.render import (
     save_cues_json,
     write_subtitles,
 )
-from bilingual_sub.core.translate import translate_cues, translate_pair_cues
+from bilingual_sub.core.translate import (
+    fill_translated_languages,
+    translate_cues,
+    translate_pair_cues,
+)
+from bilingual_sub.core.translate_refine import translate_cues_refined
 from bilingual_sub.logging_util import setup_logging
 from bilingual_sub.models import STAGES, Cue, JobConfig, JobResult
 from bilingual_sub.secrets.store import get_api_key
@@ -138,8 +146,42 @@ def _glossary_hash(path: Path | None) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
+def _resolved_tts_provider(
+    config: JobConfig,
+    cues=None,
+    *,
+    detected_spoken: str | None = None,
+) -> str:
+    return effective_tts_provider(
+        config.source_lang,
+        config.source_lang if detected_spoken is None else detected_spoken,
+        config.target_lang,
+        cues=cues,
+        enable_dub=config.enable_dub,
+        tts_provider=config.tts_provider,
+    )
+
+
+def _tts_fingerprint(config: JobConfig, *, detected_spoken: str | None = None, cues=None) -> str:
+    from bilingual_sub.adapters.tts.gptsovits import tts_job_fingerprint
+
+    return tts_job_fingerprint(
+        _resolved_tts_provider(config, cues, detected_spoken=detected_spoken),
+        voice=config.tts_voice,
+        endpoint=config.tts_endpoint,
+        ref_audio=config.tts_ref_audio,
+        prompt_text=config.tts_prompt_text,
+        prompt_lang=config.tts_prompt_lang,
+    )
+
+
 def artifact_key(config: JobConfig) -> str:
-    fp = video_fingerprint(config.input_video)
+    if config.input_video.is_file():
+        fp = video_fingerprint(config.input_video)
+    elif config.source_url:
+        fp = {"path": f"url|{config.source_url}", "size": 0, "mtime_ns": 0}
+    else:
+        fp = {"path": f"url|{config.source_url or config.input_video}", "size": 0, "mtime_ns": 0}
     preview = config.preview_minutes or 0
     gloss = _glossary_hash(config.glossary_path)
     raw = (
@@ -148,23 +190,68 @@ def artifact_key(config: JobConfig) -> str:
         f"{config.source_lang}|{config.target_lang}|{config.subtitle_mode}|"
         f"{int(translation_needed(config.source_lang, config.target_lang, config.subtitle_mode))}|"
         f"{int(should_dub(config.source_lang, config.source_lang, config.target_lang))}|"
+        f"{int(config.enable_dub)}|{_tts_fingerprint(config)}|"
         f"{config.asr_backend}|{int(config.refine_translate)}|{gloss}|"
-        f"{config.source_url or ''}|"
-        f"{config.subtitle_zh_color}|{config.subtitle_en_color}|"
-        f"pair-script-v1"
+        f"{int(config.burn)}|{config.source_url or ''}|"
+        f"pair-script-v1|original-audio-v2|bounded-mix-v1"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def _same_fingerprint(saved: dict | None, config: JobConfig) -> bool:
+def _same_fingerprint(saved: dict | None, config: JobConfig, work: Path | None = None) -> bool:
     if not saved:
         return False
-    cur = video_fingerprint(config.input_video)
+    if config.input_video.is_file():
+        cur = video_fingerprint(config.input_video)
+        return (
+            os.path.normcase(str(saved.get("path") or "")) == os.path.normcase(cur["path"])
+            and int(saved.get("size") or -1) == cur["size"]
+            and int(saved.get("mtime_ns") or -1) == cur["mtime_ns"]
+        )
+    if work is None or not config.source_url:
+        return False
+    src = work / "source.mp4"
+    url_txt = work / "source.url.txt"
+    if not (src.is_file() and url_txt.is_file()):
+        return False
+    if url_txt.read_text(encoding="utf-8").strip() != config.source_url:
+        return False
+    return int(saved.get("size") or -1) == src.stat().st_size and src.stat().st_size > 0
+
+
+def _job_profile_matches(report: dict, config: JobConfig) -> bool:
+    if not report:
+        return True
     return (
-        os.path.normcase(str(saved.get("path") or "")) == os.path.normcase(cur["path"])
-        and int(saved.get("size") or -1) == cur["size"]
-        and int(saved.get("mtime_ns") or -1) == cur["mtime_ns"]
+        str(report.get("source_lang") or "zh") == config.source_lang
+        and str(report.get("target_lang") or "zh") == config.target_lang
+        and str(report.get("subtitle_mode") or "bilingual") == config.subtitle_mode
+        and str(report.get("whisper_model") or config.whisper_model) == config.whisper_model
+        and str(report.get("translate_model") or config.translate_model) == config.translate_model
+        and str(report.get("asr_backend") or "whisper") == config.asr_backend
     )
+
+
+def _resume_dir_matches(config: JobConfig, work: Path) -> bool:
+    report = _load_json(work / "report.json")
+    if report and not _job_profile_matches(report, config):
+        return False
+    if report:
+        saved = report.get("input_fingerprint") if isinstance(report.get("input_fingerprint"), dict) else None
+        if config.input_video.is_file() and saved:
+            cur = video_fingerprint(config.input_video)
+            if int(saved.get("size") or -1) == cur["size"] and cur["size"] > 0:
+                return True
+        saved_url = str(report.get("source_url") or "")
+        if config.source_url and saved_url:
+            return saved_url == config.source_url
+    src = work / "source.mp4"
+    if config.input_video.is_file() and src.is_file():
+        return config.input_video.stat().st_size == src.stat().st_size
+    url_txt = work / "source.url.txt"
+    if config.source_url and url_txt.is_file():
+        return url_txt.read_text(encoding="utf-8").strip() == config.source_url
+    return False
 
 
 def _auto_work_dir(config: JobConfig) -> bool:
@@ -180,6 +267,10 @@ def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
         if last is None:
             raise FileNotFoundError(
                 "resume requested but no last job found; pass --work-dir to the previous work folder"
+            )
+        if not _resume_dir_matches(config, last):
+            raise FileNotFoundError(
+                "上次作业不是这部片子或字幕/识别设置不同；请传 --work-dir 指向对应工作目录"
             )
         wd = last
     elif settings.video.work_dir == "auto":
@@ -208,7 +299,7 @@ def _can_reexport(config: JobConfig, work: Path) -> bool:
     if state.get("stage") not in {"render", "burn", "done"}:
         return False
     report = _load_json(work / "report.json")
-    if not _same_fingerprint(report.get("input_fingerprint"), config):
+    if not _same_fingerprint(report.get("input_fingerprint"), config, work):
         return False
     if str(report.get("whisper_model") or config.whisper_model) != config.whisper_model:
         return False
@@ -224,23 +315,43 @@ def _can_reexport(config: JobConfig, work: Path) -> bool:
         return False
     if bool(report.get("refine", False)) != bool(config.refine_translate):
         return False
-    need_xl8 = translation_needed(config.source_lang, config.target_lang, config.subtitle_mode)
-    if report.get("translated") is not None and bool(report.get("translated")) != need_xl8:
+    if "burn" in report and bool(report.get("burn")) != bool(config.burn):
+        return False
+    heard = str(report.get("detected_spoken") or config.source_lang)
+    need_screen = translation_needed(config.source_lang, config.target_lang, config.subtitle_mode)
+    need_any = job_needs_translation(
+        config.source_lang,
+        config.target_lang,
+        config.subtitle_mode,
+        detected_spoken=heard,
+        enable_dub=config.enable_dub,
+        tts_provider=config.tts_provider,
+    )
+    if report.get("translated") is not None and bool(report.get("translated")) != need_screen:
         return False
     cues = load_cues_json(cues_path)
-    if not need_xl8 and (report.get("translated") is None or has_distinct_target_line(cues)):
+    if not need_any and has_distinct_target_line(cues):
         return False
     if is_pair_mode(config.subtitle_mode) and pair_cues_polluted(cues):
         return False
-    heard = str(report.get("detected_spoken") or config.source_lang)
-    if job_needs_dub(
+    needs_voice = job_needs_dub(
         config.source_lang,
         heard,
         config.target_lang,
+        cues=_original_cues(work),
         enable_dub=config.enable_dub,
         tts_provider=config.tts_provider,
-    ) and not (work / "dubbed.mp4").is_file():
+    )
+    if "dubbed" in report and bool(report["dubbed"]) != needs_voice:
         return False
+    if needs_voice:
+        if not (work / "dubbed.mp4").is_file():
+            return False
+        saved_tts = report.get("tts_fingerprint")
+        if saved_tts and saved_tts != _tts_fingerprint(config, detected_spoken=heard, cues=cues):
+            return False
+        if not _style_same(report, config):
+            return False
     return True
 
 
@@ -282,6 +393,8 @@ def _export_subs(
         play_res=play_res,
         mode=config.subtitle_mode,
         han_lang=screen_han_lang(config.source_lang, config.target_lang, config.subtitle_mode),
+        target_lang=config.target_lang,
+        source_lang=config.source_lang,
     )
     if ass_out != ass_path:
         shutil.copy2(ass_path, ass_out)
@@ -295,18 +408,31 @@ def _copy_or_burn(
     report: dict,
     control: JobControl | None = None,
 ) -> Path | None:
-    if not config.burn:
-        return None
-    dest = config.output_video or config.output_srt.with_suffix(".mp4")
-    dest.parent.mkdir(parents=True, exist_ok=True)
     heard = str(report.get("detected_spoken") or config.source_lang)
-    if job_needs_dub(
+    needs_voice = job_needs_dub(
         config.source_lang,
         heard,
         config.target_lang,
+        cues=_original_cues(work),
         enable_dub=config.enable_dub,
         tts_provider=config.tts_provider,
-    ):
+    )
+    if not config.burn:
+        if not needs_voice:
+            return None
+        dubbed = work / "dubbed.mp4"
+        if not dubbed.is_file():
+            raise FileNotFoundError("previous dub missing; cannot export without re-running")
+        from bilingual_sub.gui.output_path import resolve_dub_sidecar
+
+        dest = resolve_dub_sidecar(config.output_video, config.output_srt)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dubbed.resolve() != dest.resolve():
+            shutil.copy2(dubbed, dest)
+        return dest
+    dest = config.output_video or config.output_srt.with_suffix(".mp4")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if needs_voice:
         dubbed = work / "dubbed.mp4"
         if not dubbed.is_file():
             raise FileNotFoundError("previous dub missing; cannot export without re-running")
@@ -315,7 +441,7 @@ def _copy_or_burn(
         return dest
     prev = Path(str(report["output_mp4"])) if report.get("output_mp4") else None
     style_same = _style_same(report, config)
-    if prev and prev.is_file() and style_same:
+    if prev and prev.is_file() and style_same and not report.get("dubbed"):
         if prev.resolve() != dest.resolve():
             shutil.copy2(prev, dest)
         return dest
@@ -337,6 +463,14 @@ def _copy_or_burn(
     return dest
 
 
+def _original_cues(work: Path) -> list[Cue]:
+    for name in ("cues.source.json", "cues.zh.json"):
+        path = work / name
+        if path.is_file():
+            return load_cues_json(path)
+    return []
+
+
 def _result_from_work(
     *,
     job_id: str,
@@ -351,7 +485,7 @@ def _result_from_work(
     reused: bool,
 ) -> JobResult:
     missing = list(report.get("missing_en_samples") or [])
-    payload = {
+    payload: dict = {
         "job_id": job_id,
         "input": str(config.input_video),
         "duration_sec": report.get("duration_sec") or 0,
@@ -379,9 +513,20 @@ def _result_from_work(
         "subtitle_mode": config.subtitle_mode,
         "asr_backend": config.asr_backend,
         "refine": config.refine_translate,
+        "burn": bool(config.burn),
         "source_url": config.source_url,
         "detected_spoken": report.get("detected_spoken"),
         "dubbed": bool(report.get("dubbed")),
+        "tts_provider": report.get("tts_provider")
+        or _resolved_tts_provider(
+            config,
+            detected_spoken=str(report.get("detected_spoken") or "") or None,
+        ),
+        "tts_fingerprint": report.get("tts_fingerprint")
+        or _tts_fingerprint(
+            config,
+            detected_spoken=str(report.get("detected_spoken") or "") or None,
+        ),
         "last_stage": "done",
         "stopped": False,
         "reused": reused,
@@ -404,6 +549,7 @@ def _result_from_work(
         translate_api_calls=int(payload["translate_api_calls"]),
         stages=stages,
         reused=reused,
+        output_dub=Path(str(report["output_dub"])) if report.get("output_dub") else output_mp4 if not config.burn else None,
         translated=translation_needed(config.source_lang, config.target_lang, config.subtitle_mode),
     )
 
@@ -421,7 +567,11 @@ def _reexport_if_possible(
     report = _load_json(work / "report.json")
     state = _load_json(work / "job_state.json")
     job_id = str(state.get("job_id") or uuid.uuid4().hex[:12])
-    cues = load_cues_json(work / "cues.bilingual.json")
+    cues_file = work / "cues.bilingual.json"
+    fitted = work / "cues.fitted.json"
+    if config.subtitle_mode == "netflix_single" and fitted.is_file():
+        cues_file = fitted
+    cues = load_cues_json(cues_file)
     play = report.get("play_res") or [2560, 1600]
     play_res = (int(play[0]), int(play[1]))
 
@@ -511,17 +661,53 @@ def _run_job(
     if _should_run(config.resume_from, "ingest"):
         _gate(control)
         if config.source_url:
-            prog("ingest", 0.03)
-            ts = time.time()
-            (work / "source.url.txt").write_text(config.source_url, encoding="utf-8")
-            downloaded = ytdlp_download(config.source_url, work, on_progress=prog, control=control)
-            config.input_video = downloaded
-            stages["ingest_sec"] = time.time() - ts
+            existing = work / "source.mp4"
+            url_txt = work / "source.url.txt"
+            same_url = (
+                existing.is_file()
+                and existing.stat().st_size > 64
+                and url_txt.is_file()
+                and url_txt.read_text(encoding="utf-8").strip() == config.source_url
+            )
+            if same_url:
+                config.input_video = existing
+            else:
+                prog("ingest", 0.03)
+                ts = time.time()
+                url_txt.write_text(config.source_url, encoding="utf-8")
+                downloaded = ytdlp_download(
+                    config.source_url,
+                    work,
+                    on_progress=prog,
+                    control=control,
+                    source_lang=config.source_lang,
+                )
+                config.input_video = downloaded
+                stages["ingest_sec"] = time.time() - ts
         _save_state(work, "ingest", {"job_id": job_id}, control=control)
 
     input_video = config.input_video
     if not input_video.is_file():
-        raise FileNotFoundError("请先选择本地视频，或填写可下载的视频链接")
+        fallback = work / "source.mp4"
+        if fallback.is_file():
+            input_video = fallback
+            config.input_video = fallback
+        elif config.source_url:
+            prog("ingest", 0.03)
+            ts = time.time()
+            (work / "source.url.txt").write_text(config.source_url, encoding="utf-8")
+            downloaded = ytdlp_download(
+                config.source_url,
+                work,
+                on_progress=prog,
+                control=control,
+                source_lang=config.source_lang,
+            )
+            config.input_video = downloaded
+            input_video = downloaded
+            stages["ingest_sec"] = time.time() - ts
+        else:
+            raise FileNotFoundError("请先选择本地视频，或填写可下载的视频链接")
     if settings.video.copy_to_ascii_path:
         source = copy_to_ascii_workdir(input_video, work)
     else:
@@ -583,9 +769,7 @@ def _run_job(
     else:
         silences = [tuple(x) for x in json.loads(silences_path.read_text(encoding="utf-8"))]
 
-    asr_lang = whisper_language(config.source_lang) if config.source_lang != "auto" else "auto"
-    if asr_lang == "auto":
-        asr_lang = settings.asr.language
+    asr_lang = whisper_language(config.source_lang)
     if _should_run(config.resume_from, "transcribe"):
         _gate(control)
         prog("transcribe", 0.2)
@@ -595,12 +779,12 @@ def _run_job(
             backend = WhisperXBackend()
             if not backend.available():
                 logger.info("正在准备内置 WhisperX 环境…")
-                ensure_whisperx_runtime()
+                ensure_whisperx_runtime(control=control)
             if backend.available():
                 result = backend.transcribe(
                     speech,
                     model_name=config.whisper_model or settings.asr.model,
-                    language=config.source_lang,
+                    language=asr_lang,
                     device=config.device or settings.asr.device,
                     out_json=transcript_path,
                     on_progress=prog,
@@ -614,7 +798,7 @@ def _run_job(
             segments = transcribe(
                 speech,
                 model_name=config.whisper_model or settings.asr.model,
-                language=asr_lang if asr_lang != "auto" else settings.asr.language,
+                language=asr_lang,
                 device=config.device or settings.asr.device,  # type: ignore[arg-type]
                 out_json=transcript_path,
                 on_progress=prog,
@@ -678,8 +862,19 @@ def _run_job(
         prog("translate", 0.6)
         ts = time.time()
         if cues:
-            xl8_to = screen_translate_lang(
-                config.source_lang, config.target_lang, config.subtitle_mode
+            heard_src = (
+                detected_spoken
+                if detected_spoken and detected_spoken != "auto"
+                else config.source_lang
+            )
+            dests = job_translation_langs(
+                config.source_lang,
+                config.target_lang,
+                config.subtitle_mode,
+                detected_spoken=detected_spoken,
+                cues=asr_cues,
+                enable_dub=config.enable_dub,
+                tts_provider=config.tts_provider,
             )
             if is_pair_mode(config.subtitle_mode):
                 if config.refine_translate:
@@ -719,53 +914,80 @@ def _run_job(
                         )
 
                 cues, tstats, missing = translate_pair_cues(cues, translator=translator)
-            elif not translation_needed(config.source_lang, config.target_lang, config.subtitle_mode):
+                extra = [lang for lang in dests if lang_family(lang) not in {"zh", "en"}]
+                if extra:
+                    cues, extra_stats, extra_miss = fill_translated_languages(
+                        cues,
+                        extra,
+                        translator=translator,
+                        source_lang=heard_src,
+                    )
+                    tstats.cache_hits += extra_stats.cache_hits
+                    tstats.api_calls += extra_stats.api_calls
+                    missing.extend(extra_miss)
+            elif not dests:
                 from bilingual_sub.core.translate import TranslateStats
 
                 drop_target_if_unneeded(
-                    cues, config.source_lang, config.target_lang, config.subtitle_mode
+                    cues,
+                    config.source_lang,
+                    config.target_lang,
+                    config.subtitle_mode,
+                    detected_spoken=detected_spoken,
+                    enable_dub=config.enable_dub,
+                    tts_provider=config.tts_provider,
                 )
                 tstats = TranslateStats()
                 missing = []
-            elif config.refine_translate:
-                from bilingual_sub.adapters.meding import TranslationCache, create_client
-                from bilingual_sub.secrets.store import get_api_key
+            elif dests:
+                if config.refine_translate:
+                    from bilingual_sub.adapters.meding import TranslationCache, create_client
+                    from bilingual_sub.secrets.store import get_api_key
 
-                key = get_api_key()
-                if not key:
-                    from bilingual_sub.adapters.meding import MedingAuthError
+                    key = get_api_key()
+                    if not key:
+                        from bilingual_sub.adapters.meding import MedingAuthError
 
-                    raise MedingAuthError("API key not configured")
-                cues, tstats, missing = translate_cues_refined(
+                        raise MedingAuthError("API key not configured")
+
+                    def translator(batch, *, source_lang, target_lang, **_k):
+                        return translate_cues_refined(
+                            batch,
+                            model=config.translate_model or settings.translate.model,
+                            source_lang=source_lang,
+                            target_lang=target_lang,
+                            glossary=glossary,
+                            client=create_client(key),
+                            cache=TranslationCache() if settings.translate.cache_enabled else None,
+                            batch_size=min(10, config.translate_batch_size or settings.translate.batch_size or 10),
+                            control=control,
+                        )
+                else:
+                    def translator(batch, *, source_lang, target_lang, **_k):
+                        return translate_cues(
+                            batch,
+                            model=config.translate_model or settings.translate.model,
+                            batch_size=config.translate_batch_size or settings.translate.batch_size,
+                            max_en_chars=settings.translate.max_en_chars,
+                            cache_enabled=settings.translate.cache_enabled,
+                            source_lang=source_lang,
+                            target_lang=target_lang,
+                            glossary_block=glossary.block(),
+                            control=control,
+                        )
+
+                cues, tstats, missing = fill_translated_languages(
                     cues,
-                    model=config.translate_model or settings.translate.model,
-                    source_lang=config.source_lang,
-                    target_lang=xl8_to,
-                    glossary=glossary,
-                    client=create_client(key),
-                    cache=TranslationCache() if settings.translate.cache_enabled else None,
-                    batch_size=min(10, config.translate_batch_size or settings.translate.batch_size or 10),
-                    control=control,
-                )
-            else:
-                cues, tstats, missing = translate_cues(
-                    cues,
-                    model=config.translate_model or settings.translate.model,
-                    batch_size=config.translate_batch_size or settings.translate.batch_size,
-                    max_en_chars=settings.translate.max_en_chars,
-                    cache_enabled=settings.translate.cache_enabled,
-                    source_lang=config.source_lang,
-                    target_lang=xl8_to,
-                    glossary_block=glossary.block(),
-                    control=control,
+                    dests,
+                    translator=translator,
+                    source_lang=heard_src,
                 )
             if is_pair_mode(config.subtitle_mode):
                 assign_pair_fields(cues, config.source_lang)
                 normalize_pair_fields(cues)
-            apply_han_to_cues(
-                cues,
-                screen_han_lang(config.source_lang, config.target_lang, config.subtitle_mode),
-            )
+            han = spoken_han_lang(config.target_lang)
+            if han:
+                apply_han_to_cues(cues, han)
             cache_hits = tstats.cache_hits
             api_calls = tstats.api_calls
         save_cues_json(cues, cues_bi_path)
@@ -783,12 +1005,26 @@ def _run_job(
         save_cues_json(cues, work / "cues.fitted.json")
         stages["fit_subs_sec"] = time.time() - ts
         _save_state(work, "fit_subs", {"job_id": job_id}, control=control)
+    else:
+        fitted = work / "cues.fitted.json"
+        if config.subtitle_mode == "netflix_single" and fitted.is_file():
+            cues = load_cues_json(fitted)
 
-    drop_target_if_unneeded(cues, config.source_lang, config.target_lang, config.subtitle_mode)
+    drop_target_if_unneeded(
+        cues,
+        config.source_lang,
+        config.target_lang,
+        config.subtitle_mode,
+        detected_spoken=detected_spoken,
+        enable_dub=config.enable_dub,
+        tts_provider=config.tts_provider,
+    )
     if is_pair_mode(config.subtitle_mode):
         normalize_pair_fields(cues)
     han_lang = screen_han_lang(config.source_lang, config.target_lang, config.subtitle_mode)
-    apply_han_to_cues(cues, han_lang)
+    spoken_han = spoken_han_lang(config.target_lang)
+    if spoken_han:
+        apply_han_to_cues(cues, spoken_han)
 
     if _should_run(config.resume_from, "render"):
         _gate(control)
@@ -802,6 +1038,8 @@ def _run_job(
             play_res=play_res,
             mode=config.subtitle_mode,
             han_lang=han_lang,
+            target_lang=config.target_lang,
+            source_lang=config.source_lang,
         )
         if ass_out != ass_path:
             shutil.copy2(ass_path, ass_out)
@@ -851,23 +1089,49 @@ def _run_job(
         ts = time.time()
         from bilingual_sub.adapters.tts import select_tts
 
-        tts_name = config.tts_provider if config.tts_provider not in {"", "none"} else "openai"
-        provider = select_tts(tts_name)
-        if config.tts_provider == "gptsovits" and config.tts_endpoint:
-            from bilingual_sub.adapters.tts.gptsovits import GptSovitsTts
+        tts_name = _resolved_tts_provider(config, asr_cues, detected_spoken=detected_spoken)
+        ref_audio = config.tts_ref_audio
+        from bilingual_sub.gui.output_path import resolve_dub_sidecar
 
-            provider = GptSovitsTts(config.tts_endpoint)
-        if config.burn and burned_mp4.is_file():
-            video_for_dub = burned_mp4
-        elif config.burn and dest_mp4.is_file():
-            video_for_dub = dest_mp4
-        else:
-            video_for_dub = source
-        sidecar = (config.output_video or srt_out).with_name(
-            (config.output_video or srt_out).stem + "-dub.mp4"
-        )
+        sidecar = resolve_dub_sidecar(config.output_video, srt_out)
         dub_tmp = work / "dubbed.mp4"
         try:
+            if tts_name == "gptsovits":
+                from bilingual_sub.adapters.tts.gptsovits import to_sovits_lang
+                from bilingual_sub.adapters.tts.gptsovits_runtime import (
+                    ensure_ref_audio,
+                    ensure_running,
+                )
+
+                to_sovits_lang(config.target_lang)
+                ensure_running(config.tts_endpoint or None, wait_sec=300, control=control)
+                if not ref_audio:
+                    ref_audio = str(
+                        ensure_ref_audio(
+                            source,
+                            work / "sovits_ref.wav",
+                            cues=asr_cues,
+                            control=control,
+                        )
+                    )
+            provider = select_tts(
+                tts_name,
+                endpoint=config.tts_endpoint,
+                ref_audio=ref_audio,
+                prompt_text=config.tts_prompt_text,
+                prompt_lang=config.tts_prompt_lang
+                or (
+                    detected_spoken
+                    if detected_spoken and detected_spoken != "auto"
+                    else config.source_lang
+                ),
+            )
+            if config.burn and burned_mp4.is_file():
+                video_for_dub = burned_mp4
+            elif config.burn and dest_mp4.is_file():
+                video_for_dub = dest_mp4
+            else:
+                video_for_dub = source
             if not any(spoken_line(cue, config.target_lang) for cue in cues):
                 raise RuntimeError("没有目标语种台词，无法配音")
             dubbed = dub_cues(
@@ -892,6 +1156,8 @@ def _run_job(
                 if Path(dubbed).resolve() != sidecar.resolve():
                     shutil.copy2(dubbed, sidecar)
                 output_dub = sidecar
+        except JobStopped:
+            raise
         except Exception as exc:
             logger.warning("dub failed: %s", exc)
             raise RuntimeError(f"配音失败，成片仍是原声：{exc}") from exc
@@ -926,11 +1192,16 @@ def _run_job(
         "subtitle_mode": config.subtitle_mode,
         "asr_backend": config.asr_backend,
         "refine": config.refine_translate,
+        "burn": bool(config.burn),
         "source_url": config.source_url,
         "ui_locale": config.ui_locale,
         "detected_spoken": detected_spoken,
         "translated": translation_needed(config.source_lang, config.target_lang, config.subtitle_mode),
         "dubbed": bool(need_dub),
+        "tts_provider": _resolved_tts_provider(config, asr_cues, detected_spoken=detected_spoken),
+        "tts_fingerprint": _tts_fingerprint(
+            config, detected_spoken=detected_spoken, cues=asr_cues
+        ),
         "last_stage": "done",
         "stopped": False,
         "output_dub": str(output_dub) if output_dub else None,

@@ -27,18 +27,24 @@ class TtsProvider(Protocol):
     def synth(self, req: TtsRequest, *, control: JobControl | None = None) -> Path: ...
 
 
-def select_tts(provider: str) -> TtsProvider:
+def select_tts(
+    provider: str,
+    *,
+    endpoint: str = "",
+    ref_audio: str = "",
+    prompt_text: str = "",
+    prompt_lang: str = "",
+) -> TtsProvider:
     name = (provider or "none").lower()
-    if name == "openai":
-        from bilingual_sub.adapters.tts.openai_tts import OpenAiTts
-
-        return OpenAiTts()
-    if name == "azure":
-        from bilingual_sub.adapters.tts.azure_tts import AzureTts
-
-        return AzureTts()
+    if name in {"openai", "azure"}:
+        name = "gptsovits"
     if name == "gptsovits":
         from bilingual_sub.adapters.tts.gptsovits import GptSovitsTts
 
-        return GptSovitsTts()
+        return GptSovitsTts(
+            endpoint or None,
+            ref_audio=ref_audio,
+            prompt_text=prompt_text,
+            prompt_lang=prompt_lang,
+        )
     raise TtsUnavailable(f"未知配音引擎：{provider}")

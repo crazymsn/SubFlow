@@ -136,7 +136,7 @@ def test_output_path_is_editable_and_survives_new_video():
     assert not win.out_edit.isReadOnly()
     assert win.out_edit.isEnabled()
     assert win.browse_out_btn.text() == "浏览"
-    first = Path(r"C:\media\one.mp4")
+    first = Path(r"C:/media/one.mp4")
     win._set_video(first)
     assert win.out_edit.text() == str(default_output_mp4(first))
     win.mode_combo.setCurrentIndex(win.mode_combo.findData("enzh"))
@@ -144,10 +144,10 @@ def test_output_path_is_editable_and_survives_new_video():
     assert win.out_edit.text().endswith("英中字幕.mp4")
     win.mode_combo.setCurrentIndex(win.mode_combo.findData("bilingual"))
     assert win.out_edit.text() == str(default_output_mp4(first))
-    custom = Path(r"D:\exports\final.mp4")
+    custom = Path(r"D:/exports/final.mp4")
     win.out_edit.setText(str(custom))
     assert win.out_edit.text() == str(custom)
-    win._set_video(Path(r"C:\media\two.mp4"))
+    win._set_video(Path(r"C:/media/two.mp4"))
     assert win.out_edit.text() == str(custom)
     win.close()
     _ = app
@@ -158,7 +158,7 @@ def test_brand_check_label_optically_centers():
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QApplication
 
-    from bilingual_sub.gui.widgets.brand_check import BrandCheck, CAPTION_SETTLE
+    from bilingual_sub.gui.widgets.brand_check import CAPTION_SETTLE, BrandCheck
 
     app = QApplication.instance() or QApplication([])
     for label in ("烧录到视频", "电影级润色", "字幕颜色", "配音"):
@@ -264,7 +264,8 @@ def test_window_chrome():
     assert win.asr_backend_combo.currentData() == "whisper"
     assert not win.asr_backend_combo.isHidden()
     assert win.tts_combo.findData("azure") < 0
-    assert {win.tts_combo.itemData(i) for i in range(win.tts_combo.count())} == {"openai", "gptsovits"}
+    assert {win.tts_combo.itemData(i) for i in range(win.tts_combo.count())} == {"gptsovits"}
+    assert win.tts_combo.findData("openai") < 0
     assert not win.windowIcon().isNull()
     assert win.refine_check.isChecked() is False
     assert win.dub_check.isChecked() is False
@@ -339,13 +340,13 @@ def test_progress_log_skips_transcribe_and_done_has_no_popup():
     assert "(20%)" not in text
     result = JobResult(
         job_id="t",
-        output_mp4=Path(r"D:\out\a.mp4"),
-        output_srt=Path(r"D:\out\a.srt"),
-        output_ass=Path(r"D:\out\a.ass"),
+        output_mp4=Path(r"D:/out/a.mp4"),
+        output_srt=Path(r"D:/out/a.srt"),
+        output_ass=Path(r"D:/out/a.ass"),
         cue_count=3,
         missing_en=[],
         duration_sec=1.0,
-        report_path=Path(r"D:\out\report.json"),
+        report_path=Path(r"D:/out/report.json"),
         reused=False,
     )
     with patch.object(QMessageBox, "information") as info:
@@ -528,30 +529,19 @@ def test_empty_counter_download_gate_and_more_overlay():
     assert win.lbl_source_file.text() == "上传视频"
     assert win.lbl_source_url.text() == "视频链接"
     win.more_btn.setChecked(True)
+    win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
     win.dub_check.setChecked(True)
     app.processEvents()
-    win.tts_combo.setCurrentIndex(win.tts_combo.findData("openai"))
-    app.processEvents()
-    assert win._slot_voice.isVisible()
-    assert win._slot_endpoint.isHidden()
-    assert win.tts_preview_btn.objectName() == "ttsPreviewBtn"
-    assert win.tts_preview_btn.text() == "试听"
-    assert win.tts_preview_btn.isVisible()
-    assert {win.tts_voice_edit.itemData(i) for i in range(win.tts_voice_edit.count())} == {
-        "alloy",
-        "echo",
-        "fable",
-        "onyx",
-        "nova",
-        "shimmer",
-    }
-    assert "中性" in win.tts_voice_edit.itemText(0)
     win.tts_combo.setCurrentIndex(win.tts_combo.findData("gptsovits"))
     app.processEvents()
     assert win._slot_voice.isHidden()
     assert win._slot_endpoint.isVisible()
-    assert not win.tts_preview_btn.isVisible()
-    win.tts_combo.setCurrentIndex(win.tts_combo.findData("openai"))
+    assert win.sovits_box.isVisible()
+    assert win.tts_preview_btn.objectName() == "ttsPreviewBtn"
+    assert win.tts_preview_btn.text() == "试听"
+    assert win.tts_preview_btn.isVisible()
+    assert win.tts_ref_edit.objectName() == "ttsRefEdit"
+    assert win.tts_preview_btn.isEnabled()
     win.dub_check.setChecked(False)
     win.more_btn.setChecked(False)
     app.processEvents()
@@ -673,5 +663,254 @@ def test_same_video_new_path_copies_without_worker(tmp_path):
     assert dest.with_name("final.bilingual.srt").read_text(encoding="utf-8") == "srt"
     assert win._worker is None
     assert "已按新路径导出，4 条字幕" in win.log.toPlainText()
+    win.close()
+    _ = app
+
+
+def test_single_zh_dub_does_not_require_token(tmp_path, monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
+
+    set_locale("zh-Hans")
+    monkeypatch.setattr("bilingual_sub.gui.app.get_api_key", lambda: "")
+    warned: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *a, **k: warned.append(" ".join(str(x) for x in a)),
+    )
+    started: list = []
+
+    class _Sig:
+        def connect(self, _cb):
+            return None
+
+    class FakePipe:
+        def __init__(self, cfg, control):
+            started.append(cfg)
+            self.progress = _Sig()
+            self.finished_ok = _Sig()
+            self.failed = _Sig()
+            self.finished = _Sig()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr("bilingual_sub.gui.app.PipelineWorker", FakePipe)
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"video")
+    win._video = video
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("single:zh"))
+    win.source_lang_combo.setCurrentIndex(win.source_lang_combo.findData("zh"))
+    win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("zh"))
+    win.dub_check.setChecked(True)
+    win.out_edit.setText(str(tmp_path / "out.mp4"))
+    app.processEvents()
+    win._start()
+    assert started
+    assert started[0].tts_provider == "none"
+    assert started[0].enable_dub is False
+    assert not any("令牌" in msg for msg in warned)
+    win.close()
+    _ = app
+
+
+def test_gui_auto_source_leaves_prompt_lang_blank_for_detection(tmp_path, monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
+
+    set_locale("zh-Hans")
+    monkeypatch.setattr("bilingual_sub.gui.app.get_api_key", lambda: "sk-test")
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    started: list = []
+
+    class _Sig:
+        def connect(self, _cb):
+            return None
+
+    class FakePipe:
+        def __init__(self, cfg, control):
+            started.append(cfg)
+            self.progress = _Sig()
+            self.finished_ok = _Sig()
+            self.failed = _Sig()
+            self.finished = _Sig()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+    class FakeBoot:
+        def __init__(self, *a, **k):
+            self.ok = _Sig()
+            self.fail = _Sig()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr("bilingual_sub.gui.app.PipelineWorker", FakePipe)
+    monkeypatch.setattr("bilingual_sub.gui.app.SovitsBootWorker", FakeBoot)
+    monkeypatch.setattr("bilingual_sub.gui.app.SovitsProbeWorker", FakeBoot)
+    monkeypatch.setattr(
+        "bilingual_sub.gui.app.load_gptsovits_settings",
+        lambda: {"endpoint": "", "ref_audio": "", "prompt_text": "", "prompt_lang": ""},
+    )
+    monkeypatch.setattr("bilingual_sub.gui.app.save_gptsovits_settings", lambda **k: None)
+    monkeypatch.setattr(
+        "bilingual_sub.adapters.tts.gptsovits_runtime.should_autostart",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "bilingual_sub.adapters.tts.gptsovits_runtime.probe_endpoint",
+        lambda *a, **k: True,
+    )
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"video")
+    win._video = video
+    win.source_lang_combo.setCurrentIndex(win.source_lang_combo.findData("auto"))
+    win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("zh"))
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("single:zh"))
+    win.dub_check.setChecked(True)
+    win.model_combo.clear()
+    win.model_combo.addItem("gpt-4o-mini")
+    win.model_combo.setCurrentIndex(0)
+    win.out_edit.setText(str(tmp_path / "out.mp4"))
+    app.processEvents()
+    assert win._preview_request().prompt_lang == ""
+    win._start()
+    assert started, "pipeline should start with auto source + blank prompt_lang"
+    assert started[0].source_lang == "auto"
+    assert started[0].tts_prompt_lang == ""
+    win.source_lang_combo.setCurrentIndex(win.source_lang_combo.findData("ja"))
+    app.processEvents()
+    assert win._preview_request().prompt_lang == "ja"
+    win.close()
+    _ = app
+
+
+def test_gui_predownload_passes_source_lang(tmp_path, monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
+
+    set_locale("zh-Hans")
+    started: list[dict] = []
+
+    class _Sig:
+        def connect(self, _cb):
+            return None
+
+    class FakeDl:
+        def __init__(self, url, dest, source_lang="zh"):
+            started.append({"url": url, "dest": dest, "source_lang": source_lang})
+            self.progress = _Sig()
+            self.ok = _Sig()
+            self.fail = _Sig()
+
+        def start(self):
+            return None
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr("bilingual_sub.gui.app.DownloadWorker", FakeDl)
+    monkeypatch.setattr("bilingual_sub.gui.app.download_folder", lambda url: tmp_path / "dl")
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    win.url_edit.setText("https://youtu.be/demo")
+    win.source_lang_combo.setCurrentIndex(win.source_lang_combo.findData("en"))
+    app.processEvents()
+    win._download()
+    assert started
+    assert started[0]["source_lang"] == "en"
+    win.close()
+    _ = app
+
+
+def test_job_signature_includes_url_and_tts_ref(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
+
+    set_locale("zh-Hans")
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    win.url_edit.setText("https://youtu.be/one")
+    first = win._job_signature()
+    win.url_edit.setText("https://youtu.be/two")
+    assert win._job_signature() != first
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"video")
+    win._video = video
+    local = win._job_signature()
+    win.url_edit.setText("https://youtu.be/ignored")
+    assert win._job_signature() == local
+    win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
+    win.dub_check.setChecked(True)
+    with_ref = win._job_signature()
+    win.tts_ref_edit.setText(str(tmp_path / "voice.wav"))
+    assert win._job_signature() != with_ref
+    win.close()
+    _ = app
+
+
+def test_auto_source_bilingual_requires_token(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.styles import app_qss
+    from bilingual_sub.i18n import set_locale
+
+    set_locale("zh-Hans")
+    monkeypatch.setattr("bilingual_sub.gui.app.get_api_key", lambda: "")
+    warned: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *a, **k: warned.append(" ".join(str(x) for x in a)),
+    )
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(app_qss())
+    win = MainWindow()
+    win.url_edit.setText("https://youtu.be/demo")
+    win.source_lang_combo.setCurrentIndex(win.source_lang_combo.findData("auto"))
+    win.mode_combo.setCurrentIndex(win.mode_combo.findData("bilingual"))
+    win.out_edit.setText(str(Path.home() / "Downloads" / "demo.mp4"))
+    app.processEvents()
+    win._start()
+    assert any("令牌" in msg for msg in warned)
     win.close()
     _ = app

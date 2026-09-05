@@ -6,6 +6,7 @@ import logging
 import re
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -292,7 +293,7 @@ class TranslationCache:
         self._init_db()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS translations "
                 "(key TEXT PRIMARY KEY, en TEXT NOT NULL, created_at REAL)"
@@ -300,13 +301,13 @@ class TranslationCache:
 
     def get(self, model: str, zh: str) -> str | None:
         key = _cache_key(model, zh)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute("SELECT en FROM translations WHERE key=?", (key,)).fetchone()
         return row[0] if row else None
 
     def set(self, model: str, zh: str, en: str) -> None:
         key = _cache_key(model, zh)
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute(
                 "INSERT OR REPLACE INTO translations (key, en, created_at) VALUES (?,?,?)",
                 (key, en, time.time()),

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
@@ -47,7 +47,7 @@ app.add_typer(config_app, name="config")
 console = Console()
 
 
-def _exit(code: int) -> None:
+def _exit(code: int) -> NoReturn:
     raise typer.Exit(code)
 
 
@@ -188,10 +188,24 @@ def doctor() -> None:
         table.add_row("temp", f"[red]FAIL[/red] {exc}")
         ok = False
 
+    try:
+        from bilingual_sub.adapters.tts.gptsovits import default_endpoint
+        from bilingual_sub.adapters.tts.gptsovits_runtime import (
+            diagnose_runtime,
+            probe_endpoint,
+        )
+
+        if probe_endpoint(default_endpoint()):
+            table.add_row("GPT-SoVITS", f"[green]OK[/green] {default_endpoint()}")
+        else:
+            detail = diagnose_runtime() or "未在 127.0.0.1:9880 探测到服务"
+            table.add_row("GPT-SoVITS", f"[yellow]{detail}[/yellow]")
+    except Exception as exc:
+        table.add_row("GPT-SoVITS", f"[yellow]{exc}[/yellow]")
+
     key = get_api_key()
     if not key:
-        table.add_row("API key", "[red]not configured[/red]")
-        ok = False
+        table.add_row("API key", "[yellow]not configured (translation only)[/yellow]")
     else:
         try:
             client = create_client(key)
@@ -242,6 +256,9 @@ def run_cmd(
     tts_provider: Annotated[str, typer.Option("--tts-provider")] = "none",
     tts_voice: Annotated[str, typer.Option("--tts-voice")] = "",
     tts_endpoint: Annotated[str, typer.Option("--tts-endpoint")] = "",
+    tts_ref_audio: Annotated[str, typer.Option("--tts-ref-audio")] = "",
+    tts_prompt_text: Annotated[str, typer.Option("--tts-prompt-text")] = "",
+    tts_prompt_lang: Annotated[str, typer.Option("--tts-prompt-lang")] = "",
     zh_color: Annotated[str, typer.Option("--zh-color", help="Chinese subtitle hex color")] = "#FFFFFF",
     en_color: Annotated[str, typer.Option("--en-color", help="English subtitle hex color")] = "#F2F2F2",
 ) -> None:
@@ -249,7 +266,14 @@ def run_cmd(
     if not url and (input_video is None or not input_video.is_file()):
         console.print(f"[red]File not found: {input_video}[/red]")
         _exit(1)
-    from bilingual_sub.core.langs import effective_target_lang, is_valid_subtitle_mode, output_stem_suffix
+    from bilingual_sub.core.langs import (
+        coerce_requested_tts,
+        effective_target_lang,
+        effective_tts_provider,
+        is_valid_subtitle_mode,
+        output_stem_suffix,
+        token_required_for_job,
+    )
 
     if not is_valid_subtitle_mode(subtitle_mode):
         console.print("[red]--subtitle-mode must be bilingual, enzh, netflix_single, or single:<lang>[/red]")
@@ -258,9 +282,19 @@ def run_cmd(
     if asr_backend not in ("whisper", "whisperx"):
         console.print("[red]--asr-backend must be whisper or whisperx[/red]")
         _exit(1)
-    if tts_provider not in ("none", "openai", "azure", "gptsovits"):
-        console.print("[red]--tts-provider must be none, openai, azure, or gptsovits[/red]")
+    tts_provider = coerce_requested_tts(tts_provider, enable_dub=enable_dub)
+    tts_provider = effective_tts_provider(
+        source_lang,
+        source_lang,
+        target_lang,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,
+    )
+    if tts_provider not in ("none", "gptsovits"):
+        console.print("[red]--tts-provider must be none or gptsovits[/red]")
         _exit(1)
+    if tts_provider == "gptsovits":
+        enable_dub = True
     if device not in ("auto", "cuda", "cpu"):
         console.print("[red]--device must be auto, cuda, or cpu[/red]")
         _exit(1)
@@ -268,11 +302,36 @@ def run_cmd(
         console.print(f"[red]--resume-from must be one of: {', '.join(STAGES)}[/red]")
         _exit(1)
 
+    if token_required_for_job(
+        source_lang,
+        target_lang,
+        subtitle_mode,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,
+    ) and not get_api_key():
+        console.print("[red]API key not configured[/red]")
+        _exit(3)
+
     settings = load_settings()
     chosen_model = translate_model or settings.translate.model
-    source = input_video.resolve() if input_video else Path(url or "source.mp4")
-    out_srt = srt or source.with_name(source.stem + ".bilingual.srt")
+    if tts_provider == "gptsovits":
+        from bilingual_sub.config import load_gptsovits_settings
+
+        sovits = load_gptsovits_settings()
+        tts_endpoint = tts_endpoint or sovits.get("endpoint") or ""
+        tts_ref_audio = tts_ref_audio or sovits.get("ref_audio") or ""
+        tts_prompt_text = tts_prompt_text or sovits.get("prompt_text") or ""
+        # Mirror GUI: auto source must leave prompt_lang blank so pipeline uses detected_spoken.
+        if not tts_prompt_lang and source_lang not in {"", "auto"}:
+            tts_prompt_lang = sovits.get("prompt_lang") or ""
+    if input_video is not None and input_video.is_file():
+        source = input_video.resolve()
+    else:
+        from bilingual_sub.adapters.ytdlp import media_slug
+
+        source = Path.home() / "Downloads" / media_slug(url or "source")
     out_mp4 = output or source.with_name(source.stem + output_stem_suffix(subtitle_mode) + ".mp4")
+    out_srt = srt or out_mp4.with_name(out_mp4.stem + ".bilingual.srt")
 
     cfg = JobConfig(
         input_video=source,
@@ -298,6 +357,9 @@ def run_cmd(
         tts_provider=tts_provider,  # type: ignore[arg-type]
         tts_voice=tts_voice,
         tts_endpoint=tts_endpoint,
+        tts_ref_audio=tts_ref_audio,
+        tts_prompt_text=tts_prompt_text,
+        tts_prompt_lang=tts_prompt_lang,
         subtitle_zh_color=zh_color,
         subtitle_en_color=en_color,
     )
@@ -320,6 +382,8 @@ def run_cmd(
     console.print(f"  SRT: {result.output_srt}")
     if result.output_mp4:
         console.print(f"  MP4: {result.output_mp4}")
+    elif getattr(result, "output_dub", None):
+        console.print(f"  MP4: {result.output_dub}")
     console.print(f"  Report: {result.report_path}")
     if result.missing_en:
         console.print(f"[yellow]missing_en: {len(result.missing_en)}[/yellow]")

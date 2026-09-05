@@ -42,6 +42,7 @@ def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, transla
                 "target_lang": "zh",
                 "subtitle_mode": "bilingual",
                 "translated": True,
+                "burn": True,
             },
             ensure_ascii=False,
         ),
@@ -131,6 +132,17 @@ def test_different_video_or_model_skips_reuse(tmp_path: Path, video: Path):
     )
     assert _can_reexport(other_cfg, work) is False
 
+    noburn_cfg = JobConfig(
+        input_video=video,
+        output_video=tmp_path / "noburn.mp4",
+        output_srt=tmp_path / "noburn.srt",
+        work_dir=Path("auto"),
+        whisper_model=cfg.whisper_model,
+        translate_model=cfg.translate_model,
+        burn=False,
+    )
+    assert _can_reexport(noburn_cfg, work) is False
+
     model_cfg = JobConfig(
         input_video=video,
         output_video=tmp_path / "c.mp4",
@@ -182,6 +194,34 @@ def test_stale_english_cues_block_single_chinese_reuse(tmp_path: Path, video: Pa
     assert _can_reexport(cfg, work) is False
 
 
+def test_single_zh_with_en_dub_line_can_reexport(tmp_path: Path, video: Path):
+    from bilingual_sub.pipeline import _can_reexport
+
+    cfg = JobConfig(
+        input_video=video,
+        output_video=tmp_path / "a.mp4",
+        output_srt=tmp_path / "a.srt",
+        work_dir=Path("auto"),
+        whisper_model="medium",
+        translate_model="gpt-4o-mini",
+        burn=True,
+        target_lang="en",
+        subtitle_mode="single:zh",
+        enable_dub=True,
+        tts_provider="gptsovits",
+    )
+    work = tmp_path / "dub-ok"
+    _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    (work / "dubbed.mp4").write_bytes(b"dubbed")
+    report = json.loads((work / "report.json").read_text(encoding="utf-8"))
+    report["subtitle_mode"] = "single:zh"
+    report["target_lang"] = "en"
+    report["translated"] = False
+    report["tts_fingerprint"] = None
+    (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    assert _can_reexport(cfg, work) is True
+
+
 def test_english_in_chinese_field_blocks_bilingual_reuse(tmp_path: Path, video: Path):
     from bilingual_sub.pipeline import _can_reexport
 
@@ -228,4 +268,91 @@ def test_english_target_without_dubbed_file_blocks_reuse(tmp_path: Path, video: 
     (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
     assert _can_reexport(cfg, work) is False
     (work / "dubbed.mp4").write_bytes(b"en-dub")
+    assert _can_reexport(cfg, work) is True
+    cfg.subtitle_zh_color = "#00AAFF"
+    assert _can_reexport(cfg, work) is False
+
+
+def test_reexport_uses_fitted_cues_for_netflix(tmp_path: Path, video: Path, monkeypatch):
+    monkeypatch.setattr("bilingual_sub.pipeline.tempfile.gettempdir", lambda: str(tmp_path))
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("full pipeline should not run")
+
+    monkeypatch.setattr("bilingual_sub.pipeline.transcribe", boom)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", boom)
+    monkeypatch.setattr("bilingual_sub.pipeline.translate_cues", boom)
+    seen: list[str] = []
+
+    def fake_write(cues, preset, ass_path, srt_path, **kwargs):
+        seen.extend(c.zh for c in cues)
+        Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
+        Path(srt_path).write_text("1\n", encoding="utf-8")
+
+    monkeypatch.setattr("bilingual_sub.pipeline.write_subtitles", fake_write)
+    monkeypatch.setattr(
+        "bilingual_sub.pipeline.burn_subtitles",
+        lambda *a, **k: Path(k.get("output") or a[2]).write_bytes(b"burned"),
+    )
+    cfg = JobConfig(
+        input_video=video,
+        output_video=tmp_path / "nf.mp4",
+        output_srt=tmp_path / "nf.srt",
+        work_dir=Path("auto"),
+        whisper_model="medium",
+        translate_model="gpt-4o-mini",
+        burn=True,
+        source_lang="zh",
+        target_lang="zh",
+        subtitle_mode="netflix_single",
+    )
+    work = tmp_path / "bilingual-sub" / artifact_key(cfg)
+    prev = tmp_path / "old-nf.mp4"
+    _plant_job(work, video, prev, whisper=cfg.whisper_model, translate=cfg.translate_model)
+    report = json.loads((work / "report.json").read_text(encoding="utf-8"))
+    report["subtitle_mode"] = "netflix_single"
+    report["translated"] = False
+    (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    (work / "cues.bilingual.json").write_text(
+        json.dumps([{"start": 0.0, "end": 2.0, "zh": "这是一句很长很长需要拆开的中文对白", "en": None}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (work / "cues.fitted.json").write_text(
+        json.dumps([{"start": 0.0, "end": 2.0, "zh": "拆开后的短句", "en": None}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    result = run(cfg)
+    assert result.reused is True
+    assert "拆开后的短句" in seen
+    assert "很长很长" not in "".join(seen)
+
+
+def test_url_job_reexport_matches_work_copy(tmp_path: Path, monkeypatch):
+    from bilingual_sub.pipeline import _can_reexport
+
+    work = tmp_path / "url-work"
+    source = work / "source.mp4"
+    prev = tmp_path / "old-url.mp4"
+    cfg = JobConfig(
+        input_video=Path("https://youtu.be/abc123XYZ"),
+        source_url="https://youtu.be/abc123XYZ",
+        output_video=tmp_path / "new-url.mp4",
+        output_srt=tmp_path / "new-url.srt",
+        work_dir=Path("auto"),
+        whisper_model="medium",
+        translate_model="gpt-4o-mini",
+        burn=True,
+    )
+    _plant_job(work, source, prev, whisper=cfg.whisper_model, translate=cfg.translate_model)
+    source.write_bytes(b"downloaded-source")
+    (work / "source.url.txt").write_text(cfg.source_url, encoding="utf-8")
+    report = json.loads((work / "report.json").read_text(encoding="utf-8"))
+    report["input_fingerprint"] = {
+        "path": str(source),
+        "size": source.stat().st_size,
+        "mtime_ns": source.stat().st_mtime_ns,
+    }
+    report["source_url"] = cfg.source_url
+    (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr("bilingual_sub.pipeline.tempfile.gettempdir", lambda: str(tmp_path))
     assert _can_reexport(cfg, work) is True

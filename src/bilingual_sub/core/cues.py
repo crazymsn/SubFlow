@@ -1,11 +1,35 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.models import Cue, Segment, WordSpan
 
 _SENT_END = re.compile(r"[。！？!?；;]")
+_CJK_OR_KANA = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]")
+_NO_SPACE_BEFORE = set(".,!?;:)]}、。！？；：…—-~")
+_NO_SPACE_AFTER = set("([{（【「『")
+
+
+def join_word_texts(parts: Iterable[str]) -> str:
+    """Join WhisperX word tokens. Latin needs spaces; CJK does not."""
+    out = ""
+    for raw in parts:
+        token = (raw or "").strip()
+        if not token:
+            continue
+        if not out:
+            out = token
+            continue
+        prev, nxt = out[-1], token[0]
+        if nxt in _NO_SPACE_BEFORE or prev in _NO_SPACE_AFTER:
+            out += token
+        elif _CJK_OR_KANA.match(prev) or _CJK_OR_KANA.match(nxt):
+            out += token
+        else:
+            out += " " + token
+    return out
 
 
 def tidy_zh(zh: str) -> str:
@@ -106,7 +130,7 @@ def cues_from_words(segments: list[Segment], glossary: Glossary) -> list[Cue] | 
     for word in packed:
         buf.append(word)
         if _SENT_END.search(word.text):
-            text = glossary.correct("".join(w.text for w in buf).strip())
+            text = glossary.correct(join_word_texts(w.text for w in buf))
             if text:
                 out.append(
                     Cue(
@@ -118,7 +142,7 @@ def cues_from_words(segments: list[Segment], glossary: Glossary) -> list[Cue] | 
                 )
             buf = []
     if buf:
-        text = glossary.correct("".join(w.text for w in buf).strip())
+        text = glossary.correct(join_word_texts(w.text for w in buf))
         if text:
             out.append(
                 Cue(
@@ -179,7 +203,7 @@ def build_cues(
 
     tmp: list[tuple[float, float, str]] = []
     for a, b, zh in cues:
-        if not zh or zh == "然后去":
+        if not zh:
             continue
         if "，" in zh and (b - a) >= 1.8:
             tmp.extend(split_by_punct(a, b, zh))

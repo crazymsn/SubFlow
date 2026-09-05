@@ -22,7 +22,7 @@ def device_pixel_ratio(host: QWidget | None = None) -> float:
         if ratio > 0:
             return ratio
     app = QGuiApplication.instance()
-    if app is not None:
+    if isinstance(app, QGuiApplication):
         ratio = float(app.devicePixelRatio())
         if ratio > 0:
             return ratio

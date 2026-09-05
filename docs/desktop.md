@@ -1,6 +1,6 @@
 # 桌面客户端 — SubFlow 语幕
 
-当前发布包：[`SubFlow-Windows-1.2.6.zip`](https://github.com/crazymsn/SubFlow/releases/latest) · [`SubFlow-macOS-1.2.6.zip`](https://github.com/crazymsn/SubFlow/releases/latest)
+构建文件：`SubFlow-Windows-x64.zip`、`SubFlow-macOS-arm64.zip`、`SubFlow-macOS-x64.zip`。正式版本从 [Releases](https://github.com/crazymsn/SubFlow/releases) 下载，开发构建从 [Actions](https://github.com/crazymsn/SubFlow/actions/workflows/release-clients.yml) 下载。
 
 窗口标题为 **深度云创科技**，界面品牌为 **SubFlow 语幕**。
 
@@ -12,7 +12,7 @@
 
 客户端是 PyInstaller onedir 包，exe 只是入口。只拷 exe 会找不到 Qt 与运行库。
 
-macOS 发布包是 GitHub Actions 按同一套源码打出的 `SubFlow.app`（Apple Silicon）。解压 zip 后拖到「应用程序」。首次打开若被拦截，按住 Control 点击图标再选打开。
+macOS 发布包是 GitHub Actions 按同一套源码打出的 `SubFlow.app`（分别提供 Apple Silicon / Intel 架构）。解压 zip 后拖到「应用程序」。首次打开若被拦截，按住 Control 点击图标再选打开。
 
 本机从源码构建：
 
@@ -29,6 +29,10 @@ bash scripts/build-macos.sh
 `dist/` 只在本机生成，不会提交到 Git。官方 Win / Mac 包由 `.github/workflows/release-clients.yml` 在打 `v*` 标签时上传到 Releases。
 
 ## 第一次使用
+
+启动后会自动安装隔离的 Python 3.11、CPU 推理依赖和 GPT-SoVITS 模型，窗口底部显示进度。无需预装 Python、CUDA、Git 或编译器。首次需要联网及约 15–20 GB 磁盘空间，后续复用缓存。关闭客户端会停止当前安装，下次启动可重试。无显卡时建议选 tiny/base/small 识别模型先处理短片；CPU 配音可运行，但速度通常慢于显卡。
+
+中文原片输出中文单语字幕不需要翻译令牌。需要英文等翻译字幕时再配置以下 API 令牌。
 
 1. 打开 [https://api.meding.site](https://api.meding.site) 领取 API 令牌。令牌只保存在本机，不要写进仓库。
 2. 在「API 令牌」粘贴后点「保存令牌」，再点「获取模型」，从列表选翻译模型（BAAI / 智源条目不会出现）。
@@ -86,7 +90,7 @@ Whisper 中文常输出繁体。目标为简体时，烧录前会把中文轨转
 | 选项 | 作用 |
 | --- | --- |
 | 字幕颜色 | 勾选后出现中英字幕色块 |
-| 配音 | OpenAI（走当前令牌）或 GPT-SoVITS（填本地服务地址）。音色旁可试听，样句跟目标语种，与字幕样式无关 |
+| 配音 | 跨语种目标使用 GPT-SoVITS；中文原片导出简体或繁体中文始终保留原声。启动客户端自动拉起本机服务，可自选参考音频，缺省从原片抽 3–8 秒 |
 | 电影级润色 | 翻译后走 reflect / adapt |
 
 术语表不在桌面端暴露，命令行仍可用 `--glossary` / `--glossary-generate`。
@@ -100,15 +104,16 @@ Whisper 中文常输出繁体。目标为简体时，烧录前会把中文轨转
 ## 本机构件
 
 - API 令牌：Windows 凭据管理器，失败时写入 `%APPDATA%\SubFlow\`
-- 下载 Cookie：读 exe 同级、项目根（打包版会向上找）、`%APPDATA%\SubFlow\Cookies` 的 `youtube-cookies.txt` / `bilibili-cookies.txt`。YouTube 必须含 SID 登录态。仓库只收 YouTube / B 站站点 Cookie，不含 API 令牌
+- 下载 Cookie：读 exe 同级、项目根（打包版会向上找）、`%APPDATA%\SubFlow\Cookies` 的 `youtube-cookies.txt` / `bilibili-cookies.txt`。YouTube 必须含 SID 登录态。仓库仅带格式示例，不携带登录 Cookie
 - 字幕颜色：`%APPDATA%\SubFlow\`（macOS / Linux 为用户配置目录）
 - Whisper 权重：本机缓存
-- 官方客户端**不内置** PyTorch / WhisperX / GPT-SoVITS 权重
+- Windows 完整构建包在 `GPT-SoVITS/runtime` 中携带独立 Python / PyTorch，模型保存在 `GPT-SoVITS/GPT_SoVITS` 中。请保留整个客户端文件夹。Whisper / WhisperX 仍使用各自的识别环境。
+- GPT-SoVITS 源码在仓库 `third_party/GPT-SoVITS`（[官方项目](https://github.com/RVC-Boss/GPT-SoVITS)）。启动 `SubFlow.exe` / `subflow gui` 自动运行 `api_v2.py`。GitHub 构建使用首次自动安装模式；`build-windows.ps1 -SourceOnly` 生成同类社区客户端。
 
 ## 不要做
 
 - 不要只复制 `SubFlow.exe`
 - 不要把输出路径写成原片同一文件
-- 不要在没保存令牌、没选模型时点开始
+- 需要翻译时，不要在没保存令牌、没选模型时点开始。中文原片输出中文单行字幕保留原声，不需要翻译令牌
 - 不要提交 `.env`、Cookie、凭据文件
 - 不要复用已经下错过音轨的旧 `source.mp4`，应重新下载

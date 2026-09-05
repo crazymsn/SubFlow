@@ -1,5 +1,10 @@
 from bilingual_sub.config import load_style_preset
-from bilingual_sub.core.render import apply_subtitle_colors, normalize_hex, render_ass_srt, resolve_play_layout
+from bilingual_sub.core.render import (
+    apply_subtitle_colors,
+    normalize_hex,
+    render_ass_srt,
+    resolve_play_layout,
+)
 from bilingual_sub.models import Cue
 
 

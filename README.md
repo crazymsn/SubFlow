@@ -4,7 +4,7 @@
 
 深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
-当前版本 **1.2.6**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Hub](https://hub.docker.com/r/crazymsn/subflow) · [API 分发站](https://api.meding.site)
+当前源码版本 **1.3.0**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Hub](https://hub.docker.com/r/crazymsn/subflow) · [API 分发站](https://api.meding.site)
 
 ![SubFlow 语幕桌面客户端](docs/images/desktop-light.png)
 
@@ -19,7 +19,7 @@
 | 简繁 | 目标语种为简体时，中文轨一律转为简体（Whisper 默认繁体也会转） |
 | 烧录颜色 | 中英字幕颜色可自选；只改颜色会重渲 ASS 并重烧，不重跑识别 |
 | 成片导出 | 烧录 MP4，同时写出 SRT / ASS |
-| 配音 | OpenAI 云端多语种，或本机 GPT-SoVITS 克隆音色 |
+| 配音 | 内置 GPT-SoVITS 克隆音色；启动客户端自动拉起本机服务 |
 | 三种入口 | Windows / macOS 桌面客户端、Python CLI、Docker 镜像 |
 
 界面提供简体中文、繁体中文、English、日本語、Español、Русский、Français、Deutsch。默认界面为简体中文。
@@ -46,16 +46,18 @@
 
 源语种和目标语种都选简体、字幕选中英：中文原声 + 简体/英文字幕，不会自动配成英文。
 
-## 五分钟上手
+中文原视频选择简体中文或繁體中文目标时始终保留原声，配音开关不会覆盖此规则。简繁转换只影响字幕；英文等跨语种目标才调用 GPT-SoVITS。
 
-1. 打开 [Releases](https://github.com/crazymsn/SubFlow/releases/latest)，下载 `SubFlow-Windows-1.2.6.zip` 或 `SubFlow-macOS-1.2.6.zip`。
+## 开始使用
+
+1. 打开 [Releases](https://github.com/crazymsn/SubFlow/releases/latest)，下载 对应架构的 `SubFlow-Windows-x64.zip`、`SubFlow-macOS-arm64.zip` 或 `SubFlow-macOS-x64.zip`（未发布的构建在 Actions 工件中）。
 2. Windows：**整夹解压**，进入 `SubFlow` 目录，双击 `SubFlow.exe`。不要只拷贝 exe。
 3. macOS：解压后把 `SubFlow.app` 拖到「应用程序」；若提示未验证开发者，按住 Control 点击后选择打开。
 4. 到 [API 分发站](https://api.meding.site) 领取令牌，在客户端保存，再点「获取模型」。
 5. 拖入视频，或粘贴链接后下载。
 6. 选好源语言、目标语言、字幕样式，点击「开始处理」。
 
-首次识别会按所选 Whisper 模型下载权重。详细步骤见 [桌面客户端](docs/desktop.md)。
+客户端自带 FFmpeg 和安装器，首次启动自动在用户目录准备 Python 3.11、CPU 推理依赖和 GPT-SoVITS 模型；首次识别再下载所选 Whisper 权重。无需预装 Python、CUDA 或编译器。首次需要联网并预留约 15–20 GB 空间；后续复用缓存。无显卡也能识别、配音和导出，CPU 上建议先用 tiny/base/small 测试短片，速度取决于设备。详细步骤见 [桌面客户端](docs/desktop.md)。
 
 ## 从源码运行
 
@@ -80,25 +82,18 @@ subflow run demo.mp4 -o out.mp4 --zh-color "#FFD400" --en-color "#F2F2F2"
 
 ## Docker
 
-官方镜像：[crazymsn/subflow](https://hub.docker.com/r/crazymsn/subflow)
+Compose 从当前源码自动构建 CPU 镜像，安装 FFmpeg、识别和配音环境。宿主机仅需安装 Docker 和 Compose。
 
 ```bash
 cp .env.example .env
 # 编辑 .env，填入 SUBFLOW_API_KEY（不要提交 .env）
-docker compose pull
+docker compose build
 docker compose run --rm subflow doctor
 docker compose run --rm subflow models
 docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp4
 ```
 
-也可以直接拉镜像：
-
-```bash
-docker pull crazymsn/subflow:latest
-docker run --rm -v "%cd%/data:/data" --env-file .env crazymsn/subflow:latest run /data/demo.mp4 -o /data/out.mp4
-```
-
-本机改源码后再打镜像：`docker compose build`。输入输出都在 `./data`。
+输入输出位于 `./data`，模型使用命名卷持久缓存。首次跨语种配音会自动下载模型；重复运行无需重装。旧 Docker Hub 镜像不代表本次源码构建。
 
 ## 流水线
 

@@ -15,7 +15,6 @@ from bilingual_sub.adapters.whisper_backend import (
     _python_candidates,
     _python_has_module,
     load_transcript,
-    runtime_home,
 )
 from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.langs import whisper_language
@@ -36,7 +35,11 @@ def worker_script() -> Path:
 
 
 def find_whisperx_python() -> Path | None:
-    for cand in _python_candidates():
+    from bilingual_sub.adapters.runtime_bootstrap import managed_python
+
+    for cand in [managed_python("whisperx"), *_python_candidates()]:
+        if not cand.is_file():
+            continue
         if _python_has_module(cand, "whisperx"):
             return cand
     return None
@@ -60,31 +63,20 @@ def _host_python() -> list[str] | None:
     return [host] if host else None
 
 
-def ensure_whisperx_runtime() -> Path | None:
+def ensure_whisperx_runtime(control: JobControl | None = None) -> Path | None:
     found = find_whisperx_python()
     if found:
         return found
     if not should_provision_whisperx():
         return None
-    host = _host_python()
-    if host is None:
-        logger.warning("no host Python to provision WhisperX runtime")
+    from bilingual_sub.adapters.runtime_bootstrap import auto_install_enabled, ensure_python_env
+
+    if not auto_install_enabled():
         return None
-    dest = runtime_home()
-    py = dest / ("Scripts/python.exe" if os.name == "nt" else "bin/python3")
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if not py.is_file():
-            logger.info("creating WhisperX runtime at %s", dest)
-            subprocess.run([*host, "-m", "venv", str(dest)], check=True, timeout=180, **hidden_run_kwargs())
-        pip = [str(gui_python(py)), "-m", "pip"]
-        subprocess.run([*pip, "install", "-U", "pip"], check=True, timeout=180, **hidden_run_kwargs())
-        subprocess.run(
-            [*pip, "install", "torch", "openai-whisper", "whisperx"],
-            check=True,
-            timeout=1800,
-            **hidden_run_kwargs(),
-        )
+        py = ensure_python_env("whisperx", control=control)
+    except JobStopped:
+        raise
     except Exception:
         logger.exception("provision WhisperX runtime failed")
         return None
@@ -119,8 +111,9 @@ class WhisperXBackend:
             raise RuntimeError("WhisperX 不可用")
         script = worker_script()
         log_path = out_json.with_name("whisperx.log")
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
+        from bilingual_sub.adapters.runtime_bootstrap import inference_env
+
+        env = inference_env()
         with log_path.open("w", encoding="utf-8") as log:
             proc = subprocess.Popen(
                 [

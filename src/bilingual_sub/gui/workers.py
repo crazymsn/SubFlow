@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from bilingual_sub.adapters.meding import MedingAuthError, create_client
-from bilingual_sub.core.control import JobStopped
+from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.i18n import tr
 from bilingual_sub.models import JobConfig
 from bilingual_sub.secrets.store import get_api_key
@@ -64,23 +64,53 @@ class VoicePreviewWorker(QThread):
     ok = Signal(str)
     fail = Signal(str)
 
-    def __init__(self, provider: str, voice: str, lang: str, endpoint: str = "") -> None:
+    def __init__(
+        self,
+        provider: str,
+        voice: str,
+        lang: str,
+        endpoint: str = "",
+        ref_audio: str = "",
+        prompt_text: str = "",
+        prompt_lang: str = "",
+        video: Path | None = None,
+    ) -> None:
         super().__init__()
         self.provider = provider
         self.voice = voice
         self.lang = lang
         self.endpoint = endpoint
+        self.ref_audio = ref_audio
+        self.prompt_text = prompt_text
+        self.prompt_lang = prompt_lang
+        self.video = video
+        self.control = JobControl()
 
     def run(self) -> None:
         try:
             from bilingual_sub.adapters.tts.base import TtsUnavailable
             from bilingual_sub.core.voice_preview import synth_voice_preview
 
+            ref_audio = self.ref_audio
+            if not ref_audio and self.video is not None:
+                import hashlib
+
+                from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_ref_audio
+                from bilingual_sub.core.voice_preview import preview_cache_dir
+
+                stat = self.video.stat()
+                key = hashlib.sha256(f"{self.video.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+                ref_audio = str(ensure_ref_audio(self.video, preview_cache_dir() / f"ref-{key}.wav", control=self.control))
+
             path = synth_voice_preview(
                 provider=self.provider,
                 voice=self.voice,
                 lang=self.lang,
                 endpoint=self.endpoint,
+                ref_audio=ref_audio,
+                prompt_text=self.prompt_text,
+                prompt_lang=self.prompt_lang,
+                control=self.control,
             )
             self.ok.emit(str(path))
         except TtsUnavailable as exc:
@@ -89,15 +119,53 @@ class VoicePreviewWorker(QThread):
             self.fail.emit(str(exc))
 
 
+class SovitsBootWorker(QThread):
+    ok = Signal(str)
+    fail = Signal(str)
+    progress = Signal(str)
+
+    def __init__(self, endpoint: str = "") -> None:
+        super().__init__()
+        self.endpoint = endpoint
+        self.control = JobControl()
+
+    def run(self) -> None:
+        try:
+            from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
+
+            self.ok.emit(ensure_running(self.endpoint, wait_sec=300, control=self.control, progress=self.progress.emit))
+        except Exception as exc:
+            self.fail.emit(str(exc))
+
+
+class SovitsProbeWorker(QThread):
+    result = Signal(bool, str)
+
+    def __init__(self, endpoint: str) -> None:
+        super().__init__()
+        self.endpoint = endpoint
+
+    def run(self) -> None:
+        from bilingual_sub.adapters.tts.gptsovits_runtime import diagnose_runtime, probe_endpoint
+
+        try:
+            ready = probe_endpoint(self.endpoint)
+            self.result.emit(ready, "" if ready else diagnose_runtime() or "")
+        except Exception as exc:
+            self.result.emit(False, str(exc))
+
+
 class DownloadWorker(QThread):
     progress = Signal(str, float)
     ok = Signal(str)
     fail = Signal(str)
 
-    def __init__(self, url: str, dest: Path) -> None:
+    def __init__(self, url: str, dest: Path, source_lang: str = "") -> None:
         super().__init__()
         self.url = url
         self.dest = dest
+        self.source_lang = source_lang or "zh"
+        self.control = JobControl()
 
     def run(self) -> None:
         try:
@@ -108,6 +176,8 @@ class DownloadWorker(QThread):
                 self.dest,
                 on_progress=lambda stage, pct: self.progress.emit(stage, pct),
                 progress_range=(0.0, 1.0),
+                control=self.control,
+                source_lang=self.source_lang,
             )
             self.progress.emit("ingest", 1.0)
             self.ok.emit(str(path))

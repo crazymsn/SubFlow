@@ -8,6 +8,8 @@ import subprocess
 import sys
 import threading
 
+from bilingual_sub.adapters.procwin import terminate_process_tree
+
 
 class JobStopped(RuntimeError):
     def __init__(self, message: str = "job stopped") -> None:
@@ -61,13 +63,13 @@ def _force_kill(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
     try:
-        proc.terminate()
-    except OSError:
+        terminate_process_tree(proc)
+    except (OSError, AttributeError, subprocess.TimeoutExpired):
         pass
     try:
-        if proc.poll() is None:
+        if proc.poll() is None and hasattr(proc, "kill"):
             proc.kill()
-    except OSError:
+    except (OSError, AttributeError):
         pass
 
 

@@ -1,0 +1,5 @@
+Official: https://github.com/RVC-Boss/GPT-SoVITS
+Vendored source snapshot; see Git history for SubFlow compatibility patches.
+SubFlow adds pure-Python jieba fallback and isolated CPU environment installation.
+Original license and authorship notices are retained.
+Large model weights and Python environments are downloaded separately, not committed.

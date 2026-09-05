@@ -5,7 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from bilingual_sub.config import StylePreset
-from bilingual_sub.core.langs import convert_han, is_pair_mode, pair_display_texts, single_subtitle_lang
+from bilingual_sub.core.langs import (
+    convert_han,
+    is_pair_mode,
+    pair_display_texts,
+    screen_line,
+    single_subtitle_lang,
+)
 from bilingual_sub.models import Cue
 
 SUBTITLE_PACK = "han-layout-v3"
@@ -181,9 +187,9 @@ def wrap_to_width(
     cap = max(1, max_lines)
     if len(kept) <= cap:
         return kept
-    head, tail = kept[: cap - 1], kept[cap - 1 :]
+    leading, tail = kept[: cap - 1], kept[cap - 1 :]
     joiner = " " if any(" " in part for part in tail) else ""
-    return head + [joiner.join(tail)]
+    return leading + [joiner.join(tail)]
 
 
 def fit_scale(
@@ -340,9 +346,16 @@ def _resolve_han(mode: str, han_lang: str | None) -> str | None:
     return None
 
 
-def _single_line(cue: Cue, mode: str, han_lang: str | None = None) -> str:
+def _single_line(
+    cue: Cue,
+    mode: str,
+    han_lang: str | None = None,
+    *,
+    target_lang: str = "",
+    source_lang: str = "",
+) -> str:
     lang = single_subtitle_lang(mode)
-    text = (cue.en or cue.zh or "").strip()
+    text = screen_line(cue, mode, target_lang=target_lang, source_lang=source_lang)
     if lang and lang not in {"zh", "zh-Hant"}:
         return text
     target = _resolve_han(mode, han_lang)
@@ -358,11 +371,13 @@ def render_ass_srt(
     play_res: tuple[int, int] | None = None,
     mode: str = "bilingual",
     han_lang: str | None = None,
+    target_lang: str = "",
+    source_lang: str = "",
 ) -> tuple[str, str]:
     style = preset.style
     geo = resolve_play_layout(style, play_res)
     pw, ph = geo["pw"], geo["ph"]
-    cx, cn_y, en_y = geo["cx"], geo["cn_y"], geo["en_y"]
+    cx, cn_y = geo["cx"], geo["cn_y"]
     margin_lr = geo["margin_lr"]
     max_w = geo["max_w"]
     zh_cfg = geo["zh"]
@@ -409,7 +424,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     pair = is_pair_mode(mode)
     for i, cue in enumerate(cues, 1):
         if mode == "netflix_single" or single_subtitle_lang(mode):
-            line = _single_line(cue, mode, han)
+            line = _single_line(
+                cue, mode, han, target_lang=target_lang, source_lang=source_lang
+            )
             lines, scale = fit_text(
                 line,
                 zh_fs,
@@ -570,9 +587,17 @@ def write_subtitles(
     play_res: tuple[int, int] | None = None,
     mode: str = "bilingual",
     han_lang: str | None = None,
+    target_lang: str = "",
+    source_lang: str = "",
 ) -> None:
     ass_text, srt_text = render_ass_srt(
-        cues, preset, play_res=play_res, mode=mode, han_lang=han_lang
+        cues,
+        preset,
+        play_res=play_res,
+        mode=mode,
+        han_lang=han_lang,
+        target_lang=target_lang,
+        source_lang=source_lang,
     )
     ass_path.parent.mkdir(parents=True, exist_ok=True)
     ass_path.write_text(ass_text, encoding="utf-8-sig")

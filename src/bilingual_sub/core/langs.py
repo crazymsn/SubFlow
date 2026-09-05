@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Protocol
 
 UI_LOCALES = (
     ("zh-Hans", "简体中文"),
@@ -79,6 +80,8 @@ AZURE_LOCALE = {
 PAIR_MODES = frozenset({"bilingual", "enzh"})
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+_HANGUL_RE = re.compile(r"[\uac00-\ud7af]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 
 
@@ -159,9 +162,18 @@ def screen_han_lang(source_lang: str, target_lang: str, mode: str) -> str:
     return "zh"
 
 
+def spoken_han_lang(target_lang: str) -> str | None:
+    """Han variant for Chinese speech only. Never force OpenCC onto ja/ko/en."""
+    return _han_variant(target_lang)
+
+
 def text_family(text: str) -> str:
-    """Classify a subtitle line as zh, en, or empty."""
+    """Classify a subtitle line as zh, en, ja, ko, or empty."""
     raw = text or ""
+    if _KANA_RE.search(raw):
+        return "ja"
+    if _HANGUL_RE.search(raw):
+        return "ko"
     cjk = len(_CJK_RE.findall(raw))
     latin = len(_LATIN_RE.findall(raw))
     if cjk == 0 and latin == 0:
@@ -175,18 +187,20 @@ def text_family(text: str) -> str:
 
 def spoken_family(cues, declared_source: str = "zh") -> str:
     """Majority script of ASR text. Declared source is only a fallback."""
-    votes = {"zh": 0, "en": 0}
+    votes: dict[str, int] = {}
     for cue in cues:
         raw = getattr(cue, "zh", None) or getattr(cue, "en", None) or ""
         fam = text_family(raw)
-        if fam in votes:
-            votes[fam] += max(1, len(raw))
-    if votes["zh"] == 0 and votes["en"] == 0:
+        if fam:
+            votes[fam] = votes.get(fam, 0) + max(1, len(raw))
+    if not votes:
         if declared_source == "auto":
             return "zh"
         fam = lang_family(declared_source)
         return "zh" if fam == "zh" else fam
-    return "zh" if votes["zh"] >= votes["en"] else "en"
+    if set(votes) <= {"zh", "en"}:
+        return "zh" if votes.get("zh", 0) >= votes.get("en", 0) else "en"
+    return max(votes, key=lambda family: votes[family])
 
 
 def park_pair_source(cues) -> tuple[list[int], list[int]]:
@@ -258,9 +272,7 @@ def assign_pair_fields(cues, source_lang: str) -> None:
 
 
 def lang_family(code: str) -> str:
-    if code in _HAN:
-        return "zh"
-    return code
+    return (code or "").strip().replace("_", "-").lower().split("-", 1)[0]
 
 
 def _lang_family(code: str) -> str:
@@ -303,6 +315,11 @@ def should_dub(declared_source: str, detected_spoken: str, target_lang: str, cue
     must be dubbed to English even when Whisper or the source combo said en.
     """
     target = lang_family(target_lang)
+    # Original ASR text takes precedence over a stale source dropdown. Brief
+    # English terms in a Chinese video must not turn Chinese exports into dubs.
+    if target == "zh" and cues and any(text_family(getattr(c, "zh", "") or "") for c in cues):
+        if spoken_family(cues, detected_spoken or declared_source) == "zh":
+            return False
     votes = original_lang_votes(declared_source, detected_spoken, cues)
     if not votes:
         return wants_spoken_target(declared_source, target_lang)
@@ -318,11 +335,43 @@ def job_needs_dub(
     enable_dub: bool = False,
     tts_provider: str = "",
 ) -> bool:
-    """Target language is the spoken language. The checkbox cannot skip that.
-
-    Same-language jobs keep the original track even if enable_dub is set.
-    """
+    """Only a change of spoken language requires dubbing, regardless of UI state."""
     return should_dub(declared_source, detected_spoken, target_lang, cues=cues)
+
+
+def effective_tts_provider(
+    declared_source: str,
+    detected_spoken: str,
+    target_lang: str,
+    *,
+    cues=None,
+    enable_dub: bool = False,
+    tts_provider: str = "",
+) -> str:
+    """Engine that will actually run. Cloud TTS names collapse to GPT-SoVITS."""
+    if not job_needs_dub(
+        declared_source,
+        detected_spoken,
+        target_lang,
+        cues=cues,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,
+    ):
+        return "none"
+    engine = (tts_provider or "").strip().lower()
+    if engine in {"", "none", "openai", "azure"}:
+        return "gptsovits"
+    return engine
+
+
+def coerce_requested_tts(tts_provider: str, *, enable_dub: bool = False) -> str:
+    """Map leftover cloud names and an explicit --dub flag onto GPT-SoVITS."""
+    name = (tts_provider or "").strip().lower() or "none"
+    if name in {"openai", "azure"}:
+        name = "gptsovits"
+    if enable_dub and name in {"", "none"}:
+        name = "gptsovits"
+    return name
 
 
 def output_stem_suffix(mode: str) -> str:
@@ -354,6 +403,41 @@ def translation_needed(source_lang: str, target_lang: str, mode: str) -> bool:
     return lang_family(source_lang) != lang_family(out)
 
 
+def spoken_translation_needed(
+    source_lang: str,
+    target_lang: str,
+    *,
+    detected_spoken: str | None = None,
+) -> bool:
+    """True when dubbed speech needs a language the soundtrack does not already give."""
+    heard = detected_spoken if detected_spoken and detected_spoken != "auto" else source_lang
+    return wants_spoken_target(heard, target_lang)
+
+
+def job_needs_translation(
+    source_lang: str,
+    target_lang: str,
+    mode: str,
+    *,
+    detected_spoken: str | None = None,
+    cues=None,
+    enable_dub: bool = False,
+    tts_provider: str = "",
+) -> bool:
+    """Screen translation or the target-language line required by dubbing."""
+    if translation_needed(source_lang, target_lang, mode):
+        return True
+    heard = source_lang if detected_spoken is None else detected_spoken
+    return job_needs_dub(
+        source_lang,
+        heard,
+        target_lang,
+        cues=cues,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,
+    ) and spoken_translation_needed(source_lang, target_lang, detected_spoken=heard)
+
+
 def has_distinct_target_line(cues) -> bool:
     for cue in cues:
         target = (getattr(cue, "en", None) or "").strip()
@@ -363,39 +447,166 @@ def has_distinct_target_line(cues) -> bool:
     return False
 
 
+def line_matching(cue, lang: str) -> str:
+    """Return the cue slot whose script matches lang, or empty."""
+    target = lang_family(lang)
+    for text in (
+        (getattr(cue, "zh", None) or "").strip(),
+        (getattr(cue, "en", None) or "").strip(),
+    ):
+        if text and text_family(text) == target:
+            return text
+    return ""
+
+
 def spoken_line(cue, target_lang: str) -> str:
     """Text the dubber should speak. Pick the line that matches the target script."""
+    spoken = (getattr(cue, "spoken", None) or "").strip()
+    target = lang_family(target_lang)
+    if spoken and target not in {"zh", "en"}:
+        return spoken
+    if spoken and text_family(spoken) == target:
+        return spoken
+    matched = line_matching(cue, target_lang)
+    if matched:
+        return matched
     zh = (getattr(cue, "zh", None) or "").strip()
     en = (getattr(cue, "en", None) or "").strip()
-    target = lang_family(target_lang)
     if target == "zh":
-        if text_family(zh) == "zh":
-            return zh
-        if text_family(en) == "zh":
-            return en
         return zh
     if target == "en":
-        if text_family(en) == "en":
-            return en
-        if text_family(zh) == "en":
-            return zh
         return ""
     if en and text_family(en) != "zh":
         return en
     if zh and text_family(zh) != "zh":
         return zh
-    return ""
+    return (en or zh or "").strip()
 
 
-def drop_target_if_unneeded(cues, source_lang: str, target_lang: str, mode: str) -> None:
-    """Same-language jobs must not keep a leftover English/target line."""
+def screen_line(cue, mode: str, target_lang: str = "", source_lang: str = "") -> str:
+    """On-screen text for a single-line style. Dub translations must not steal the frame."""
+    lang = single_subtitle_lang(mode)
+    if not lang and mode == "netflix_single":
+        lang = screen_translate_lang(source_lang or "zh", target_lang or "en", mode)
+    if lang:
+        matched = line_matching(cue, lang)
+        if matched:
+            return matched
+        spoken = (getattr(cue, "spoken", None) or "").strip()
+        if spoken and lang_family(lang) not in {"zh", "en"}:
+            return spoken
+    return (getattr(cue, "en", None) or getattr(cue, "zh", None) or "").strip()
+
+
+def job_translation_langs(
+    source_lang: str,
+    target_lang: str,
+    mode: str,
+    *,
+    detected_spoken: str | None = None,
+    cues=None,
+    enable_dub: bool = False,
+    tts_provider: str = "",
+) -> list[str]:
+    """Languages this job must produce that the source track does not already give."""
+    heard = source_lang if detected_spoken is None else detected_spoken
+    if heard and heard != "auto":
+        src_fam = lang_family(heard)
+    elif source_lang and source_lang != "auto":
+        src_fam = lang_family(source_lang)
+    else:
+        src_fam = ""
+    dests: list[str] = []
     if translation_needed(source_lang, target_lang, mode):
+        dests.append(screen_translate_lang(source_lang, target_lang, mode))
+    if job_needs_dub(
+        source_lang,
+        heard,
+        target_lang,
+        cues=cues,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,
+    ) and spoken_translation_needed(source_lang, target_lang, detected_spoken=heard):
+        dests.append(target_lang)
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for lang in dests:
+        fam = lang_family(lang)
+        if src_fam and fam == src_fam:
+            continue
+        if fam in seen:
+            continue
+        seen.add(fam)
+        uniq.append(lang)
+    return uniq
+
+
+def token_required_for_job(
+    source_lang: str,
+    target_lang: str,
+    mode: str,
+    *,
+    enable_dub: bool = False,
+    tts_provider: str = "",
+) -> bool:
+    """True when the client must collect a translation token before starting."""
+    if job_needs_translation(
+        source_lang,
+        target_lang,
+        mode,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,
+    ):
+        return True
+    if source_lang != "auto":
+        return False
+    if is_pair_mode(mode):
+        return True
+    screen = single_subtitle_lang(mode)
+    if screen and lang_family(screen) != "zh":
+        return True
+    if lang_family(target_lang) != "zh":
+        return True
+    return job_needs_dub(
+        source_lang,
+        source_lang,
+        target_lang,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,
+    )
+
+
+def drop_target_if_unneeded(
+    cues,
+    source_lang: str,
+    target_lang: str,
+    mode: str,
+    *,
+    detected_spoken: str | None = None,
+    enable_dub: bool = False,
+    tts_provider: str = "",
+) -> None:
+    """Drop leftover target lines unless the screen or the dubber still needs them."""
+    if job_needs_translation(
+        source_lang,
+        target_lang,
+        mode,
+        detected_spoken=detected_spoken,
+        cues=cues,
+        enable_dub=enable_dub,
+        tts_provider=tts_provider,
+    ):
         return
     for cue in cues:
         cue.en = None
+        cue.spoken = None
 
 
-_CC: dict[str, object] = {}
+class _HanConverter(Protocol):
+    def convert(self, text: str) -> str: ...
+
+
+_CC: dict[str, _HanConverter] = {}
 
 
 def convert_han(text: str, lang: str) -> str:
@@ -426,3 +637,7 @@ def apply_han_to_cues(cues, han_lang: str) -> None:
     for cue in cues:
         if text_family(getattr(cue, "zh", None) or "") == "zh":
             cue.zh = convert_han(cue.zh, han_lang)
+        if text_family(getattr(cue, "en", None) or "") == "zh":
+            cue.en = convert_han(cue.en, han_lang)
+        if text_family(getattr(cue, "spoken", None) or "") == "zh":
+            cue.spoken = convert_han(cue.spoken, han_lang)
