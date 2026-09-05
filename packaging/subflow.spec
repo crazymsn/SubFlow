@@ -3,6 +3,8 @@
 from pathlib import Path
 import shutil
 import sys
+import platform
+import tomllib
 
 ROOT = Path(SPECPATH).resolve().parent
 SRC = ROOT / "src"
@@ -198,3 +200,18 @@ coll = COLLECT(
     upx=False,
     name="SubFlow",
 )
+
+if sys.platform == "darwin":
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    app = BUNDLE(
+        coll,
+        name="SubFlow.app",
+        icon=str(ROOT / "build" / "SubFlow.icns"),
+        bundle_identifier="tech.deepcloud.subflow",
+        info_plist={
+            "CFBundleShortVersionString": version,
+            "CFBundleVersion": version,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": platform.mac_ver()[0].split(".")[0] + ".0",
+        },
+    )

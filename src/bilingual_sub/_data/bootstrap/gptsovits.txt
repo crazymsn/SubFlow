@@ -33,3 +33,5 @@ opencc-python-reimplemented
 x-transformers
 setuptools<81
 huggingface-hub>=0.28,<1
+numba==0.61.2
+llvmlite==0.44.0

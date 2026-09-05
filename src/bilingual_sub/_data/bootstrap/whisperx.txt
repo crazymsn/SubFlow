@@ -2,3 +2,5 @@ whisperx==3.3.1
 numpy<2
 transformers==4.51.3
 huggingface-hub<1
+numba==0.61.2
+llvmlite==0.44.0
