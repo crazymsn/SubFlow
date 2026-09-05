@@ -68,7 +68,7 @@ python scripts/prepare-runtime.py gptsovits
 ```
 
 ```bash
-# macOS 社区包（构建机需 brew install ffmpeg）
+# macOS 社区包（构建机需 brew install ffmpeg-full）
 bash scripts/build-macos.sh
 ```
 

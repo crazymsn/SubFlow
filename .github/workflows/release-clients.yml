@@ -26,6 +26,8 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
       SUBFLOW_TORCH_BACKEND: cpu
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,13 +38,15 @@ jobs:
         run: choco install ffmpeg -y --no-progress
       - name: Install macOS FFmpeg
         if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - name: Install build and test tools
         run: python -m pip install -e '.[gui,dev,packaging]'
-      - name: Tests and lint
-        run: |
-          python -m pytest -q
-          ruff check src tests scripts
+      - name: Tests
+        run: python -m pytest -q
+      - name: Lint
+        run: ruff check src tests scripts
       - name: Prepare CPU recognition runtime from scratch
         run: python scripts/prepare-runtime.py asr
       - name: Prepare CPU dubbing dependencies from scratch

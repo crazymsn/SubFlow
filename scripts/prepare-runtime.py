@@ -7,6 +7,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     from bilingual_sub.adapters.runtime_bootstrap import ensure_python_env, ensure_sovits_runtime
 
     parser = argparse.ArgumentParser()

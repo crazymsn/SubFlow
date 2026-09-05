@@ -147,7 +147,7 @@ if sys.platform == "darwin":
     for name in ("ffmpeg", "ffprobe"):
         binary = shutil.which(name)
         if not binary:
-            raise RuntimeError(f"Missing {name}; brew install ffmpeg before building")
+            raise RuntimeError(f"Missing {name}; brew install ffmpeg-full before building")
         external_bins.append((str(Path(binary).resolve()), "."))
 
 a = Analysis(

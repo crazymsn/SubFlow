@@ -146,7 +146,9 @@ def _mix_group(video, clips, output, duration, graph, control):
     mix += "[aout]"
     filters.append(mix)
     graph.write_text(";".join(filters), encoding="utf-8")
-    args.extend(["-filter_complex_script", str(graph)])
+    from bilingual_sub.adapters.ffmpeg import filter_script_option
+
+    args.extend([filter_script_option(args[0]), str(graph)])
     if video is not None:
         args.extend(["-map", "0:v:0", "-c:v", "copy"])
     args.extend(

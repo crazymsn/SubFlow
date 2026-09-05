@@ -3,6 +3,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+if command -v brew >/dev/null && brew --prefix ffmpeg-full >/dev/null 2>&1; then
+  export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+fi
 
 VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
 

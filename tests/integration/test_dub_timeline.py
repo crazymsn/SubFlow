@@ -49,7 +49,7 @@ def test_thousand_long_paths_never_form_one_windows_command(tmp_path, monkeypatc
     graphs = []
     def capture(args, **kwargs):
         commands.append(args)
-        graphs.append(Path(args[args.index("-filter_complex_script") + 1]).read_text())
+        graphs.append(Path(args[next(i for i, arg in enumerate(args) if arg in {"-filter_complex_script", "-/filter_complex"}) + 1]).read_text())
     monkeypatch.setattr("bilingual_sub.core.dub.run_cmd", capture)
     clips = [(i * 0.1, tmp_path / ("a" * 150) / f"{i}.wav") for i in range(1200)]
     mix_timeline(tmp_path / "video.mp4", clips, tmp_path / "out.mp4", 125)
@@ -63,7 +63,7 @@ def test_mix_cancel_cleans_temporary_graph(tmp_path, monkeypatch):
     from bilingual_sub.core.control import JobStopped
     graphs = []
     def fail(args, **kwargs):
-        graphs.append(Path(args[args.index("-filter_complex_script") + 1]))
+        graphs.append(Path(args[next(i for i, arg in enumerate(args) if arg in {"-filter_complex_script", "-/filter_complex"}) + 1]))
         raise JobStopped()
     monkeypatch.setattr("bilingual_sub.core.dub.run_cmd", fail)
     with pytest.raises(JobStopped):

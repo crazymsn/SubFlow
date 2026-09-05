@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import wave
+from functools import lru_cache
 from pathlib import Path
 
 from bilingual_sub.adapters.procwin import hidden_run_kwargs
@@ -52,6 +54,16 @@ def find_ffprobe() -> str:
     if not exe:
         raise FfmpegError("ffprobe not found in PATH")
     return exe
+
+
+@lru_cache(maxsize=8)
+def filter_script_option(binary: str) -> str:
+    """FFmpeg 7+ loads option values from files; 9 removed the legacy alias."""
+    version = run_cmd([binary, "-version"]).stdout
+    match = re.search(r"ffmpeg version n?(\d+)", version)
+    if match and int(match.group(1)) >= 7:
+        return "-/filter_complex"
+    return "-filter_complex_script"
 
 
 def run_cmd(args: list[str], *, check: bool = True, control=None) -> subprocess.CompletedProcess[str]:
