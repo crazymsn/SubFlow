@@ -2,6 +2,22 @@
 
 目标保持为审核完整项目、修复发现的问题并验证实际行为。本记录不将已通过的测试等同于“全部代码没有问题”。
 
+## 1.3.38：识别环境探测的进程清理与停止传递
+
+实际 Python 导入测试复现：探测父进程正常退出和导入异常退出后，仍留下它启动的子进程；另一个实际导入测试通过宿主 PYTHONPATH 注入未安装模块，使旧探测错误地返回可用。旧代码为 **3 项失败、2 项通过**，证据为 `.verify/asr-probe-before.log`；测试仅清理自身启动的已知子进程。
+
+Whisper / WhisperX 模块探测、Windows Python launcher 查询及 NVIDIA 查询改用项目已有进程树所有权机制。stdout / stderr 在运行期间分别写入临时文件，结束后各读取最多 65536 字节，避免等待后代关闭继承管道以及完整输出驻留内存；不宣称临时磁盘用量也具有该上限。返回码和既有 12 / 8 / 5 秒探测期限保留，明确超时仍归为探测不可用。
+
+通用等待函数新增可选 timeout；在暂停等待期间延长截止时间，取消仍抛出 JobStopped。任务控制由 pipeline 的 WhisperX 可用性检查、Whisper / WhisperX 解释器选择及环境准备传到实际探测进程，不把用户停止误当作缺少依赖。Python 导入探测使用与实际推理一致的隔离环境，launcher 查询也移除宿主 Python 路径覆盖。
+
+首轮全量为 1070 项通过、1 项跳过，证据为 `.verify/asr-probe-full.log`。继续审查发现只隔离环境变量仍会从启动目录导入同名模块，单独测试实际复现了错误可用判断，证据为 `.verify/asr-probe-cwd-before.log`。模块探测现从识别工作脚本所在目录运行，使导入搜索位置与工作脚本匹配；正常或异常导入的进程树测试也明确使用其模拟工作脚本目录。
+
+最终 70 项定向测试通过，证据为 `.verify/asr-probe-final-targeted.log`，本轮新增 16 项。覆盖真实导入、父子进程、继承输出流、超时、停止、暂停恢复、结果读取上限、stdin EOF、启动目录隔离，以及各个识别入口传递控制对象。既有测试替身同步接受可选 control 参数，原有识别路径、语言及结果提交断言保留。Ruff 和 mypy（83 个源码文件）通过。
+
+最终代码在现有纯 CPU 环境实际执行 tiny 中文 CLI 识别：2 段结果，日志确认 `MODEL_LOADED device=cpu`，源音频摘要不变，退出码 0，结束后文件占用登记为 0；耗时 7.07 秒。证据为 `.verify/cli-asr-1.3.38-final/acceptance.json` 及同目录结果 / 日志。本次复用已安装依赖和模型，不作为重新冷安装、字幕准确率或 Apple GPU 的验收。
+
+最终全量回归 **1071 项通过、1 项跳过**，核心覆盖率 **91.54%**（2340 条语句）；证据为 `.verify/asr-probe-full-final.log`，耗时 203.21 秒，仍有两条既有 Pillow 弃用提示。Ruff 和 mypy（83 个源码文件）通过。对应提交的跨平台构建另行验收；实体 M1 GPU 与试听仍由用户最后自行执行。
+
 ## 1.3.37：Mac 输出路径别名与占用登记一致性
 
 旧输出检查对尚不存在的 POSIX 路径只比较解析后的拼写；多文件提交也采用独立的拼写比较，因此可能把仅大小写或 Unicode 组合形式不同的 Mac 路径当成两份输出。文件占用登记原有 Mac 大小写折叠，但没有统一 Unicode 组合形式。依据 [Apple APFS 文档](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/APFS_Guide/FAQ/FAQ.html)，APFS 默认不区分大小写，现代 APFS 的两种大小写变体均不区分等价 Unicode 组合形式。
@@ -13,6 +29,8 @@
 本轮新增 21 项用例。Windows 本地使用明确的 Mac 策略模拟及不存在的 POSIX 路径对象，验证写入前拒绝、输入保护、目录与文件占用冲突，并单独验证保守等价不成为实际文件身份。另有真实宿主文件系统测试：先探测两种拼写是否为同一文件，再删除探测文件，验证对尚不存在输出的处理；该测试也随两个 Mac CI 作业运行。当前本地模拟不表述为实体 Mac 或 APFS 实测，Mac 原生结果另行核验。
 
 最终全量回归 **1055 项通过、1 项跳过**，核心覆盖率 **91.60%**（2333 条语句）；证据为 `.verify/platform-path-full.log`，耗时 196.25 秒，仍有两条既有 Pillow 弃用提示。Ruff 和 mypy（83 个源码文件）通过。对应提交的 Windows、Mac arm64、Mac Intel 和 Docker 构建另行核验；实体 M1 GPU 及试听仍由用户最后自行执行。
+
+[1.3.37 GitHub Actions](https://github.com/crazymsn/SubFlow/actions/runs/33996285248) 已整体成功，对应提交 `1adee8813f6cadf2e3980f5583181d57f2a41bdd`。Windows、Mac arm64、Mac Intel 和 Docker 四项作业全部通过；两个 Mac 作业均完成包含新增宿主路径测试的全量回归、依赖准备、打包与启动检查。publish 因非标签构建跳过，不表示发布了 Release，也不作为实体 M1 GPU 推理验收。
 
 ## 1.3.36：独立命令及识别输出的输入保护
 

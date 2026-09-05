@@ -34,13 +34,15 @@ def worker_script() -> Path:
     raise RuntimeError("whisperx_worker.py missing")
 
 
-def find_whisperx_python() -> Path | None:
+def find_whisperx_python(control: JobControl | None = None) -> Path | None:
     from bilingual_sub.adapters.runtime_bootstrap import managed_python
 
-    for cand in [managed_python("whisperx"), *_python_candidates()]:
+    if control:
+        control.wait_if_paused()
+    for cand in [managed_python("whisperx"), *_python_candidates(control=control)]:
         if not cand.is_file():
             continue
-        if _python_has_module(cand, "whisperx"):
+        if _python_has_module(cand, "whisperx", control=control):
             return cand
     return None
 
@@ -64,7 +66,7 @@ def _host_python() -> list[str] | None:
 
 
 def ensure_whisperx_runtime(control: JobControl | None = None) -> Path | None:
-    found = find_whisperx_python()
+    found = find_whisperx_python(control=control)
     if found:
         return found
     if not should_provision_whisperx():
@@ -80,20 +82,20 @@ def ensure_whisperx_runtime(control: JobControl | None = None) -> Path | None:
     except Exception:
         logger.exception("provision WhisperX runtime failed")
         return None
-    return py if _python_has_module(py, "whisperx") else None
+    return py if _python_has_module(py, "whisperx", control=control) else None
 
 
-def whisperx_available(python: Path | None = None) -> bool:
+def whisperx_available(python: Path | None = None, control: JobControl | None = None) -> bool:
     if python is None:
-        return find_whisperx_python() is not None
-    return _python_has_module(python, "whisperx")
+        return find_whisperx_python(control=control) is not None
+    return _python_has_module(python, "whisperx", control=control)
 
 
 class WhisperXBackend:
     name = "whisperx"
 
-    def available(self) -> bool:
-        return whisperx_available()
+    def available(self, control: JobControl | None = None) -> bool:
+        return whisperx_available(control=control)
 
     def transcribe(
         self,
@@ -107,7 +109,7 @@ class WhisperXBackend:
         control: JobControl | None = None,
     ) -> AsrResult:
         validate_outputs(asr_output_paths(out_json, "whisperx"), [wav])
-        python = find_whisperx_python()
+        python = find_whisperx_python(control=control)
         if python is None:
             raise RuntimeError("WhisperX 不可用")
         data = run_asr_worker(python, worker_script(), wav, model_name=model_name,

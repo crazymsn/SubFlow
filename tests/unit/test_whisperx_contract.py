@@ -37,7 +37,7 @@ def test_default_job_still_whisper():
 
 def test_ensure_skips_when_not_frozen(monkeypatch):
     monkeypatch.delenv("SUBFLOW_PROVISION_WX", raising=False)
-    monkeypatch.setattr("bilingual_sub.adapters.whisperx_backend.find_whisperx_python", lambda: None)
+    monkeypatch.setattr("bilingual_sub.adapters.whisperx_backend.find_whisperx_python", lambda control=None: None)
     monkeypatch.setattr("bilingual_sub.adapters.whisperx_backend.should_provision_whisperx", lambda: False)
     assert ensure_whisperx_runtime() is None
 
@@ -82,7 +82,7 @@ def test_pipeline_falls_back_without_calling_x(tmp_path, monkeypatch):
     monkeypatch.setattr("bilingual_sub.pipeline.write_subtitles", fake_write)
     monkeypatch.setattr(
         "bilingual_sub.adapters.whisperx_backend.WhisperXBackend.available",
-        lambda self: False,
+        lambda self, control=None: False,
     )
     called = {"x": 0}
 
@@ -135,7 +135,7 @@ def test_pipeline_whisperx_gets_normalized_language(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "bilingual_sub.adapters.whisperx_backend.WhisperXBackend.available",
-        lambda self: True,
+        lambda self, control=None: True,
     )
 
     def fake_x(self, wav, **kwargs):

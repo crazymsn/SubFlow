@@ -1128,10 +1128,10 @@ def _run_job(
         used_x = False
         if config.asr_backend == "whisperx":
             backend = WhisperXBackend()
-            if not backend.available():
+            if not backend.available(control=control):
                 logger.info("正在准备内置 WhisperX 环境…")
                 ensure_whisperx_runtime(control=control)
-            if backend.available():
+            if backend.available(control=control):
                 result = backend.transcribe(
                     speech,
                     model_name=config.whisper_model or settings.asr.model,

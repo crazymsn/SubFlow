@@ -81,18 +81,26 @@ def _force_kill(proc: subprocess.Popen) -> None:
 def wait_for_process(
     proc: subprocess.Popen, *, control: JobControl | None = None,
     on_tick: Callable[[], None] | None = None, interval: float = 0.2,
+    timeout: float | None = None,
 ) -> int:
     """Own a logged worker until exit, including callback errors and cancellation."""
     try:
         if control:
             control.attach_proc(proc)
+        deadline = time.monotonic() + timeout if timeout is not None else None
         while proc.poll() is None:
             if control:
+                paused_at = time.monotonic()
                 control.wait_if_paused()
+                if deadline is not None:
+                    deadline += time.monotonic() - paused_at
+            remaining = deadline - time.monotonic() if deadline is not None else interval
+            if timeout is not None and remaining <= 0:
+                raise subprocess.TimeoutExpired(proc.args, timeout)
             if on_tick:
                 on_tick()
             try:
-                proc.wait(timeout=interval)
+                proc.wait(timeout=min(interval, remaining))
             except subprocess.TimeoutExpired:
                 pass
         if control:

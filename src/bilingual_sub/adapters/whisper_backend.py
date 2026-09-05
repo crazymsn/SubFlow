@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from bilingual_sub.adapters.owned_process import owned_process
-from bilingual_sub.adapters.procwin import gui_python, hidden_run_kwargs
+from bilingual_sub.adapters.procwin import gui_python
 from bilingual_sub.adapters.torch_device import (
     load_whisper_on_device,
     mps_available,
@@ -23,7 +23,7 @@ from bilingual_sub.adapters.transcript_io import (
     read_transcript,
     write_transcript,
 )
-from bilingual_sub.core.control import wait_for_process
+from bilingual_sub.core.control import JobControl, wait_for_process
 from bilingual_sub.core.output_guard import validate_outputs
 from bilingual_sub.models import Segment, WordSpan
 
@@ -52,17 +52,34 @@ def cuda_available() -> bool:
         return False
 
 
-def has_nvidia_gpu() -> bool:
+def _run_probe(args: list[str], *, timeout: float, control: JobControl | None = None,
+               env: dict[str, str] | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Own a short probe and keep only a bounded prefix of each result stream."""
+    if control:
+        control.wait_if_paused()
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        with owned_process(args, stdin=subprocess.DEVNULL, stdout=output, stderr=errors, env=env, cwd=cwd) as proc:
+            code = wait_for_process(proc, control=control, timeout=timeout)
+        output.seek(0)
+        errors.seek(0)
+        stdout = output.read(65536).decode("utf-8", errors="replace")
+        stderr = errors.read(65536).decode("utf-8", errors="replace")
+    if control:
+        control.check()
+    return subprocess.CompletedProcess(args, code, stdout, stderr)
+
+
+def has_nvidia_gpu(control: JobControl | None = None) -> bool:
+    if control:
+        control.wait_if_paused()
     smi = shutil.which("nvidia-smi")
     if not smi:
         return False
     try:
-        proc = subprocess.run(
+        proc = _run_probe(
             [smi, "-L"],
-            capture_output=True,
-            text=True,
             timeout=5,
-            **hidden_run_kwargs(),
+            control=control,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -152,7 +169,9 @@ def _automatic_mps_asr() -> bool:
     return not _explicit_whisper_python() and auto_install_enabled() and torch_backend() == "mps"
 
 
-def _python_candidates() -> list[Path]:
+def _python_candidates(control: JobControl | None = None) -> list[Path]:
+    if control:
+        control.wait_if_paused()
     found: list[Path] = []
     seen: set[str] = set()
 
@@ -193,12 +212,13 @@ def _python_candidates() -> list[Path]:
         py = shutil.which("py")
         if py:
             try:
-                probe = subprocess.run(
+                from bilingual_sub.adapters.runtime_bootstrap import install_env
+
+                probe = _run_probe(
                     [py, "-3", "-c", "import sys; print(sys.executable)"],
-                    capture_output=True,
-                    text=True,
                     timeout=8,
-                    **hidden_run_kwargs(),
+                    control=control,
+                    env=install_env(),
                 )
                 if probe.returncode == 0:
                     add(probe.stdout.strip())
@@ -211,27 +231,33 @@ def _python_candidates() -> list[Path]:
     return found
 
 
-def _python_has_module(python: Path, module: str) -> bool:
+def _python_has_module(python: Path, module: str, control: JobControl | None = None) -> bool:
+    from bilingual_sub.adapters.runtime_bootstrap import inference_env
+
+    if control:
+        control.wait_if_paused()
     try:
-        proc = subprocess.run(
+        proc = _run_probe(
             [str(gui_python(python)), "-c", f"import {module}"],
-            capture_output=True,
-            text=True,
             timeout=12,
-            **hidden_run_kwargs(),
+            control=control,
+            env=inference_env(),
+            cwd=worker_script().parent,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return proc.returncode == 0
 
 
-def _python_has_whisper(python: Path) -> bool:
-    return _python_has_module(python, "whisper")
+def _python_has_whisper(python: Path, control: JobControl | None = None) -> bool:
+    return _python_has_module(python, "whisper", control=control)
 
 
-def find_whisper_python() -> Path | None:
+def find_whisper_python(control: JobControl | None = None) -> Path | None:
     from bilingual_sub.adapters.runtime_bootstrap import managed_python
 
+    if control:
+        control.wait_if_paused()
     explicit = _explicit_whisper_python()
     # An Intel interpreter cached by an older app can run under Rosetta but
     # cannot use Apple GPU. Prepare the native managed environment on upgrade.
@@ -240,9 +266,9 @@ def find_whisper_python() -> Path | None:
     elif _automatic_mps_asr():
         candidates = [managed_python("asr")]
     else:
-        candidates = _python_candidates()
+        candidates = _python_candidates(control=control)
     for cand in candidates:
-        if _python_has_whisper(cand):
+        if _python_has_whisper(cand, control=control):
             try:
                 cache = _cache_path()
                 cache.parent.mkdir(parents=True, exist_ok=True)
@@ -384,7 +410,7 @@ def transcribe(
                 control.check()
             return result
     # A native MPS cache needs the full architecture/build probe before each job.
-    python = None if managed_mps else find_whisper_python()
+    python = None if managed_mps else find_whisper_python(control=control)
     if python is None:
         if explicit:
             raise RuntimeError("指定的 Whisper 解释器不可用，请检查 SUBFLOW_PYTHON / SUBFLOW_WHISPER_PYTHON 及其 Whisper 依赖")

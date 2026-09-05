@@ -18,8 +18,8 @@ def runtime(tmp_path, monkeypatch):
     managed = tmp_path / "native-python"
     managed.write_bytes(b"interpreter fixture")
     monkeypatch.setattr(rt, "managed_python", lambda kind: managed)
-    monkeypatch.setattr(wb, "_python_has_whisper", lambda path: path == managed)
-    monkeypatch.setattr(wb, "_python_candidates", lambda: [managed])
+    monkeypatch.setattr(wb, "_python_has_whisper", lambda path, control=None: path == managed)
+    monkeypatch.setattr(wb, "_python_candidates", lambda control=None: [managed])
     monkeypatch.setattr(wb, "_cache_path", lambda: tmp_path / "cached-python.txt")
     events = []
     def prepare(kind, **kwargs):

@@ -27,7 +27,7 @@ def test_selected_runtime_runs_external_worker_with_transactional_output(tmp_pat
         return python
     monkeypatch.setattr(rt, "ensure_python_env", prepare)
     monkeypatch.setattr(wb, "_cache_path", lambda: tmp_path / "cached-python.txt")
-    monkeypatch.setattr(wb, "_python_has_whisper", lambda path: path == python)
+    monkeypatch.setattr(wb, "_python_has_whisper", lambda path, control=None: path == python)
     if route == "explicit":
         monkeypatch.setenv("SUBFLOW_PYTHON", str(python))
     monkeypatch.setattr(wb, "_transcribe_inprocess", lambda *a, **kw: pytest.fail("host inference used"))

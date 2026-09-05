@@ -124,8 +124,8 @@ def test_apple_upgrade_ignores_legacy_python_unless_explicit(monkeypatch, tmp_pa
     monkeypatch.setattr(rt, "torch_backend", lambda: "mps")
     monkeypatch.setattr(rt, "auto_install_enabled", lambda: True)
     monkeypatch.setattr(rt, "managed_python", lambda kind: tmp_path / "native-python")
-    monkeypatch.setattr(wb, "_python_candidates", lambda: [legacy])
-    monkeypatch.setattr(wb, "_python_has_whisper", lambda p: p == legacy)
+    monkeypatch.setattr(wb, "_python_candidates", lambda control=None: [legacy])
+    monkeypatch.setattr(wb, "_python_has_whisper", lambda p, control=None: p == legacy)
     monkeypatch.setattr(wb, "_cache_path", lambda: tmp_path / "cache")
     assert wb.find_whisper_python() == (legacy if override else None)
 
