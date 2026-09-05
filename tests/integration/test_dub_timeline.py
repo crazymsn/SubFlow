@@ -50,6 +50,7 @@ def test_thousand_long_paths_never_form_one_windows_command(tmp_path, monkeypatc
     def capture(args, **kwargs):
         commands.append(args)
         graphs.append(Path(args[next(i for i, arg in enumerate(args) if arg in {"-filter_complex_script", "-/filter_complex"}) + 1]).read_text())
+        Path(args[-1]).write_bytes(b"mixed")
     monkeypatch.setattr("bilingual_sub.core.dub.run_cmd", capture)
     clips = [(i * 0.1, tmp_path / ("a" * 150) / f"{i}.wav") for i in range(1200)]
     mix_timeline(tmp_path / "video.mp4", clips, tmp_path / "out.mp4", 125)
@@ -69,3 +70,37 @@ def test_mix_cancel_cleans_temporary_graph(tmp_path, monkeypatch):
     with pytest.raises(JobStopped):
         mix_timeline(tmp_path / "v.mp4", [(0, tmp_path / "a.wav")] * 25, tmp_path / "out.mp4", 5)
     assert graphs and not graphs[0].parent.exists()
+
+
+@pytest.mark.parametrize("failure", ["cancel", "error", "empty", "stop_after_write"])
+def test_failed_final_mix_preserves_previous_movie(tmp_path, monkeypatch, failure):
+    from bilingual_sub.core.control import JobControl, JobStopped
+
+    output = tmp_path / "complete.mp4"
+    output.write_bytes(b"previous movie")
+    control = JobControl()
+    def fail(args, **kwargs):
+        if failure != "empty":
+            Path(args[-1]).write_bytes(b"partial movie")
+        if failure == "cancel":
+            raise JobStopped()
+        if failure == "error":
+            raise RuntimeError("encoder failed")
+        if failure == "stop_after_write":
+            control.stop()
+    monkeypatch.setattr("bilingual_sub.core.dub.run_cmd", fail)
+    with pytest.raises(RuntimeError):
+        mix_timeline(tmp_path / "video.mp4", [(0, tmp_path / "clip.wav")], output, 2, control=control)
+    assert output.read_bytes() == b"previous movie"
+    assert not list(tmp_path.glob(".subflow-output-*"))
+
+
+@pytest.mark.parametrize("protect", ["video", "clip"])
+def test_mix_cannot_overwrite_its_inputs(tmp_path, monkeypatch, protect):
+    video, clip = tmp_path / "video.mp4", tmp_path / "clip.wav"
+    video.write_bytes(b"video")
+    clip.write_bytes(b"audio")
+    monkeypatch.setattr("bilingual_sub.core.dub.run_cmd", lambda *a, **kw: pytest.fail("must reject before FFmpeg"))
+    with pytest.raises(ValueError, match="覆盖输入"):
+        mix_timeline(video, [(0, clip)], video if protect == "video" else clip, 2)
+    assert video.read_bytes() == b"video" and clip.read_bytes() == b"audio"

@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 from bilingual_sub.core.dub import clamp_rate, dub_cues, mix_timeline
@@ -28,7 +29,8 @@ def test_mix_timeline_uses_copy_video(tmp_path):
     video.write_bytes(b"v")
     clip.write_bytes(b"a")
     with patch("bilingual_sub.core.dub.find_ffmpeg", return_value="ffmpeg"):
-        with patch("bilingual_sub.core.dub.run_cmd") as run:
+        with patch("bilingual_sub.core.dub.run_cmd", side_effect=lambda args, **kw:
+                   Path(args[-1]).write_bytes(b"mixed video")) as run:
             mix_timeline(video, [(0.2, clip)], out, 2.0)
     args = run.call_args[0][0]
     assert "-c:v" in args
@@ -37,7 +39,7 @@ def test_mix_timeline_uses_copy_video(tmp_path):
     assert "aac" in args
 
 
-def test_dub_cues_skips_empty_and_fits(tmp_path):
+def test_dub_cues_skips_empty_and_fits(tmp_path, pcm_wav):
     class FakeTts:
         name = "fake"
 
@@ -45,13 +47,14 @@ def test_dub_cues_skips_empty_and_fits(tmp_path):
             return True
 
         def synth(self, req, *, control=None):
-            req.dest.write_bytes(b"wav")
+            req.dest.write_bytes(pcm_wav(1))
             return req.dest
 
     cues = [Cue(0.0, 1.0, "你好", "Hello"), Cue(1.0, 2.0, "", "")]
     video = tmp_path / "v.mp4"
     video.write_bytes(b"v")
-    with patch("bilingual_sub.core.dub.fit_clip"):
+    with patch("bilingual_sub.core.dub.fit_clip", side_effect=lambda src, dst, *a, **kw:
+               dst.write_bytes(src.read_bytes())):
         with patch("bilingual_sub.core.dub.mix_timeline") as mix:
             with patch("bilingual_sub.core.dub._audio_duration", return_value=1.0):
                 out = tmp_path / "o-dub.mp4"
@@ -74,7 +77,8 @@ def test_dub_cues_skips_empty_and_fits(tmp_path):
     leftover = tmp_path / "tts" / "0000.wav"
     leftover.parent.mkdir(exist_ok=True)
     leftover.write_bytes(b"stale")
-    with patch("bilingual_sub.core.dub.fit_clip"):
+    with patch("bilingual_sub.core.dub.fit_clip", side_effect=lambda src, dst, *a, **kw:
+               dst.write_bytes(src.read_bytes())):
         with patch("bilingual_sub.core.dub.mix_timeline") as mix2:
             with patch("bilingual_sub.core.dub._audio_duration", return_value=1.0):
                 dub_cues(
@@ -91,7 +95,7 @@ def test_dub_cues_skips_empty_and_fits(tmp_path):
     assert second != first
 
 
-def test_dub_cues_cache_invalidates_when_ref_audio_changes(tmp_path):
+def test_dub_cues_cache_invalidates_when_ref_audio_changes(tmp_path, pcm_wav):
     class FakeTts:
         name = "gptsovits"
 
@@ -105,7 +109,7 @@ def test_dub_cues_cache_invalidates_when_ref_audio_changes(tmp_path):
             return True
 
         def synth(self, req, *, control=None):
-            req.dest.write_bytes(self.ref_audio.encode())
+            req.dest.write_bytes(pcm_wav(0.3 if self.ref_audio == "ref-a.wav" else 0.5))
             return req.dest
 
     def fake_fit(src, dest, target_sec, control=None):
@@ -142,11 +146,11 @@ def test_dub_cues_cache_invalidates_when_ref_audio_changes(tmp_path):
     first = mix1.call_args[0][1][0][1]
     second = mix2.call_args[0][1][0][1]
     assert first != second
-    assert first.read_bytes() == b"ref-a.wav"
-    assert second.read_bytes() == b"ref-b.wav"
+    assert first.read_bytes() == pcm_wav(0.3)
+    assert second.read_bytes() == pcm_wav(0.5)
 
 
-def test_fit_cache_tracks_duration_and_reference_contents(tmp_path):
+def test_fit_cache_tracks_duration_and_reference_contents(tmp_path, pcm_wav):
     reference = tmp_path / "reference.wav"
     reference.write_bytes(b"speaker one")
 
@@ -154,11 +158,11 @@ def test_fit_cache_tracks_duration_and_reference_contents(tmp_path):
         name = "gptsovits"
         ref_audio = str(reference)
         def synth(self, req, **kwargs):
-            req.dest.write_bytes(reference.read_bytes())
+            req.dest.write_bytes(pcm_wav(0.3 if reference.read_bytes() == b"speaker one" else 0.5))
             return req.dest
 
     def fitted(src, dest, seconds, **kwargs):
-        dest.write_bytes(src.read_bytes() + str(seconds).encode())
+        dest.write_bytes(src.read_bytes())
 
     def render(end):
         with patch("bilingual_sub.core.dub.mix_timeline") as mix:
@@ -171,11 +175,11 @@ def test_fit_cache_tracks_duration_and_reference_contents(tmp_path):
         first = render(1)
         longer = render(2)
         assert first != longer
-        assert longer.read_bytes().endswith(b"2")
+        assert longer.read_bytes() == first.read_bytes()
         reference.write_bytes(b"speaker two")
         changed = render(2)
         assert changed != longer
-        assert changed.read_bytes().startswith(b"speaker two")
+        assert changed.read_bytes() == pcm_wav(0.5)
 
 
 def test_cancelled_fit_does_not_poison_cache(tmp_path):

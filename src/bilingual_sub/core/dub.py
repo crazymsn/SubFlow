@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import tempfile
 from pathlib import Path
 
-from bilingual_sub.adapters.ffmpeg import find_ffmpeg, find_ffprobe, run_cmd
+from bilingual_sub.adapters.ffmpeg import FfmpegError, find_ffmpeg, run_cmd
 from bilingual_sub.adapters.tts.base import TtsProvider, TtsRequest
+from bilingual_sub.core.audio_cache import cache_digest, pcm_duration, produce_audio
 from bilingual_sub.core.control import JobControl
+from bilingual_sub.core.file_io import file_digest, staged_path
+from bilingual_sub.core.output_guard import validate_outputs
 from bilingual_sub.models import Cue
 
 logger = logging.getLogger(__name__)
@@ -40,38 +44,22 @@ def atempo_chain(rate: float) -> str:
 
 
 def _audio_duration(path: Path, control: JobControl | None = None) -> float:
-    import json
-
-    proc = run_cmd(
-        [
-            find_ffprobe(),
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "json",
-            str(path),
-        ],
-        control=control,
-    )
-    data = json.loads(proc.stdout or "{}")
-    try:
-        return float((data.get("format") or {}).get("duration") or 0)
-    except (TypeError, ValueError):
-        return 0.0
+    return pcm_duration(path, control)
 
 
 def fit_clip(src: Path, dest: Path, target_sec: float, control: JobControl | None = None) -> None:
-    audio_sec = _audio_duration(src, control=control) or target_sec or 1
+    validate_outputs({"拟合音频": dest}, [src])
+    if not math.isfinite(target_sec) or target_sec <= 0:
+        raise ValueError("target audio duration must be positive and finite")
+    audio_sec = _audio_duration(src, control=control)
     target = max(0.4, target_sec)
     rate = (audio_sec / target) if target > 0 else 1.0
-    part = dest.with_name(dest.stem + ".part" + dest.suffix)
-    try:
+    with staged_path(dest, suffix=".wav") as part:
         _fit_clip(src, part, target, rate, control)
+        pcm_duration(part, control)
+        if control:
+            control.wait_if_paused()
         part.replace(dest)
-    finally:
-        part.unlink(missing_ok=True)
 
 
 def _fit_clip(src, dest, target, rate, control):
@@ -104,6 +92,7 @@ def mix_timeline(
         raise ValueError("video duration must be positive and finite")
     if any(not math.isfinite(start) for start, _ in clips):
         raise ValueError("clip start must be finite")
+    validate_outputs({"配音视频": output}, [video, *(path for _, path in clips)])
     output.parent.mkdir(parents=True, exist_ok=True)
     # Bound both command length and open file handles. Each intermediate keeps
     # its own start offset, avoiding hours of silence in every temporary WAV.
@@ -122,7 +111,13 @@ def mix_timeline(
                 reduced.append((offset, dest))
             pending = reduced
             level += 1
-        _mix_group(video, pending, output, duration, work / "mix.txt", control)
+        with staged_path(output, suffix=output.suffix or ".mp4") as part:
+            _mix_group(video, pending, part, duration, work / "mix.txt", control)
+            if not part.is_file() or part.stat().st_size == 0:
+                raise FfmpegError("FFmpeg did not produce a dubbed video")
+            if control:
+                control.wait_if_paused()
+            part.replace(output)
 
 
 def _mix_group(video, clips, output, duration, graph, control):
@@ -167,6 +162,16 @@ def _mix_group(video, clips, output, duration, graph, control):
     run_cmd(args, control=control)
 
 
+def _provider_identity(provider: TtsProvider, voice: str) -> str:
+    from bilingual_sub.adapters.tts.gptsovits import tts_job_fingerprint
+
+    return tts_job_fingerprint(
+        getattr(provider, "name", "") or "unknown", voice=voice,
+        **{key: str(getattr(provider, key, "") or "")
+           for key in ("endpoint", "ref_audio", "prompt_text", "prompt_lang")},
+    )
+
+
 def dub_cues(
     cues: list[Cue],
     *,
@@ -179,16 +184,13 @@ def dub_cues(
     duration: float,
     control: JobControl | None = None,
 ) -> Path:
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("video duration must be positive and finite")
     tts_dir = work / "tts"
     tts_dir.mkdir(parents=True, exist_ok=True)
-    from bilingual_sub.adapters.tts.gptsovits import tts_job_fingerprint
-
-    identity = tts_job_fingerprint(
-        getattr(provider, "name", "") or "unknown", voice=voice,
-        **{key: str(getattr(provider, key, "") or "")
-           for key in ("endpoint", "ref_audio", "prompt_text", "prompt_lang")},
-    )
+    identity = _provider_identity(provider, voice)
     clips: list[tuple[float, Path]] = []
+    clip_keys: list[tuple[Path, str]] = []
     for i, cue in enumerate(cues):
         if control:
             control.wait_if_paused()
@@ -197,8 +199,10 @@ def dub_cues(
         text = spoken_line(cue, lang)
         if not text:
             continue
-        digest = hashlib.sha256(
-            "|".join(
+        if not all(math.isfinite(t) for t in (cue.start, cue.end)) or cue.start < 0 or cue.end <= cue.start:
+            raise ValueError("dub cue must have finite, nonnegative start and positive duration")
+        request_key = hashlib.sha256(
+            json.dumps(
                 (
                     text,
                     identity,
@@ -209,17 +213,34 @@ def dub_cues(
                     str(getattr(provider, "ref_audio", "") or ""),
                     str(getattr(provider, "prompt_text", "") or ""),
                     str(getattr(provider, "prompt_lang", "") or ""),
-                )
+                ), ensure_ascii=False, separators=(",", ":")
             ).encode()
-        ).hexdigest()[:12]
+        ).hexdigest()
+        digest = request_key[:16]
         raw = tts_dir / f"{i:04d}-{digest}.wav"
         target = max(0.4, cue.end - cue.start)
-        fitted = tts_dir / f"{i:04d}-{digest}-{target:.6f}.fit.wav"
-        if not raw.is_file():
-            provider.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=raw), control=control)
-        if not fitted.is_file():
-            fit_clip(raw, fitted, max(0.4, cue.end - cue.start), control=control)
+        raw_digest = cache_digest(raw, request_key, control)
+        if raw_digest is None:
+            def synth_raw(pending):
+                provider.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=pending), control=control)
+                if _provider_identity(provider, voice) != identity:
+                    raise RuntimeError("合成期间参考音频或配音设置发生变化，请重试")
+            raw_digest = produce_audio(raw, request_key, synth_raw, control)
+        fit_key = hashlib.sha256(json.dumps(["fit-v2", request_key, raw_digest, target]).encode()).hexdigest()
+        fitted = tts_dir / f"{i:04d}-{fit_key[:16]}.fit.wav"
+        if cache_digest(fitted, fit_key, control) is None:
+            def produce_fit(pending):
+                fit_clip(raw, pending, target, control=control)
+                if file_digest(raw, checkpoint=control.wait_if_paused if control else None) != raw_digest:
+                    raise RuntimeError("拟合期间原始配音音频发生变化，请重试")
+            produce_audio(fitted, fit_key, produce_fit, control)
         clips.append((cue.start, fitted))
+        clip_keys.append((fitted, fit_key))
+    for path, key in clip_keys:
+        if cache_digest(path, key, control) is None:
+            raise RuntimeError("混音前配音音频发生变化，请重试")
+    if _provider_identity(provider, voice) != identity:
+        raise RuntimeError("混音前参考音频或配音设置发生变化，请重试")
     output.parent.mkdir(parents=True, exist_ok=True)
     mix_timeline(video, clips, output, duration, control=control)
     return output

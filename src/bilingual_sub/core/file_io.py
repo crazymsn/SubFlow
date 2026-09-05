@@ -26,9 +26,9 @@ def discard_temporary(path: Path) -> None:
 
 
 @contextmanager
-def staged_path(destination: Path) -> Iterator[Path]:
+def staged_path(destination: Path, *, suffix: str = ".tmp") -> Iterator[Path]:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(dir=destination.parent, prefix=".subflow-output-", suffix=".tmp")
+    fd, name = tempfile.mkstemp(dir=destination.parent, prefix=".subflow-output-", suffix=suffix)
     os.close(fd)
     pending = Path(name)
     try:
