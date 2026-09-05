@@ -5,7 +5,6 @@ import hashlib
 import logging
 import os
 import platform
-import shutil
 import subprocess
 import sys
 import time
@@ -15,6 +14,7 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout
 
+from bilingual_sub.adapters import installer as _installer
 from bilingual_sub.adapters.owned_process import owned_process
 from bilingual_sub.config import user_config_dir
 from bilingual_sub.core.control import JobControl, JobStopped, wait_for_process
@@ -58,17 +58,8 @@ def managed_python(kind: str) -> Path:
     return managed_env(kind) / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
-def find_uv() -> Path:
-    name = "uv.exe" if os.name == "nt" else "uv"
-    if getattr(sys, "frozen", False):
-        for root in (Path(getattr(sys, "_MEIPASS", "")), Path(sys.executable).parent):
-            path = root / name
-            if path.is_file():
-                return path
-    found = shutil.which("uv")
-    if found:
-        return Path(found)
-    raise RuntimeError("缺少内置 uv 安装器，请重新下载完整客户端；源码安装请执行 pip install -e .")
+def find_uv(*, control: JobControl | None = None) -> Path:
+    return _installer.find_uv(control=control)
 
 
 def install_env() -> dict[str, str]:
@@ -230,7 +221,7 @@ def ensure_python_env(kind: str, *, control: JobControl | None = None, progress:
                 return python
         if not auto_install_enabled():
             raise RuntimeError("自动安装已关闭（SUBFLOW_AUTO_INSTALL=0）且运行环境尚未准备")
-        uv = str(find_uv())
+        uv = str(find_uv(control=control))
         marker.unlink(missing_ok=True)
         _progress(progress, "首次运行：正在自动准备 Python 3.11（后续使用缓存）…")
         if not python.is_file() or repair:

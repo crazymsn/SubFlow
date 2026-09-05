@@ -11,7 +11,7 @@ def environment(tmp_path, monkeypatch):
     monkeypatch.setenv("SUBFLOW_RUNTIME_DIR", str(tmp_path / "managed"))
     monkeypatch.setenv("SUBFLOW_AUTO_INSTALL", "1")
     monkeypatch.setenv("SUBFLOW_TORCH_BACKEND", "cpu")
-    monkeypatch.setattr(rt, "find_uv", lambda: Path("uv"))
+    monkeypatch.setattr(rt, "find_uv", lambda **kw: Path("uv"))
     calls = []
     def run(args, *a, **kw):
         calls.append(args)

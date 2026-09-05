@@ -143,10 +143,10 @@ excludes = [
     "PySide6.QtQuick",
 ]
 
-installer = shutil.which("uv")
-if not installer:
-    raise RuntimeError("uv is required to build automatic-install clients (pip install uv==0.11.8)")
-external_bins = [(installer, ".")]
+sys.path.insert(0, str(SRC))
+from bilingual_sub.adapters.installer import find_uv
+
+external_bins = [(str(find_uv()), ".")]
 if sys.platform == "darwin":
     for name in ("ffmpeg", "ffprobe"):
         binary = shutil.which(name)

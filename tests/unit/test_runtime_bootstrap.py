@@ -12,7 +12,7 @@ def test_install_isolated_and_cached(monkeypatch, tmp_path):
     monkeypatch.setenv('SUBFLOW_RUNTIME_DIR', str(tmp_path))
     monkeypatch.setenv('SUBFLOW_AUTO_INSTALL', '1')
     monkeypatch.setenv('SUBFLOW_TORCH_BACKEND', 'cpu')
-    monkeypatch.setattr(rt, 'find_uv', lambda: Path('uv'))
+    monkeypatch.setattr(rt, 'find_uv', lambda **kw: Path('uv'))
     calls = []
 
     def run(args, *_a, **_k):

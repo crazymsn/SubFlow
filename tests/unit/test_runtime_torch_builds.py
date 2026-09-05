@@ -14,7 +14,7 @@ def install(monkeypatch, tmp_path, backend):
     monkeypatch.setenv("SUBFLOW_TORCH_BACKEND", backend)
     monkeypatch.setattr(rt, "sys", SimpleNamespace(platform="darwin" if backend == "mps" else "win32"))
     monkeypatch.setattr(rt.platform, "machine", lambda: "arm64" if backend == "mps" else "AMD64")
-    monkeypatch.setattr(rt, "find_uv", lambda: Path("uv"))
+    monkeypatch.setattr(rt, "find_uv", lambda **kw: Path("uv"))
     calls = []
     def run(args, *a, **kw):
         calls.append(args)
