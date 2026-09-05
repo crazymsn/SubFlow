@@ -444,7 +444,7 @@ class MainWindow(QMainWindow):
         self.out_edit.setText(str(out))
 
     def _sync_download(self) -> None:
-        busy = bool(self._dl_worker and self._dl_worker.isRunning())
+        busy = self._job_busy()
         self.download_btn.setEnabled(bool(self.url_edit.text().strip()) and not busy)
 
     def _download(self) -> None:
@@ -452,7 +452,7 @@ class MainWindow(QMainWindow):
         if not url:
             QMessageBox.warning(self, PRODUCT_ZH, tr("need_url"))
             return
-        if self._dl_worker and self._dl_worker.isRunning():
+        if self._job_busy():
             return
         dest = download_folder(url)
         self.download_btn.setEnabled(False)
@@ -464,12 +464,24 @@ class MainWindow(QMainWindow):
         self._last_log_stage = None
         source_lang = str(self.source_lang_combo.currentData() or "zh")
         self._dl_worker = DownloadWorker(url, dest, source_lang=source_lang)
+        self._control = self._dl_worker.control
         self._dl_worker.progress.connect(self._on_progress)
         self._dl_worker.ok.connect(self._on_downloaded)
         self._dl_worker.fail.connect(self._on_download_fail)
+        self._dl_worker.finished.connect(self._on_download_finished)
         self._dl_worker.start()
+        self._set_running_ui(True)
+
+    def _on_download_finished(self) -> None:
+        if self.sender() is not None and self.sender() is not self._dl_worker:
+            return
+        self._dl_worker = None
+        if not self._job_busy():
+            self._release_job()
 
     def _on_downloaded(self, path: str) -> None:
+        if self.sender() is not None and self.sender() is not self._dl_worker:
+            return
         self._sync_download()
         self._set_video(Path(path))
         self.progress.setValue(100)
@@ -478,12 +490,16 @@ class MainWindow(QMainWindow):
         self._log_line(f"{tr('ingest')}  {path}")
 
     def _on_download_fail(self, msg: str) -> None:
+        if self.sender() is not None and self.sender() is not self._dl_worker:
+            return
         self._sync_download()
         self.progress.setValue(0)
         self.pct_label.setText(format_pct(0))
         self._bar_floor = 0
-        self.stage_label.setText(tr("waiting"))
-        QMessageBox.warning(self, PRODUCT_ZH, msg)
+        stopped = bool(self._control and self._control.is_stopped()) or msg in {tr("stop"), "job stopped"}
+        self.stage_label.setText(tr("stop") if stopped else tr("waiting"))
+        if not stopped and not self._closing:
+            QMessageBox.warning(self, PRODUCT_ZH, redact_api_key(msg, get_api_key()))
 
     def _job_signature(self) -> tuple:
         video = ""
@@ -1008,7 +1024,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _job_busy(self) -> bool:
-        return bool(self._worker is not None and self._worker.isRunning())
+        return self._dl_worker is not None or bool(self._worker is not None and self._worker.isRunning())
 
     def _set_running_ui(self, running: bool, paused: bool = False, stopping: bool = False) -> None:
         busy = bool(running or stopping)
@@ -1017,6 +1033,7 @@ class MainWindow(QMainWindow):
         self.resume_btn.setEnabled(bool(running) and paused and not stopping)
         self.stop_btn.setEnabled(bool(running) and not stopping)
         self.run_btn.update()
+        self._sync_download()
 
     def _release_job(self) -> None:
         self._worker = None

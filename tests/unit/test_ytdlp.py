@@ -40,6 +40,13 @@ from bilingual_sub.adapters.ytdlp import (
 from bilingual_sub.core.control import JobControl, JobStopped
 
 
+@pytest.fixture(autouse=True)
+def inprocess_downloader_for_format_unit_tests(monkeypatch):
+    from bilingual_sub.adapters.ytdlp import _download_into
+
+    monkeypatch.setattr("bilingual_sub.adapters.download_worker.run_download_worker", _download_into)
+
+
 class _FakeYDL:
     def __init__(self, opts):
         self.opts = opts

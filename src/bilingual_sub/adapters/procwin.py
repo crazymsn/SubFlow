@@ -11,7 +11,7 @@ from pathlib import Path
 
 def hidden_run_kwargs() -> dict:
     if os.name != "nt":
-        return {"start_new_session": True}
+        return {"start_new_session": os.environ.get("SUBFLOW_WORKER_PROCESS_GROUP") != "1"}
     info = subprocess.STARTUPINFO()
     info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = getattr(subprocess, "SW_HIDE", 0)

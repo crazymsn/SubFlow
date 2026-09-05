@@ -827,10 +827,14 @@ def test_gui_predownload_passes_source_lang(tmp_path, monkeypatch):
 
     class FakeDl:
         def __init__(self, url, dest, source_lang="zh"):
+            from bilingual_sub.core.control import JobControl
+
             started.append({"url": url, "dest": dest, "source_lang": source_lang})
+            self.control = JobControl()
             self.progress = _Sig()
             self.ok = _Sig()
             self.fail = _Sig()
+            self.finished = _Sig()
 
         def start(self):
             return None

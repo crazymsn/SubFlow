@@ -1,4 +1,5 @@
 import functools
+import sys
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -20,11 +21,19 @@ def test_real_http_download_and_atomic_publish(tmp_path, monkeypatch):
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Handler, directory=str(served)))
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
-    monkeypatch.setattr(ytdlp, "download_attempts", lambda url: iter([{"impersonate": False}]))
     # A local file server has no YouTube/Bilibili format listing. Exercise the
     # real HTTP transfer, callbacks, media probing and commit with its sole file.
-    monkeypatch.setattr(ytdlp, "format_for_height", lambda *args: "best")
-    monkeypatch.setattr(ytdlp, "prefer_audio_format", lambda *args: "best")
+    script = tmp_path / "local_http_worker.py"
+    script.write_text('''import sys
+from pathlib import Path
+from bilingual_sub.adapters import ytdlp, download_worker
+ytdlp.download_attempts = lambda url: iter([{"impersonate": False}])
+ytdlp.format_for_height = lambda *args: "best"
+ytdlp.prefer_audio_format = lambda *args: "best"
+raise SystemExit(download_worker.main(Path(sys.argv[1])))
+''', encoding="utf-8")
+    monkeypatch.setattr("bilingual_sub.adapters.download_worker.worker_command",
+                        lambda job: [sys.executable, str(script), str(job)])
     progress = []
     dest = tmp_path / "download's [中文]"
     dest.mkdir()

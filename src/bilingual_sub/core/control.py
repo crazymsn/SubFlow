@@ -9,6 +9,8 @@ import threading
 import time
 from collections.abc import Callable
 
+import psutil
+
 from bilingual_sub.adapters.procwin import signal_posix_process, terminate_process_tree
 
 
@@ -22,26 +24,25 @@ class JobPaused(RuntimeError):
         super().__init__(message)
 
 
-def _proc_handle(proc: subprocess.Popen) -> int | None:
-    handle = getattr(proc, "_handle", None)
-    if handle is None:
-        return None
-    try:
-        return int(handle)
-    except (TypeError, ValueError):
-        return None
-
-
 def _suspend_proc(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
     if sys.platform == "win32":
-        handle = _proc_handle(proc)
-        if handle is None:
+        if not isinstance(proc.pid, int):
             return
-        import ctypes
-
-        ctypes.windll.ntdll.NtSuspendProcess(handle)
+        root = psutil.Process(proc.pid)
+        root.suspend()
+        seen = {proc.pid}
+        while True:
+            children = [p for p in root.children(recursive=True) if p.pid not in seen]
+            if not children:
+                break
+            for child in children:
+                try:
+                    child.suspend()
+                except psutil.NoSuchProcess:
+                    pass
+                seen.add(child.pid)
     else:
         signal_posix_process(proc, signal.SIGSTOP)
 
@@ -50,12 +51,15 @@ def _resume_proc(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
     if sys.platform == "win32":
-        handle = _proc_handle(proc)
-        if handle is None:
+        if not isinstance(proc.pid, int):
             return
-        import ctypes
-
-        ctypes.windll.ntdll.NtResumeProcess(handle)
+        root = psutil.Process(proc.pid)
+        for child in reversed(root.children(recursive=True)):
+            try:
+                child.resume()
+            except psutil.NoSuchProcess:
+                pass
+        root.resume()
     else:
         signal_posix_process(proc, signal.SIGCONT)
 
@@ -119,7 +123,7 @@ class JobControl:
         for proc in procs:
             try:
                 fn(proc)
-            except (OSError, ProcessLookupError):
+            except (OSError, psutil.Error):
                 pass
 
     def pause(self) -> None:
@@ -172,7 +176,7 @@ class JobControl:
             if not stopped and self.is_paused():
                 try:
                     _suspend_proc(proc)
-                except (OSError, ProcessLookupError):
+                except (OSError, psutil.Error):
                     pass
         if stopped:
             self.kill_attached()

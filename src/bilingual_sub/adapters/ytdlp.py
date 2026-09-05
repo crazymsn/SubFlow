@@ -1156,6 +1156,8 @@ def download(
     progress_range: tuple[float, float] = (0.03, 0.20),
     source_lang: str = "",
 ) -> Path:
+    from bilingual_sub.adapters.download_worker import run_download_worker
+
     if control:
         control.wait_if_paused()
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1168,8 +1170,8 @@ def download(
         with tempfile.TemporaryDirectory(prefix=".subflow-download-", dir=dest_dir) as scratch:
             staging = Path(scratch)
             try:
-                result = _download_into(url, staging, on_progress=on_progress, control=control,
-                                        progress_range=progress_range, source_lang=source_lang)
+                result = run_download_worker(url, staging, on_progress=on_progress, control=control,
+                                             progress_range=progress_range, source_lang=source_lang)
                 if not result.is_file() or result.stat().st_size == 0:
                     raise DownloadError("下载没有生成有效文件")
                 if control:
@@ -1181,6 +1183,9 @@ def download(
                 log = staging / "ytdlp.log"
                 if log.is_file():
                     shutil.copy2(log, dest_dir / "ytdlp.log")
+                worker_log = staging / "worker.log"
+                if worker_log.is_file():
+                    shutil.copy2(worker_log, dest_dir / "download-worker.log")
                 raise
     finally:
         lock.release()

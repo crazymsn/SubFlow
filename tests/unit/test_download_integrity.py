@@ -13,6 +13,7 @@ from bilingual_sub.core.control import JobControl, JobStopped
 
 @pytest.fixture
 def fake_download(monkeypatch):
+    monkeypatch.setattr("bilingual_sub.adapters.download_worker.run_download_worker", ytdlp._download_into)
     monkeypatch.setattr(ytdlp, "download_attempts", lambda url: iter([{}]))
     monkeypatch.setattr(ytdlp, "_audio_status", lambda path: True)
     monkeypatch.setattr(ytdlp, "_video_height", lambda path: 1080)

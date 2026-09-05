@@ -35,11 +35,14 @@ def _prepare_qt() -> None:
             break
 
 
-_prepare_qt()
-
-from bilingual_sub.gui.app import main
-
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--download-worker":
+        from pathlib import Path
+
+        from bilingual_sub.adapters.download_worker import main as download_main
+
+        raise SystemExit(download_main(Path(sys.argv[2])))
+    _prepare_qt()
     if len(sys.argv) == 3 and sys.argv[1] == "--self-test":
         from pathlib import Path
 
@@ -47,4 +50,6 @@ if __name__ == "__main__":
 
         run(Path(sys.argv[2]))
     else:
+        from bilingual_sub.gui.app import main
+
         main()

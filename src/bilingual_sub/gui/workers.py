@@ -181,6 +181,8 @@ class DownloadWorker(QThread):
             )
             self.progress.emit("ingest", 1.0)
             self.ok.emit(str(path))
+        except JobStopped:
+            self.fail.emit(tr("stop"))
         except Exception as exc:
             from bilingual_sub.adapters.ytdlp import explain_download_error
 
