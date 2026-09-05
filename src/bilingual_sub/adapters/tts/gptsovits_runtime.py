@@ -12,18 +12,21 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import wave
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
-from bilingual_sub.adapters.procwin import hidden_run_kwargs, terminate_process_tree
+from bilingual_sub.adapters.owned_process import owned_process
+from bilingual_sub.adapters.procwin import terminate_process_tree
 from bilingual_sub.adapters.tts.base import TtsUnavailable
 from bilingual_sub.adapters.tts.gptsovits import DEFAULT_ENDPOINT
-from bilingual_sub.core.control import JobControl, JobStopped
+from bilingual_sub.core.control import JobControl, JobStopped, wait_for_process
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,8 @@ _G2PW_DIR = "GPT_SoVITS/text/G2PWModel"
 _spawn_lock = threading.Lock()
 _children: dict[str, subprocess.Popen] = {}
 _shutdown = threading.Event()
+_owner_lock = threading.Lock()
+_server_owners: dict[subprocess.Popen, ExitStack] = {}
 _last_import_error = ""
 
 
@@ -291,11 +296,32 @@ def _host_python() -> list[str] | None:
     return None
 
 
+def _startup_check(control: JobControl | None = None) -> None:
+    if _shutdown.is_set():
+        raise JobStopped()
+    if control:
+        control.wait_if_paused()
+    if _shutdown.is_set():
+        raise JobStopped()
+
+
+@contextmanager
+def _startup_lock(control: JobControl | None):
+    while not _spawn_lock.acquire(timeout=0.2):
+        _startup_check(control)
+    try:
+        _startup_check(control)
+        yield
+    finally:
+        _spawn_lock.release()
+
+
 def python_has_sovits_deps(
     cmd: list[str],
     timeout: float = 90.0,
     *,
     cwd: Path | str | None = None,
+    control: JobControl | None = None,
 ) -> bool:
     if not cmd:
         return False
@@ -306,36 +332,35 @@ def python_has_sovits_deps(
     env = install_env()
     if work:
         env["NLTK_DATA"] = str(Path(work) / "nltk_data")
+    probes = [_IMPORT_PROBE]
+    if work and (Path(work) / "api_v2.py").is_file():
+        probes.append(_TTS_PROBE)
     try:
-        result = subprocess.run(
-            [*cmd, "-c", _IMPORT_PROBE],
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-            cwd=work,
-            env=env,
-            **hidden_run_kwargs(),
-        )
-        if result.returncode != 0:
-            _last_import_error = (result.stderr or result.stdout or b"").decode("utf-8", "replace")[-400:]
-            return False
-        if work and (Path(work) / "api_v2.py").is_file():
-            result = subprocess.run(
-                [*cmd, "-c", _TTS_PROBE],
-                capture_output=True,
-                timeout=timeout,
-                check=False,
-                cwd=work,
-                env=env,
-                **hidden_run_kwargs(),
-            )
-            if result.returncode != 0:
-                _last_import_error = (result.stderr or result.stdout or b"").decode("utf-8", "replace")[-400:]
-                return False
-            return True
+        for probe in probes:
+            _startup_check(control)
+            deadline = time.monotonic() + timeout
+            def tick():
+                _startup_check(control)
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+            # A child may inherit stdout after its parent exits. A regular file
+            # avoids waiting forever for EOF from that orphan's pipe handle.
+            with tempfile.TemporaryFile() as output, owned_process(
+                [*cmd, "-c", probe], stdout=output, stderr=subprocess.STDOUT,
+                cwd=work, env=env,
+            ) as proc:
+                code = wait_for_process(proc, control=control, on_tick=tick)
+                if code:
+                    output.seek(0, os.SEEK_END)
+                    output.seek(max(0, output.tell() - 1600))
+                    _last_import_error = output.read().decode("utf-8", "replace")[-400:]
+                    return False
+    except JobStopped:
+        raise
     except Exception as exc:
         _last_import_error = str(exc)
         return False
+    _last_import_error = ""
     return True
 
 
@@ -363,11 +388,11 @@ def _python_candidates(home: Path | None = None) -> list[list[str]]:
     return out
 
 
-def launch_python(home: Path | None = None) -> list[str]:
+def launch_python(home: Path | None = None, *, control: JobControl | None = None) -> list[str]:
     checked: list[str] = []
     for cmd in _python_candidates(home):
         checked.append(" ".join(cmd))
-        if python_has_sovits_deps(cmd, cwd=home):
+        if python_has_sovits_deps(cmd, cwd=home, control=control):
             return cmd
     hint = "、".join(checked) if checked else "无"
     raise FileNotFoundError(
@@ -491,7 +516,9 @@ def _log_tail(limit: int = 30) -> str:
     if not path.is_file():
         return ""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        with path.open("rb") as stream:
+            stream.seek(max(0, path.stat().st_size - 65536))
+            text = stream.read().decode("utf-8", "replace")
     except OSError:
         return ""
     lines = [line.rstrip() for line in text.splitlines() if line.strip()]
@@ -503,27 +530,22 @@ def start_server(
     *,
     home: Path | None = None,
     visible: bool = False,
+    control: JobControl | None = None,
 ) -> subprocess.Popen:
     root = (home or ensure_home()).resolve()
     if not (root / "api_v2.py").is_file():
         raise FileNotFoundError(f"api_v2.py missing: {root}")
-    launch = launch_python(root)
+    launch = launch_python(root, control=control)
     host, port = _bind_from_endpoint(endpoint or DEFAULT_ENDPOINT)
     import yaml
 
     config = _log_path().with_name(f"gptsovits-{port}.yaml")
     config.write_text(yaml.safe_dump({"custom": runtime_config(root)}), encoding="utf-8")
     args = [*launch, "-u", "api_v2.py", "-a", host, "-p", str(port), "-c", str(config)]
-    env = os.environ.copy()
-    env["PYTHONUTF8"] = "1"
-    env["PYTHONIOENCODING"] = "utf-8"
-    env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
-    env.pop("PYTHONPATH", None)
-    env.pop("PYTHONHOME", None)
-    env["NLTK_DATA"] = str(root / "nltk_data") + os.pathsep + env.get("NLTK_DATA", "")
-    from bilingual_sub.adapters.ffmpeg import find_ffmpeg
+    from bilingual_sub.adapters.runtime_bootstrap import inference_env
 
-    env["PATH"] = str(Path(find_ffmpeg()).parent) + os.pathsep + env.get("PATH", "")
+    env = inference_env()
+    env["NLTK_DATA"] = str(root / "nltk_data") + os.pathsep + env.get("NLTK_DATA", "")
     log = _log_path().open("wb")
     kwargs: dict = {
         "cwd": str(root),
@@ -544,8 +566,18 @@ def start_server(
     else:
         kwargs["start_new_session"] = True
     logger.info("starting GPT-SoVITS: %s (cwd=%s)", args, root)
+    owner = ExitStack()
     try:
-        return subprocess.Popen(args, **kwargs)
+        _startup_check(control)
+        proc = owner.enter_context(owned_process(args, **kwargs))
+        with _owner_lock:
+            if _shutdown.is_set() or (control and control.is_stopped()):
+                raise JobStopped()
+            _server_owners[proc] = owner
+        return proc
+    except BaseException:
+        owner.close()
+        raise
     finally:
         log.close()
 
@@ -560,24 +592,29 @@ def request_shutdown() -> None:
     _shutdown.set()
 
 
+def _stop_server(proc: subprocess.Popen) -> None:
+    with _owner_lock:
+        owner = _server_owners.pop(proc, None)
+    if owner is not None:
+        # Close the containment even if the server's parent has already exited.
+        owner.close()
+    elif proc.poll() is None and hasattr(proc, "terminate"):
+        terminate_process_tree(proc)
+        proc.wait(timeout=3)
+
+
 def stop_servers() -> None:
     """Stop only children owned by this SubFlow process, never an external API."""
     _shutdown.set()
     with _spawn_lock:
-        children = list(_children.values())
+        with _owner_lock:
+            children = list(dict.fromkeys([*_children.values(), *_server_owners]))
         _children.clear()
     for proc in children:
-        if proc.poll() is None and hasattr(proc, "terminate"):
-            try:
-                terminate_process_tree(proc)
-                if hasattr(proc, "wait"):
-                    proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                if hasattr(proc, "kill"):
-                    proc.kill()
-                    proc.wait(timeout=3)
-            except (OSError, AttributeError):
-                logger.exception("failed to stop GPT-SoVITS")
+        try:
+            _stop_server(proc)
+        except (OSError, AttributeError, subprocess.TimeoutExpired):
+            logger.exception("failed to stop GPT-SoVITS")
 
 
 atexit.register(stop_servers)
@@ -595,21 +632,21 @@ def ensure_running(endpoint: str | None = None, *, wait_sec: float = 180.0, cont
 
     base = (endpoint or default_endpoint()).strip().rstrip("/")
     def check() -> None:
-        if _shutdown.is_set():
-            raise JobStopped()
-        if control:
-            control.wait_if_paused()
+        _startup_check(control)
 
     check()
     if probe_endpoint(base):
         return "ready"
     _bind_from_endpoint(base)
-    with _spawn_lock:
+    with _startup_lock(control):
         check()
         if probe_endpoint(base):
             return "ready"
         proc = _children.get(base)
         if proc is None or proc.poll() is not None:
+            if proc is not None:
+                _stop_server(proc)
+                _children.pop(base, None)
             from bilingual_sub.adapters.runtime_bootstrap import (
                 assets_update_needed,
                 auto_install_enabled,
@@ -628,12 +665,12 @@ def ensure_running(endpoint: str | None = None, *, wait_sec: float = 180.0, cont
                 raise TtsUnavailable("缺少预训练权重：" + "；".join(missing))
             check()
             try:
-                proc = start_server(base, home=root, visible=False)
+                proc = start_server(base, home=root, visible=False, control=control)
             except FileNotFoundError:
                 if not auto_install_enabled():
                     raise
                 root = ensure_sovits_runtime(control=control, progress=progress)
-                proc = start_server(base, home=root, visible=False)
+                proc = start_server(base, home=root, visible=False, control=control)
             _children[base] = proc
     deadline = time.monotonic() + max(0.0, wait_sec)
     while time.monotonic() < deadline:
@@ -641,6 +678,10 @@ def ensure_running(endpoint: str | None = None, *, wait_sec: float = 180.0, cont
         if probe_endpoint(base, timeout=1.5):
             return "started"
         if proc is not None and proc.poll() is not None:
+            with _spawn_lock:
+                if _children.get(base) is proc:
+                    _children.pop(base, None)
+                    _stop_server(proc)
             raise _boot_error(
                 f"GPT-SoVITS 进程已退出（code={proc.returncode}）。"
                 f"日志：{_log_path()}"
