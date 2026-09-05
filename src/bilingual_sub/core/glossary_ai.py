@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 
-from bilingual_sub.adapters.meding import MedingClient
+from bilingual_sub.adapters.meding import MedingAuthError, MedingClient, MedingServiceError
+from bilingual_sub.core.control import JobStopped
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.core.langs import prompt_name
 from bilingual_sub.core.prompts import PROMPT_GLOSSARY
@@ -32,6 +33,8 @@ def extract_glossary(
             ),
             user=blob,
         )
+    except (MedingAuthError, MedingServiceError, JobStopped):
+        raise
     except Exception as exc:
         logger.warning("glossary AI skipped: %s", exc)
         return Glossary()

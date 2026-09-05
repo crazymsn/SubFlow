@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 
@@ -7,6 +8,7 @@ from bilingual_sub.adapters.meding import (
     MedingAuthError,
     MedingClient,
     MedingError,
+    MedingServiceError,
     TranslationCache,
     create_client,
 )
@@ -28,6 +30,20 @@ class TranslateStats:
     api_calls: int = 0
 
 
+def translation_cache_key(source_lang: str, target_lang: str, text: str, *,
+                          glossary_block: str = "", max_en_chars: int = 120) -> str:
+    return json.dumps({"schema": "translate-v2", "source": source_lang, "target": target_lang,
+                       "text": text, "glossary": glossary_block, "max_chars": max_en_chars},
+                      ensure_ascii=False, sort_keys=True)
+
+
+def _checked_lines(lines, count: int) -> list[str]:
+    if (not isinstance(lines, list) or len(lines) != count
+            or any(not isinstance(line, str) or not line.strip() for line in lines)):
+        raise MedingError("translation response has missing or invalid lines")
+    return [line.strip() for line in lines]
+
+
 def translate_cues(
     cues: list[Cue],
     *,
@@ -42,11 +58,15 @@ def translate_cues(
     glossary_block: str = "",
     control=None,
 ) -> tuple[list[Cue], TranslateStats, list[str]]:
+    if control:
+        control.wait_if_paused()
+    if batch_size <= 0 or max_en_chars <= 0:
+        raise ValueError("translation batch size and character limit must be positive")
     key = api_key or get_api_key()
     if not key and client is None:
         raise MedingAuthError("API key not configured. Run: bilingual-sub config set-api-key")
 
-    meding = client or create_client(key)  # type: ignore[arg-type]
+    meding = client or create_client(key, control=control)  # type: ignore[arg-type]
     cache = TranslationCache() if cache_enabled else None
     stats = TranslateStats()
     missing: list[str] = []
@@ -62,9 +82,8 @@ def translate_cues(
     pending: list[str] = []
 
     def _ck(text: str) -> str:
-        if source_lang == "zh" and target_lang == "en" and not glossary_block:
-            return text
-        return f"{source_lang}|{target_lang}|{glossary_block}|{text}"
+        return translation_cache_key(source_lang, target_lang, text,
+                                     glossary_block=glossary_block, max_en_chars=max_en_chars)
 
     for zh in unique_zh:
         if cache:
@@ -88,14 +107,21 @@ def translate_cues(
                 target_lang=target_lang,
                 glossary_block=glossary_block,
             )
+            if control:
+                control.wait_if_paused()
+            results = _checked_lines(results, len(batch))
             stats.api_calls += 1
             for zh, en in zip(batch, results):
                 zh_to_en[zh] = en
                 if cache:
                     cache.set(model, _ck(zh), en)
+        except (MedingAuthError, MedingServiceError):
+            raise
         except MedingError as exc:
             logger.error("batch translate failed: %s", exc)
             for zh in batch:
+                if control:
+                    control.wait_if_paused()
                 try:
                     single = meding.translate_batch(
                         [zh],
@@ -105,10 +131,15 @@ def translate_cues(
                         target_lang=target_lang,
                         glossary_block=glossary_block,
                     )
+                    if control:
+                        control.wait_if_paused()
+                    single = _checked_lines(single, 1)
                     stats.api_calls += 1
                     zh_to_en[zh] = single[0]
                     if cache:
                         cache.set(model, _ck(zh), single[0])
+                except (MedingAuthError, MedingServiceError):
+                    raise
                 except MedingError:
                     missing.append(zh)
 

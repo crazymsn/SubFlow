@@ -66,7 +66,8 @@ def filter_script_option(binary: str) -> str:
     return "-filter_complex_script"
 
 
-def run_cmd(args: list[str], *, check: bool = True, control=None) -> subprocess.CompletedProcess[str]:
+def run_cmd(args: list[str], *, check: bool = True, control=None,
+            cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     logger.debug("run: %s", " ".join(args))
     if control is None:
         proc = subprocess.run(
@@ -75,6 +76,7 @@ def run_cmd(args: list[str], *, check: bool = True, control=None) -> subprocess.
             text=True,
             encoding="utf-8",
             errors="replace",
+            cwd=cwd,
             **hidden_run_kwargs(),
         )
         if check and proc.returncode != 0:
@@ -89,6 +91,7 @@ def run_cmd(args: list[str], *, check: bool = True, control=None) -> subprocess.
         text=True,
         encoding="utf-8",
         errors="replace",
+        cwd=cwd,
         **hidden_run_kwargs(),
     )
     out, err = control.run_attached(popen)

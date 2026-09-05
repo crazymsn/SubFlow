@@ -41,7 +41,7 @@ def test_burn_subtitles_builds_filter(tmp_path):
     video.touch()
     ass.write_text("[Script Info]", encoding="utf-8")
     with (
-        patch("bilingual_sub.core.burn.run_cmd") as m,
+        patch("bilingual_sub.core.burn.run_cmd", side_effect=lambda args, **kw: Path(args[-1]).write_bytes(b"encoded")) as m,
         patch("bilingual_sub.core.burn.has_nvenc", return_value=False),
     ):
         burn_subtitles(video, ass, out)

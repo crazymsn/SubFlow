@@ -4,18 +4,24 @@ import logging
 import re
 from dataclasses import dataclass
 
-from bilingual_sub.adapters.meding import MedingClient, MedingError, TranslationCache
-from bilingual_sub.core.control import JobControl
+from bilingual_sub.adapters.meding import (
+    MedingAuthError,
+    MedingClient,
+    MedingError,
+    MedingServiceError,
+    TranslationCache,
+)
+from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.core.langs import prompt_name
 from bilingual_sub.core.netflix import cpl_limit
 from bilingual_sub.core.prompts import PROMPT_ADAPT, PROMPT_REFLECT
-from bilingual_sub.core.translate import TranslateStats
+from bilingual_sub.core.translate import TranslateStats, _checked_lines, translation_cache_key
 from bilingual_sub.models import Cue
 
 logger = logging.getLogger(__name__)
 
-_INDEX = re.compile(r"^\s*(?:\d+[\.\)\:]|[-*])\s+")
+_INDEX = re.compile(r"^(\d+)[\.\)\:]\s+(.*)$")
 _REFINE_KEYS = ("lines", "translations", "adapted", "output")
 
 
@@ -24,12 +30,9 @@ class RefineStats(TranslateStats):
     degraded: bool = False
 
 
-def refine_cache_key(source_lang: str, target_lang: str, text: str) -> str:
-    return f"refine|{source_lang}|{target_lang}|{text}"
-
-
-def _strip_line_index(text: str) -> str:
-    return _INDEX.sub("", (text or "").strip()).strip()
+def refine_cache_key(source_lang: str, target_lang: str, text: str, *, glossary_block: str = "") -> str:
+    return "refine-v2|" + translation_cache_key(source_lang, target_lang, text,
+        glossary_block=glossary_block, max_en_chars=cpl_limit(target_lang))
 
 
 def _as_issue_list(payload: object) -> list:
@@ -50,8 +53,16 @@ def _as_lines(payload: object, expected: int) -> list[str] | None:
         raw = [ln for ln in raw.splitlines() if ln.strip()]
     if not isinstance(raw, list):
         return None
-    lines = [_strip_line_index(str(x)) for x in raw]
-    lines = [x for x in lines if x]
+    if any(not isinstance(x, str) or not x.strip() for x in raw):
+        return None
+    lines = [x.strip() for x in raw]
+    indices = [_INDEX.match(line) for line in lines]
+    if indices and all(match and int(match[1]) == i for i, match in enumerate(indices, 1)):
+        lines = [match[2].strip() for match in indices if match]
+    elif lines and all(line.startswith(("- ", "* ")) for line in lines):
+        lines = [line[2:].strip() for line in lines]
+    if not all(lines):
+        return None
     if len(lines) == expected:
         return lines
     if expected == 1 and lines:
@@ -69,7 +80,10 @@ def _translate_pending(
     target_lang: str,
     block: str,
     stats: RefineStats,
+    control: JobControl | None = None,
 ) -> list[str] | None:
+    if control:
+        control.wait_if_paused()
     try:
         lines = client.translate_batch(
             texts,
@@ -79,13 +93,21 @@ def _translate_pending(
             target_lang=target_lang,
             glossary_block=block,
         )
+        if control:
+            control.wait_if_paused()
         stats.api_calls += 1
-        return list(lines)
+        return _checked_lines(lines, len(texts))
+    except (MedingAuthError, MedingServiceError):
+        raise
     except TypeError:
         try:
             lines = client.translate_batch(texts, model=model, max_en_chars=max_chars)
+            if control:
+                control.wait_if_paused()
             stats.api_calls += 1
-            return list(lines)
+            return _checked_lines(lines, len(texts))
+        except (MedingAuthError, MedingServiceError):
+            raise
         except MedingError as exc:
             logger.warning("refine first pass failed: %s", exc)
             stats.degraded = True
@@ -107,9 +129,12 @@ def _reflect_adapt(
     sources: list[str],
     drafts: list[str],
     stats: RefineStats,
+    control: JobControl | None = None,
 ) -> tuple[list[str], bool]:
     numbered = "\n".join(f"{n + 1}. {src} => {dst}" for n, (src, dst) in enumerate(zip(sources, drafts)))
     issues: list = []
+    if control:
+        control.wait_if_paused()
     try:
         reflected = client.chat_json(
             model=model,
@@ -120,12 +145,18 @@ def _reflect_adapt(
             ),
             user=numbered,
         )
+        if control:
+            control.wait_if_paused()
         stats.api_calls += 1
         issues = _as_issue_list(reflected)
+    except (MedingAuthError, MedingServiceError, JobStopped):
+        raise
     except Exception as exc:
         logger.warning("reflect skipped: %s", exc)
 
     try:
+        if control:
+            control.wait_if_paused()
         adapted = client.chat_json(
             model=model,
             system=PROMPT_ADAPT.format(
@@ -136,12 +167,16 @@ def _reflect_adapt(
             ),
             user=numbered + "\nISSUES:" + str(issues),
         )
+        if control:
+            control.wait_if_paused()
         stats.api_calls += 1
         lines = _as_lines(adapted, len(drafts))
         if lines:
             return lines, True
         logger.warning("adapt line count mismatch: expected %s", len(drafts))
         return drafts, False
+    except (MedingAuthError, MedingServiceError, JobStopped):
+        raise
     except Exception as exc:
         logger.warning("adapt skipped: %s", exc)
         return drafts, False
@@ -175,7 +210,7 @@ def translate_cues_refined(
         pending_idx: list[int] = []
         for j, cue in enumerate(batch):
             if cache:
-                hit = cache.get(model, refine_cache_key(source_lang, target_lang, cue.source))
+                hit = cache.get(model, refine_cache_key(source_lang, target_lang, cue.source, glossary_block=block))
                 if hit:
                     drafts[j] = hit
                     stats.cache_hits += 1
@@ -192,6 +227,7 @@ def translate_cues_refined(
                 target_lang=target_lang,
                 block=block,
                 stats=stats,
+                control=control,
             )
             ok_idx: list[int] = []
             if raw is None:
@@ -217,6 +253,7 @@ def translate_cues_refined(
                     sources=[batch[j].source for j in ok_idx],
                     drafts=[drafts[j] for j in ok_idx],
                     stats=stats,
+                    control=control,
                 )
                 if adapted_ok:
                     for j, line in zip(ok_idx, polished):
@@ -225,7 +262,7 @@ def translate_cues_refined(
                         for j in ok_idx:
                             cache.set(
                                 model,
-                                refine_cache_key(source_lang, target_lang, batch[j].source),
+                                refine_cache_key(source_lang, target_lang, batch[j].source, glossary_block=block),
                                 drafts[j],
                             )
                 else:

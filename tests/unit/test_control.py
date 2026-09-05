@@ -163,3 +163,23 @@ def test_pipe_read_failure_is_not_reported_as_success():
     assert isinstance(err.value.__cause__, OSError)
     assert proc.terminate.called or proc.kill.called
     assert ctl._procs == []
+
+
+def test_stop_interrupts_network_backoff():
+    ctl = JobControl()
+    started = threading.Event()
+    stopped = threading.Event()
+
+    def backoff():
+        started.set()
+        try:
+            ctl.wait_seconds(60)
+        except JobStopped:
+            stopped.set()
+
+    worker = threading.Thread(target=backoff, daemon=True)
+    worker.start()
+    assert started.wait(1)
+    ctl.stop()
+    worker.join(timeout=2)
+    assert stopped.is_set() and not worker.is_alive()

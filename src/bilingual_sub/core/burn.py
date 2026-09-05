@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
-from bilingual_sub.adapters.ffmpeg import escape_subtitles_path, find_ffmpeg, has_nvenc, run_cmd
+from bilingual_sub.adapters.ffmpeg import FfmpegError, find_ffmpeg, has_nvenc, run_cmd
 from bilingual_sub.config import bundled_fonts_dir
 from bilingual_sub.core.control import JobStopped
+from bilingual_sub.core.output_guard import validate_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +24,41 @@ def burn_subtitles(
     preset: str = "p4",
     control=None,
 ) -> None:
+    validate_outputs({"视频": output}, [video, ass_path])
+    if control:
+        control.wait_if_paused()
     output.parent.mkdir(parents=True, exist_ok=True)
     fonts_dir = bundled_fonts_dir()
     if not fonts_dir.is_dir() or not any(fonts_dir.iterdir()):
         logger.warning("fonts directory empty at %s — subtitles may not render CJK", fonts_dir)
+    fd, name = tempfile.mkstemp(prefix=".subflow-", suffix=output.suffix or ".mp4", dir=output.parent)
+    os.close(fd)
+    part = Path(name)
+    try:
+        # Only fixed relative names enter the filter grammar. Arbitrary user
+        # paths (quotes, brackets, commas, Unicode) stay in OS path arguments.
+        with tempfile.TemporaryDirectory(prefix="subflow-burn-") as scratch:
+            cwd = Path(scratch)
+            shutil.copy2(ass_path, cwd / "subs.ass")
+            if fonts_dir.is_dir():
+                shutil.copytree(fonts_dir, cwd / "fonts")
+            else:
+                (cwd / "fonts").mkdir()
+            _burn_in_directory(video.resolve(), part.resolve(), encoder=encoder, cq=cq,
+                               preset=preset, control=control, cwd=cwd)
+        if not part.is_file() or part.stat().st_size == 0:
+            raise FfmpegError("FFmpeg did not produce a video")
+        if control:
+            control.wait_if_paused()
+        part.replace(output)
+    finally:
+        part.unlink(missing_ok=True)
+    logger.info("burned subtitles -> %s", output)
 
-    ass_esc = escape_subtitles_path(ass_path)
-    fonts_esc = escape_subtitles_path(fonts_dir)
-    vf = f"setpts=PTS-STARTPTS,subtitles='{ass_esc}':charenc=UTF-8:fontsdir='{fonts_esc}'"
+
+def _burn_in_directory(video: Path, output: Path, *, encoder: str, cq: int,
+                       preset: str, control, cwd: Path) -> None:
+    vf = "setpts=PTS-STARTPTS,subtitles=subs.ass:charenc=UTF-8:fontsdir=fonts"
     audio = ["-af", "aresample=async=1:first_pts=0", "-c:a", "aac", "-b:a", "192k"]
 
     enc = encoder
@@ -68,7 +99,7 @@ def burn_subtitles(
 
     args.append(str(output))
     try:
-        run_cmd(args, control=control)
+        run_cmd(args, control=control, cwd=cwd)
     except JobStopped:
         raise
     except Exception as exc:
@@ -95,5 +126,4 @@ def burn_subtitles(
             str(max(18, cq)),
             str(output),
         ]
-        run_cmd(retry, control=control)
-    logger.info("burned subtitles -> %s", output)
+        run_cmd(retry, control=control, cwd=cwd)

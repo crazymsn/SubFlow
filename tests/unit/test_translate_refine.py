@@ -1,3 +1,5 @@
+import pytest
+
 from bilingual_sub.adapters.meding import MedingError, TranslationCache, parse_model_json
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.core.translate_refine import refine_cache_key, translate_cues_refined
@@ -40,6 +42,24 @@ class FailFirstPass:
 
     def chat_json(self, **kwargs):
         raise AssertionError("should not polish a failed first pass")
+
+
+@pytest.mark.parametrize("line", ["2024. A new year", "1.5 million people"])
+def test_refine_keeps_natural_numbers(line):
+    out, stats, _ = translate_cues_refined(
+        [Cue(0, 1, "原文")], model="m", source_lang="zh", target_lang="en",
+        client=FakeClient(adapt_payload={"lines": [line]}))
+    assert out[0].en == line
+    assert not stats.degraded
+
+
+@pytest.mark.parametrize("line", [None, {}, 123, ""])
+def test_refine_invalid_json_lines_keep_draft(line):
+    out, stats, _ = translate_cues_refined(
+        [Cue(0, 1, "原文")], model="m", source_lang="zh", target_lang="en",
+        client=FakeClient(adapt_payload={"lines": [line]}))
+    assert out[0].en == "EN:原文"
+    assert stats.degraded
 
 
 def test_refine_three_calls_and_adapt():

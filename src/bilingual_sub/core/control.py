@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 
 from bilingual_sub.adapters.procwin import signal_posix_process, terminate_process_tree
@@ -152,6 +153,16 @@ class JobControl:
         self.check()
         self._pause.wait()
         self.check()
+
+    def wait_seconds(self, seconds: float) -> None:
+        """Cancellable retry backoff; never start another request while paused."""
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            self.wait_if_paused()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            self._stop.wait(min(remaining, 0.1))
 
     def attach_proc(self, proc: subprocess.Popen[str]) -> None:
         with self._lock:

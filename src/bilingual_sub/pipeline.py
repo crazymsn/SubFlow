@@ -917,7 +917,7 @@ def _run_job(
                     model=config.translate_model or settings.translate.model,
                     source_lang=config.source_lang,
                     target_lang=config.target_lang,
-                    client=create_client(key),
+                    client=create_client(key, control=control),
                 )
                 generated.save(work / "glossary.generated.yaml")
                 if config.glossary_path:
@@ -965,7 +965,7 @@ def _run_job(
                             source_lang=source_lang,
                             target_lang=target_lang,
                             glossary=glossary,
-                            client=create_client(key),
+                            client=create_client(key, control=control),
                             cache=TranslationCache() if settings.translate.cache_enabled else None,
                             batch_size=min(10, config.translate_batch_size or settings.translate.batch_size or 10),
                             control=control,
@@ -1028,7 +1028,7 @@ def _run_job(
                             source_lang=source_lang,
                             target_lang=target_lang,
                             glossary=glossary,
-                            client=create_client(key),
+                            client=create_client(key, control=control),
                             cache=TranslationCache() if settings.translate.cache_enabled else None,
                             batch_size=min(10, config.translate_batch_size or settings.translate.batch_size or 10),
                             control=control,

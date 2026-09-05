@@ -10,7 +10,9 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Protocol
 
-from openai import APIStatusError, OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI
+
+from bilingual_sub.core.control import JobControl
 
 try:
     import json_repair
@@ -28,7 +30,7 @@ def is_public_model(mid: str) -> bool:
     compact = mid.strip().lower().replace(" ", "").replace("_", "-")
     if not compact:
         return False
-    return "baai" not in compact
+    return "baai" not in compact and "智源" not in compact
 
 
 class MedingError(RuntimeError):
@@ -37,6 +39,10 @@ class MedingError(RuntimeError):
 
 class MedingAuthError(MedingError):
     pass
+
+
+class MedingServiceError(MedingError):
+    """A request/service failure that cannot be repaired by translating line by line."""
 
 
 class MedingClient(Protocol):
@@ -140,16 +146,43 @@ SYSTEM_PROMPT = """You translate {source_name} spoken subtitles to {target_name}
 
 
 class OpenAIMedingClient:
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, *, control: JobControl | None = None) -> None:
         # SDK paths are relative to .../v1 (see docs/api-meding.md)
-        self._client = OpenAI(api_key=api_key, base_url=f"{MEDING_BASE_URL}/v1")
+        self._client = OpenAI(api_key=api_key, base_url=f"{MEDING_BASE_URL}/v1",
+                              timeout=60.0, max_retries=0)
+        self._control = control
+
+    def _completion(self, **kwargs: Any) -> Any:
+        for attempt in range(4):
+            if self._control:
+                self._control.wait_if_paused()
+            try:
+                response = self._client.chat.completions.create(**kwargs)
+                if self._control:
+                    self._control.wait_if_paused()
+                return response
+            except APIStatusError as exc:
+                if exc.status_code in (401, 403):
+                    raise MedingAuthError("API key invalid or access denied") from exc
+                if exc.status_code not in (429, 500, 502, 503, 504):
+                    raise
+                error: Exception = exc
+            except APIConnectionError as exc:
+                error = exc
+            if attempt == 3:
+                raise MedingServiceError(f"translation service unavailable: {error}") from error
+            if self._control:
+                self._control.wait_seconds(2.0 ** attempt)
+            else:
+                time.sleep(2.0 ** attempt)
+        raise AssertionError("unreachable")
 
     def healthcheck(self) -> bool:
         try:
             self._client.models.list()
             return True
         except APIStatusError as exc:
-            if exc.status_code == 401:
+            if exc.status_code in (401, 403):
                 raise MedingAuthError("Invalid API key") from exc
             logger.warning("healthcheck failed: %s", exc)
             return False
@@ -164,7 +197,7 @@ class OpenAIMedingClient:
             if ids:
                 return ids
         except APIStatusError as exc:
-            if exc.status_code == 401:
+            if exc.status_code in (401, 403):
                 raise MedingAuthError("Invalid API key") from exc
             logger.warning("models.list failed: %s", exc)
         except Exception as exc:
@@ -191,16 +224,19 @@ class OpenAIMedingClient:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         try:
-            resp = self._client.chat.completions.create(**kwargs)
-        except Exception as exc:
-            if not json_mode:
-                raise
-            logger.info("json_object mode unavailable: %s", exc)
-            resp = self._client.chat.completions.create(
-                model=model,
-                messages=kwargs["messages"],
-                temperature=0.2,
-            )
+            resp = self._completion(**kwargs)
+        except APIStatusError as exc:
+            unsupported_format = (json_mode and exc.status_code in (400, 422)
+                                  and any(key in str(exc).lower() for key in ("response_format", "json_object")))
+            if not unsupported_format:
+                raise MedingServiceError(str(exc)) from exc
+            kwargs.pop("response_format", None)
+            try:
+                resp = self._completion(**kwargs)
+            except APIStatusError as fallback_error:
+                raise MedingServiceError(str(fallback_error)) from fallback_error
+        if not resp.choices:
+            raise MedingError("empty completion choices")
         return (resp.choices[0].message.content or "").strip()
 
     def translate_batch(
@@ -224,57 +260,29 @@ class OpenAIMedingClient:
             f"{numbered}"
         )
         gloss = f"Terminology:\n{glossary_block}" if glossary_block else ""
-        delays = [1.0, 2.0, 4.0]
-        last_exc: Exception | None = None
-        for attempt, delay in enumerate([0.0] + delays):
-            if delay:
-                time.sleep(delay)
-            try:
-                resp = self._client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": SYSTEM_PROMPT.format(
-                                max_en_chars=max_en_chars,
-                                source_name=prompt_name(source_lang),
-                                target_name=prompt_name(target_lang),
-                                glossary=gloss,
-                            ),
-                        },
-                        {"role": "user", "content": user_msg},
-                    ],
-                    temperature=0.3,
-                )
-                content = (resp.choices[0].message.content or "").strip()
-                lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
-                # strip leading "1. " numbering if model adds it
-                cleaned = []
-                for ln in lines:
-                    if len(ln) > 2 and ln[0].isdigit() and ln[1] in ".)":
-                        ln = ln.split(" ", 1)[-1] if " " in ln else ln[2:]
-                    elif len(ln) > 3 and ln[:2].isdigit() and ln[2] in ".)":
-                        ln = ln.split(" ", 1)[-1] if " " in ln else ln[3:]
-                    cleaned.append(ln.strip())
-                if len(cleaned) != len(texts):
-                    # fallback: single-line mode per text
-                    if len(texts) == 1 and cleaned:
-                        return [" ".join(cleaned)[:max_en_chars]]
-                    raise MedingError(
-                        f"batch size mismatch: expected {len(texts)}, got {len(cleaned)}"
-                    )
-                return [c[:max_en_chars] for c in cleaned]
-            except APIStatusError as exc:
-                last_exc = exc
-                if exc.status_code == 401:
-                    raise MedingAuthError("Invalid API key") from exc
-                if exc.status_code not in (429, 500, 502, 503, 504):
-                    raise MedingError(str(exc)) from exc
-            except MedingAuthError:
-                raise
-            except Exception as exc:
-                last_exc = exc
-        raise MedingError(f"translation failed after retries: {last_exc}")
+        try:
+            resp = self._completion(model=model, messages=[
+                {"role": "system", "content": SYSTEM_PROMPT.format(
+                    max_en_chars=max_en_chars, source_name=prompt_name(source_lang),
+                    target_name=prompt_name(target_lang), glossary=gloss)},
+                {"role": "user", "content": user_msg},
+            ], temperature=0.3)
+        except APIStatusError as exc:
+            raise MedingServiceError(str(exc)) from exc
+        if not resp.choices:
+            raise MedingError("empty translation choices")
+        content = (resp.choices[0].message.content or "").strip()
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        indices = [re.match(r"^(\d+)(?:\.\s+|\)\s*)(.*)$", line) for line in lines]
+        if indices and all(match and int(match[1]) == i for i, match in enumerate(indices, 1)):
+            lines = [match[2].strip() for match in indices if match]
+        if len(lines) != len(texts):
+            if len(texts) == 1 and lines:
+                return [" ".join(lines)[:max_en_chars]]
+            raise MedingError(f"batch size mismatch: expected {len(texts)}, got {len(lines)}")
+        if not all(lines):
+            raise MedingError("empty translated line")
+        return [line[:max_en_chars] for line in lines]
 
 
 def cache_db_path() -> Path:
@@ -290,6 +298,7 @@ def _cache_key(model: str, text: str) -> str:
 class TranslationCache:
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = db_path or cache_db_path()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _init_db(self) -> None:
@@ -314,5 +323,5 @@ class TranslationCache:
             )
 
 
-def create_client(api_key: str) -> OpenAIMedingClient:
-    return OpenAIMedingClient(api_key)
+def create_client(api_key: str, *, control: JobControl | None = None) -> OpenAIMedingClient:
+    return OpenAIMedingClient(api_key, control=control)
