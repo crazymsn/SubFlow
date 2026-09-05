@@ -13,11 +13,11 @@ import psutil
 from bilingual_sub.adapters.procwin import hidden_run_kwargs
 
 
-def _kill_owned_group(pid: int) -> None:
+def _signal_owned_group(pid: int, sig: int) -> None:
     if sys.platform == "win32":
         raise NotImplementedError("POSIX process groups are unavailable on Windows")
     try:
-        os.killpg(pid, signal.SIGKILL)
+        os.killpg(pid, sig)
     except ProcessLookupError:
         return
     except PermissionError:
@@ -29,6 +29,10 @@ def _kill_owned_group(pid: int) -> None:
                     raise
             except (ProcessLookupError, psutil.NoSuchProcess):
                 continue
+
+
+def _kill_owned_group(pid: int) -> None:
+    _signal_owned_group(pid, signal.SIGKILL)
 
 
 class _WindowsJob:
@@ -87,26 +91,33 @@ def owned_process(args: list[str], **kwargs):
     options["env"] = dict(os.environ if environment is None else environment)
     options["env"]["SUBFLOW_WORKER_PROCESS_GROUP"] = "1"
     job = _WindowsJob() if os.name == "nt" else None
+    scope = None
     proc = None
     try:
         if job:
             # Contain the suspended process before it can create descendants.
             options["creationflags"] = options.get("creationflags", 0) | 0x4  # CREATE_SUSPENDED
         else:
-            options["start_new_session"] = True
+            from bilingual_sub.adapters.posix_scope import PosixScope
+
+            scope = PosixScope(_signal_owned_group)
+            scope.configure(options)
         proc = subprocess.Popen(args, **options)
         if job:
             job.assign(proc)
             psutil.Process(proc.pid).resume()
+        elif scope:
+            scope.bind(proc.pid)
+            proc._subflow_posix_scope = scope
         yield proc
     finally:
-        if job:
-            job.close()
-        elif proc is not None and sys.platform != "win32":
-            # This context created the session. Kill descendants even if the
-            # worker exited or crashed before they did.
-            _kill_owned_group(proc.pid)
-        if proc is not None:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait(timeout=10)
+        try:
+            if job:
+                job.close()
+            elif proc is not None and scope is not None:
+                scope.signal(signal.SIGKILL)
+        finally:
+            if proc is not None:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait(timeout=10)
