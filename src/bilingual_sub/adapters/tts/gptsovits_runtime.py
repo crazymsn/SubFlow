@@ -163,11 +163,29 @@ def _home_score(path: Path) -> tuple[int, int]:
     )
 
 
+def _automatic_mps_runtime() -> bool:
+    from bilingual_sub.adapters.runtime_bootstrap import auto_install_enabled, torch_backend
+
+    return (
+        not os.environ.get("SUBFLOW_GPTSOVITS_HOME", "").strip()
+        and not os.environ.get("SUBFLOW_GPTSOVITS_PYTHON", "").strip()
+        and auto_install_enabled()
+        and torch_backend() == "mps"
+    )
+
+
 def discover_home() -> Path | None:
     env = (os.environ.get("SUBFLOW_GPTSOVITS_HOME") or "").strip()
     if env:
         forced = Path(env).expanduser()
         return forced.resolve() if _has_api(forced) else None
+    if _automatic_mps_runtime():
+        # Old installations can be Intel/Rosetta or lack SubFlow's MPS fixes.
+        # An incomplete project cache must be repaired instead of bypassed.
+        for path in (default_home(), *_frozen_roots(), bundled_src()):
+            if path is not None and _has_api(path):
+                return path
+        return None
     ranked: list[tuple[tuple[int, int], Path]] = []
     seen: set[str] = set()
     for path in (*_frozen_roots(), bundled_src(), default_home(), *extra_home_candidates()):
@@ -256,6 +274,11 @@ def find_sovits_python(home: Path | None = None) -> Path | None:
     if env:
         cand = Path(env).expanduser()
         return cand.resolve() if cand.is_file() else None
+    if _automatic_mps_runtime():
+        from bilingual_sub.adapters.runtime_bootstrap import managed_python
+
+        native = managed_python("gptsovits")
+        return native if native.is_file() else None
     root = home or discover_home()
     if root is None:
         return None
@@ -379,7 +402,7 @@ def _python_candidates(home: Path | None = None) -> list[list[str]]:
     dedicated = find_sovits_python(home)
     if dedicated is not None:
         add([str(dedicated)])
-    if os.environ.get("SUBFLOW_GPTSOVITS_PYTHON", "").strip():
+    if os.environ.get("SUBFLOW_GPTSOVITS_PYTHON", "").strip() or _automatic_mps_runtime():
         return out
     if not getattr(sys, "frozen", False):
         add([sys.executable])
@@ -654,7 +677,7 @@ def ensure_running(endpoint: str | None = None, *, wait_sec: float = 180.0, cont
             )
 
             root = discover_home()
-            if root is None or missing_pretrained(root) or find_sovits_python(root) is None or source_update_needed(root) or assets_update_needed(root):
+            if _automatic_mps_runtime() or root is None or missing_pretrained(root) or find_sovits_python(root) is None or source_update_needed(root) or assets_update_needed(root):
                 if auto_install_enabled():
                     root = ensure_sovits_runtime(control=control, progress=progress)
                 else:

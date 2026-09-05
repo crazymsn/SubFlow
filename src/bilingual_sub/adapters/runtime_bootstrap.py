@@ -169,6 +169,9 @@ def _runtime_probe(kind: str, version: str, backend: str) -> str:
         )
     if backend == "mps":
         code += (
+            "import platform\n"
+            "if platform.machine().lower() not in {'arm64', 'aarch64'}:\n"
+            "    raise RuntimeError('MPS runtime requires native Apple Silicon Python')\n"
             "if not torch.backends.mps.is_built():\n"
             "    raise RuntimeError('PyTorch MPS support was not built')\n"
         )

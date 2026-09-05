@@ -97,6 +97,17 @@ def test_runtime_constraints_are_not_shared_between_installation_locks(monkeypat
                for path in constraints)
 
 
+def test_mps_probe_rejects_intel_interpreter_even_with_mps_compiled(monkeypatch):
+    monkeypatch.setattr(rt.platform, "machine", lambda: "x86_64")
+    torch = SimpleNamespace(__version__="2.5.1", version=SimpleNamespace(cuda=None),
+                            backends=SimpleNamespace(mps=SimpleNamespace(is_built=lambda: True)))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "torchaudio", SimpleNamespace(__version__="2.5.1"))
+    monkeypatch.setitem(sys.modules, "whisper", SimpleNamespace())
+    with pytest.raises(RuntimeError, match="native Apple Silicon"):
+        exec(rt._runtime_probe("asr", "2.5.1", "mps"), {})
+
+
 def test_foreign_uv_backend_does_not_override_application_device(monkeypatch, tmp_path):
     monkeypatch.setenv("SUBFLOW_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setenv("UV_TORCH_BACKEND", "auto")
