@@ -311,7 +311,15 @@ def _cookie_field_names(path: Path) -> set[str]:
     return names
 
 
-_YT_SESSION_COOKIES = frozenset({"SID", "__Secure-1PSID", "SAPISID", "HSID", "SSID"})
+_YT_SESSION_COOKIES = frozenset({
+    "SID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "SAPISID",
+    "__Secure-3PAPISID",
+    "HSID",
+    "SSID",
+})
 _YT_VISITOR_COOKIES = frozenset({"VISITOR_INFO1_LIVE", "PREF", "SOCS", "NID", "YSC", "GPS"})
 _BILI_LOGIN_COOKIES = frozenset({"SESSDATA", "bili_jct", "DedeUserID"})
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.4 — 2026-09-05
+
+- YouTube 站点罐只要有 `SID` / `__Secure-3PSID` / `LOGIN_INFO` 即视为已登录，不再因缺少旧版 SID 族而跳过
+- 更新仓库内 `Cookies/youtube-cookies.txt` 与 `Cookies/bilibili-cookies.txt`（仅 YouTube/Google 与 B 站域名）
+
 ## 1.2.3 — 2026-09-05
 
 - 打包版会沿 `dist/SubFlow` 向上查找项目 `Cookies\`，B 站登录 Cookie 不再只认 exe 同级目录

@@ -198,6 +198,15 @@ def test_youtube_guest_cookie_is_skipped(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     assert youtube_cookie_is_guest(login_only) is True
+    yt_only = tmp_path / "yt-only.txt"
+    yt_only.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tabc\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\tdef\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\tf1=1\n",
+        encoding="utf-8",
+    )
+    assert youtube_cookie_is_guest(yt_only) is False
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_folder_dirs", lambda: [tmp_path])
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_search_dirs", lambda: [tmp_path])
     monkeypatch.delenv("SUBFLOW_COOKIES", raising=False)
