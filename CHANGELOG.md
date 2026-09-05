@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.3 — 2026-09-05
+
+- 打包版会沿 `dist/SubFlow` 向上查找项目 `Cookies\`，B 站登录 Cookie 不再只认 exe 同级目录
+- 拒绝只有访客字段的 `youtube-cookies.txt`；YouTube 启用 node/deno JS runtime
+- Chrome 未运行时可用调试端口读取登录 Cookie；Chrome 127+ v20 加密库不再假装能直接读
+- 下载失败时回传真实原因（机器人检测 / 412），不再一律报「无法下载最高清」
+
 ## 1.2.2 — 2026-09-05
 
 - 中英 / 英中字幕每种语言最多 1 行；超长句缩放进安全框，不再折成多行

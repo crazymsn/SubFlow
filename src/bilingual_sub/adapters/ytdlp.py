@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
@@ -225,20 +226,56 @@ def _cookie_names(url: str | None) -> list[str]:
     return ["cookies.txt", "youtube-cookies.txt", "bilibili-cookies.txt"]
 
 
+def _is_subflow_cookie_dir(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        resolved = str(path.resolve()).lower().replace("/", "\\")
+    except OSError:
+        resolved = str(path).lower()
+    if "inetcookies" in resolved:
+        return False
+    names = ("youtube-cookies.txt", "bilibili-cookies.txt", "cookies.txt", ".gitkeep")
+    try:
+        return any((path / name).exists() for name in names)
+    except OSError:
+        return False
+
+
 def cookie_folder_dirs() -> list[Path]:
-    """Dedicated Cookies folders only. Project / exe sibling first."""
+    """Cookies folders: exe/repo, parent walks (dist → repo), cwd, APPDATA."""
     dirs: list[Path] = []
-    primary = _project_root() / "Cookies"
-    if primary.is_dir():
-        dirs.append(primary)
+    seen: set[Path] = set()
+
+    def add(path: Path) -> None:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen or not _is_subflow_cookie_dir(resolved):
+            return
+        seen.add(resolved)
+        dirs.append(resolved)
+
+    root = _project_root()
+    add(root / "Cookies")
+    here = root
+    for _ in range(3):
+        here = here.parent
+        add(here / "Cookies")
+    try:
+        add(Path.cwd() / "Cookies")
+    except OSError:
+        pass
     try:
         from bilingual_sub.config import user_config_dir
 
-        extra = user_config_dir() / "Cookies"
-        if extra.is_dir() and extra not in dirs:
-            dirs.append(extra)
+        add(user_config_dir() / "Cookies")
     except Exception:
         pass
+    local = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME")
+    if local:
+        add(Path(local) / "SubFlow" / "Cookies")
     return dirs
 
 
@@ -259,18 +296,60 @@ def cookie_search_dirs() -> list[Path]:
     return dirs
 
 
+def _cookie_field_names(path: Path) -> set[str]:
+    names: set[str] = set()
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return names
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            names.add(parts[5])
+    return names
+
+
+_YT_SESSION_COOKIES = frozenset({"SID", "__Secure-1PSID", "SAPISID", "HSID", "SSID"})
+_YT_VISITOR_COOKIES = frozenset({"VISITOR_INFO1_LIVE", "PREF", "SOCS", "NID", "YSC", "GPS"})
+_BILI_LOGIN_COOKIES = frozenset({"SESSDATA", "bili_jct", "DedeUserID"})
+
+
+def youtube_cookie_is_guest(path: Path) -> bool:
+    """True when a Netscape jar has no SID-family session cookies."""
+    names = _cookie_field_names(path)
+    if not names:
+        return False
+    if names & _YT_SESSION_COOKIES:
+        return False
+    return bool(names & _YT_VISITOR_COOKIES) or "LOGIN_INFO" in names
+
+
+def cookie_has_site_login(path: Path, url: str | None) -> bool:
+    names = _cookie_field_names(path)
+    if not names:
+        return True
+    if url and is_youtube_url(url):
+        return bool(names & _YT_SESSION_COOKIES)
+    if url and is_bilibili_url(url):
+        return bool(names & _BILI_LOGIN_COOKIES)
+    return True
+
+
 def cookie_file(url: str | None = None) -> Path | None:
     names = _cookie_names(url)
+    found: list[Path] = []
     for folder in cookie_folder_dirs():
         for name in names:
             path = folder / name
             if _usable_cookie(path):
-                return path
+                found.append(path)
     env = (os.environ.get("SUBFLOW_COOKIES") or os.environ.get("YTDLP_COOKIES") or "").strip()
     if env:
         env_path = Path(env)
         if _usable_cookie(env_path):
-            return env_path
+            found.append(env_path)
     seen = set(cookie_folder_dirs())
     for root in cookie_search_dirs():
         if root in seen:
@@ -278,8 +357,13 @@ def cookie_file(url: str | None = None) -> Path | None:
         for name in names:
             path = root / name
             if _usable_cookie(path):
-                return path
-    return None
+                found.append(path)
+    if url and is_youtube_url(url):
+        logged = [path for path in found if not youtube_cookie_is_guest(path)]
+        if logged:
+            return logged[0]
+        return None
+    return found[0] if found else None
 
 
 def _as_float(value: object) -> float | None:
@@ -504,6 +588,234 @@ def _impersonate():
     return None
 
 
+def _runtime_bin_dir() -> Path:
+    local = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME")
+    if local:
+        return Path(local) / "SubFlow" / "bin"
+    return Path.home() / ".cache" / "subflow" / "bin"
+
+
+def _which_js_runtime(name: str) -> str | None:
+    exe = shutil.which(name)
+    if exe:
+        return exe
+    suffix = ".exe" if os.name == "nt" else ""
+    local = _runtime_bin_dir() / f"{name}{suffix}"
+    if local.is_file():
+        return str(local)
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).resolve().parent / f"{name}{suffix}"
+        if bundled.is_file():
+            return str(bundled)
+    return None
+
+
+def js_runtime_map() -> dict[str, dict]:
+    """yt-dlp 2026+ needs a JS runtime or YouTube falls back to visionos-only."""
+    runtimes: dict[str, dict] = {"deno": {}, "node": {}, "bun": {}, "quickjs": {}}
+    for name in runtimes:
+        path = _which_js_runtime(name)
+        if path:
+            runtimes[name] = {"path": path}
+    return runtimes
+
+
+def _harvest_allowed() -> bool:
+    if os.environ.get("SUBFLOW_NO_BROWSER_HARVEST"):
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    return True
+
+
+def _process_running(image: str) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        completed = shutil.which("tasklist")
+        if not completed:
+            return False
+        out = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {image}"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        return image.lower() in (out.stdout or "").lower()
+    except Exception:
+        return False
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _cdp_cookies(port: int, timeout: float = 18.0) -> list[dict]:
+    import json
+    import urllib.request
+
+    from websockets.sync.client import connect
+
+    deadline = time.time() + timeout
+    version = None
+    last = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1.5) as resp:
+                version = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            break
+        except Exception as exc:
+            last = exc
+            time.sleep(0.25)
+    if not version:
+        raise RuntimeError(f"cdp not ready: {last}")
+    ws_url = version.get("webSocketDebuggerUrl")
+    if not ws_url:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=3) as resp:
+            pages = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        ws_url = next((item.get("webSocketDebuggerUrl") for item in pages if item.get("webSocketDebuggerUrl")), None)
+    if not ws_url:
+        raise RuntimeError("no cdp websocket")
+    with connect(ws_url, open_timeout=6, close_timeout=3) as ws:
+        ws.send(json.dumps({"id": 1, "method": "Storage.getCookies"}))
+        while True:
+            msg = json.loads(ws.recv(timeout=8))
+            if msg.get("id") == 1:
+                if msg.get("error"):
+                    raise RuntimeError(str(msg["error"]))
+                return list((msg.get("result") or {}).get("cookies") or [])
+
+
+def _write_netscape(path: Path, cookies: list[dict]) -> Path:
+    lines = ["# Netscape HTTP Cookie File"]
+    for item in cookies:
+        domain = str(item.get("domain") or "")
+        name = str(item.get("name") or "")
+        if not domain or not name:
+            continue
+        flag = "TRUE" if domain.startswith(".") else "FALSE"
+        cookie_path = str(item.get("path") or "/")
+        secure = "TRUE" if item.get("secure") else "FALSE"
+        expiry = int(item.get("expires") or 0)
+        value = str(item.get("value") or "")
+        lines.append(f"{domain}\t{flag}\t{cookie_path}\t{secure}\t{expiry}\t{name}\t{value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _user_cookie_dir() -> Path:
+    try:
+        from bilingual_sub.config import user_config_dir
+
+        return user_config_dir() / "Cookies"
+    except Exception:
+        return _runtime_bin_dir().parent / "Cookies"
+
+
+def harvest_debug_cookies(url: str) -> Path | None:
+    """Read cookies from an already-open Chrome/Edge remote-debugging port."""
+    if not _harvest_allowed():
+        return None
+    for port in (9222, 9229, 9333):
+        try:
+            cookies = _cdp_cookies(port, timeout=2.5)
+        except Exception:
+            continue
+        if not cookies:
+            continue
+        dest = _user_cookie_dir()
+        if is_youtube_url(url):
+            path = dest / "youtube-cookies.txt"
+            _write_netscape(path, cookies)
+            if not youtube_cookie_is_guest(path) and _usable_cookie(path):
+                logger.info("harvested YouTube cookies from chrome debug port %s", port)
+                return path
+        if is_bilibili_url(url):
+            path = dest / "bilibili-cookies.txt"
+            _write_netscape(path, cookies)
+            if cookie_has_site_login(path, url) and _usable_cookie(path):
+                logger.info("harvested Bilibili cookies from chrome debug port %s", port)
+                return path
+    return None
+
+
+def harvest_browser_cookies(url: str) -> Path | None:
+    """Start Chrome/Edge with --remote-debugging-port when the browser is not running."""
+    if not _harvest_allowed():
+        return None
+    attached = harvest_debug_cookies(url)
+    if attached:
+        return attached
+    browsers = (
+        (
+            "chrome.exe",
+            Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data",
+        ),
+        (
+            "msedge.exe",
+            Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data",
+        ),
+        (
+            "msedge.exe",
+            Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data",
+        ),
+    )
+    for image, exe, user_data in browsers:
+        if not exe.is_file() or not user_data.is_dir():
+            continue
+        if _process_running(image):
+            logger.info("skip cookie harvest: %s is running (v20 cookies need a debug session)", image)
+            continue
+        port = _free_port()
+        cmd = [
+            str(exe),
+            f"--remote-debugging-port={port}",
+            "--remote-debugging-address=127.0.0.1",
+            f"--user-data-dir={user_data}",
+            "--profile-directory=Default",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "about:blank",
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            cookies = _cdp_cookies(port, timeout=20)
+        except Exception as exc:
+            logger.info("cookie harvest via %s failed: %s", exe.name, exc)
+            cookies = []
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=6)
+                except Exception:
+                    proc.kill()
+        if not cookies:
+            continue
+        dest = _user_cookie_dir()
+        if is_youtube_url(url):
+            path = dest / "youtube-cookies.txt"
+            _write_netscape(path, cookies)
+            if not youtube_cookie_is_guest(path) and _usable_cookie(path):
+                logger.info("harvested YouTube cookies from %s", exe.name)
+                return path
+        if is_bilibili_url(url):
+            path = dest / "bilibili-cookies.txt"
+            _write_netscape(path, cookies)
+            if cookie_has_site_login(path, url) and _usable_cookie(path):
+                logger.info("harvested Bilibili cookies from %s", exe.name)
+                return path
+    return None
+
+
 def ydl_options(
     dest_dir: Path,
     url: str,
@@ -531,6 +843,7 @@ def ydl_options(
     target = _impersonate() if impersonate else None
     if target is None:
         headers["User-Agent"] = CHROME_UA
+    runtimes = js_runtime_map()
     opts: dict = {
         "outtmpl": str(dest_dir / "source.%(ext)s"),
         "merge_output_format": "mp4",
@@ -550,6 +863,8 @@ def ydl_options(
         "geo_bypass": True,
         "nocheckcertificate": True,
         "http_headers": headers,
+        "js_runtimes": runtimes,
+        "remote_components": ["ejs:github", "ejs:npm"],
     }
     if is_youtube_url(url):
         opts["extractor_args"] = {
@@ -570,8 +885,10 @@ def ydl_options(
 
 
 def download_attempts(url: str) -> Iterator[dict]:
-    """Cookies folder jar first; guest and browser jars only after that jar is exhausted."""
+    """Logged-in Cookies jar first; harvested browser session; then guest."""
     cookie = cookie_file(url)
+    if cookie is None and (is_youtube_url(url) or is_bilibili_url(url)):
+        cookie = harvest_browser_cookies(url)
     browsers = available_browsers() or ("firefox", "edge", "chrome")
 
     def emit(profile: dict) -> dict:
@@ -619,6 +936,13 @@ def explain_download_error(exc: BaseException) -> str:
     first = text.split("See https://", 1)[0].split("Also see https://", 1)[0].strip()
     if "cookies are no longer valid" in low:
         return "YouTube Cookie 已失效。请重新导出 youtube-cookies.txt 放到 Cookies 文件夹后再试。"
+    if "could not copy chrome cookie" in low or "failed to decrypt with dpapi" in low:
+        return (
+            "Chrome / Edge 的 Cookie 库已锁定或使用 v20 加密，无法直接读取。"
+            "请把已登录的 Netscape 格式 youtube-cookies.txt / bilibili-cookies.txt "
+            "放到 exe 同级、项目根或 %APPDATA%\\SubFlow\\Cookies；"
+            "或完全退出浏览器后再点下载。"
+        )
     if "page needs to be reloaded" in low or "requested format is not available" in low:
         return "YouTube 没有返回可下载地址。请再试一次；若仍失败，请更新 Cookies 文件夹里的 youtube-cookies.txt。"
     if "412" in low and any(token in low for token in ("bilibili", "b23.tv", "precondition")):
@@ -626,10 +950,11 @@ def explain_download_error(exc: BaseException) -> str:
             "B 站拦截了网页请求。已尝试读取本机浏览器登录 Cookie；"
             "请用已登录的浏览器打开 bilibili.com 后再点下载。"
         )
-    if "not a bot" in low or "sign in to confirm" in low:
+    if "not a bot" in low or "sign in to confirm" in low or "确认你不是聊天机器人" in text or "确认你不是机器人" in text:
         return (
-            "YouTube 拦截了游客下载。已尝试读取本机浏览器登录 Cookie；"
-            "请用 Firefox 或 Edge 打开并登录 youtube.com 后再点下载。"
+            "YouTube 拦截了游客下载。当前 youtube-cookies.txt 若只有访客字段（没有 LOGIN_INFO），请重新导出已登录 Cookie；"
+            "Chrome 127+ 无法直接读浏览器 Cookie 库，请把 Netscape 文件放到 exe 同级 / 项目 / %APPDATA%\\SubFlow\\Cookies，"
+            "或完全退出 Chrome 后再点下载。"
         )
     if any(token in low for token in ("bilibili", "b23.tv")) and any(
         token in low for token in ("412", "403", "login", "risk", "风控", "登录")
@@ -902,4 +1227,6 @@ def download(
         return final
     if notes:
         log_path.write_text("\n".join(notes), encoding="utf-8")
+    if last_error and (best_path is None or listed_ceiling == 0):
+        raise DownloadError(explain_download_error(last_error)) from last_error
     raise DownloadError(f"无法下载最高清（{want}p），已禁止保存低清晰度视频。")

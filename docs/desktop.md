@@ -100,7 +100,7 @@ Whisper 中文常输出繁体。目标为简体时，烧录前会把中文轨转
 ## 本机构件
 
 - API 令牌：Windows 凭据管理器，失败时写入 `%APPDATA%\SubFlow\`
-- 下载 Cookie：优先读 exe 同级 `Cookies\`（`youtube-cookies.txt` / `bilibili-cookies.txt`）。**不要把 Cookie 提交到 Git**
+- 下载 Cookie：读 exe 同级、项目根（打包版会向上找）、`%APPDATA%\SubFlow\Cookies` 的 `youtube-cookies.txt` / `bilibili-cookies.txt`。YouTube 必须含 SID 登录态。仓库只收 YouTube / B 站站点 Cookie，不含 API 令牌
 - 字幕颜色：`%APPDATA%\SubFlow\`（macOS / Linux 为用户配置目录）
 - Whisper 权重：本机缓存
 - 官方客户端**不内置** PyTorch / WhisperX / GPT-SoVITS 权重

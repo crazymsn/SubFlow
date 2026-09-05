@@ -15,6 +15,8 @@ from bilingual_sub.adapters.ytdlp import (
     cookie_file,
     cookie_folder_dirs,
     cookie_search_dirs,
+    js_runtime_map,
+    youtube_cookie_is_guest,
     download,
     download_attempts,
     download_folder,
@@ -122,6 +124,9 @@ def test_format_keeps_audio_and_max_res(tmp_path, monkeypatch):
     assert "tv" not in clients
     assert "-tv" in clients and "-tv_downgraded" in clients
     assert opts["http_headers"]["Origin"] == "https://www.bilibili.com"
+    assert "node" in opts["js_runtimes"]
+    assert "deno" in opts["js_runtimes"]
+    assert "ejs:github" in opts["remote_components"]
     cookie_text = Path(opts["cookiefile"]).read_text(encoding="utf-8")
     assert "bili_locale" in cookie_text
     assert "zh-CN" in cookie_text
@@ -149,6 +154,64 @@ def test_download_fraction_uses_bytes_and_fragments():
 def test_cookie_search_prefers_project_cookies_dir():
     dirs = cookie_search_dirs()
     assert any(path.name == "Cookies" for path in dirs)
+
+
+def test_cookie_folder_walks_parents(tmp_path, monkeypatch):
+    repo = tmp_path / "SubFlow"
+    dist = repo / "dist" / "SubFlow"
+    cookies = repo / "Cookies"
+    cookies.mkdir(parents=True)
+    dist.mkdir(parents=True)
+    (cookies / "bilibili-cookies.txt").write_text("# Netscape\n.bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tx\n", encoding="utf-8")
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp._project_root", lambda: dist)
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_search_dirs", lambda: cookie_folder_dirs())
+    monkeypatch.delenv("SUBFLOW_COOKIES", raising=False)
+    monkeypatch.delenv("YTDLP_COOKIES", raising=False)
+    folders = cookie_folder_dirs()
+    assert cookies.resolve() in [path.resolve() for path in folders]
+    assert cookie_file("https://www.bilibili.com/video/BV1").resolve() == (cookies / "bilibili-cookies.txt").resolve()
+
+
+def test_youtube_guest_cookie_is_skipped(tmp_path, monkeypatch):
+    guest = tmp_path / "youtube-cookies.txt"
+    guest.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tVISITOR_INFO1_LIVE\tabc\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tPREF\tf1=1\n",
+        encoding="utf-8",
+    )
+    logged = tmp_path / "other" / "youtube-cookies.txt"
+    logged.parent.mkdir()
+    logged.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tLOGIN_INFO\tabc\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tSID\tdef\n",
+        encoding="utf-8",
+    )
+    assert youtube_cookie_is_guest(guest) is True
+    assert youtube_cookie_is_guest(logged) is False
+    login_only = tmp_path / "login-only.txt"
+    login_only.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tLOGIN_INFO\tabc\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tVISITOR_INFO1_LIVE\tx\n",
+        encoding="utf-8",
+    )
+    assert youtube_cookie_is_guest(login_only) is True
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_folder_dirs", lambda: [tmp_path])
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_search_dirs", lambda: [tmp_path])
+    monkeypatch.delenv("SUBFLOW_COOKIES", raising=False)
+    monkeypatch.delenv("YTDLP_COOKIES", raising=False)
+    assert cookie_file("https://youtu.be/x") is None
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_folder_dirs", lambda: [tmp_path, logged.parent])
+    monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_search_dirs", lambda: [tmp_path, logged.parent])
+    assert cookie_file("https://youtu.be/x") == logged
+
+
+def test_js_runtime_map_enables_node_and_deno():
+    runtimes = js_runtime_map()
+    assert "node" in runtimes
+    assert "deno" in runtimes
 
 
 def test_site_cookie_file_prefers_named_jar(tmp_path, monkeypatch):
@@ -491,7 +554,7 @@ def test_low_res_selection_is_skipped_and_not_saved(tmp_path, monkeypatch):
     fake = type(sys)("yt_dlp")
     fake.YoutubeDL = LowYDL
     with patch.dict(sys.modules, {"yt_dlp": fake}):
-        with pytest.raises(DownloadError, match="最高清|低清晰度"):
+        with pytest.raises(DownloadError, match="最高清|低清晰度|已跳过"):
             download("https://youtu.be/demo", tmp_path)
     assert not dest.exists()
 
