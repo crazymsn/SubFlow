@@ -62,7 +62,7 @@ def test_download_writes_source_mp4(tmp_path, monkeypatch):
 
     class WriteYDL(_FakeYDL):
         def download(self, urls):
-            dest.write_bytes(b"ok")
+            Path(self.opts["outtmpl"] % {"ext": "mp4"}).write_bytes(b"ok")
 
     fake = type(sys)("yt_dlp")
     fake.YoutubeDL = WriteYDL
@@ -248,7 +248,7 @@ def test_download_reports_standalone_percent(tmp_path, monkeypatch):
         def download(self, urls):
             hook = self.opts["progress_hooks"][0]
             hook({"status": "downloading", "total_bytes": 1000, "downloaded_bytes": 400})
-            dest.write_bytes(b"ok")
+            Path(self.opts["outtmpl"] % {"ext": "mp4"}).write_bytes(b"ok")
             hook({"status": "finished"})
 
     fake = type(sys)("yt_dlp")
@@ -321,7 +321,7 @@ def test_download_retries_after_bot_check(tmp_path, monkeypatch):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("Sign in to confirm you're not a bot")
-            dest.write_bytes(b"ok")
+            Path(self.opts["outtmpl"] % {"ext": "mp4"}).write_bytes(b"ok")
 
     fake = type(sys)("yt_dlp")
     fake.YoutubeDL = FlakyYDL
@@ -484,7 +484,7 @@ def test_download_keeps_going_until_listed_max(tmp_path, monkeypatch):
             }
 
         def download(self, urls):
-            dest.write_bytes(b"ok")
+            Path(self.opts["outtmpl"] % {"ext": "mp4"}).write_bytes(b"ok")
 
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_file", lambda url=None: None)
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp._video_height", lambda path: heights.pop(0) if heights else 2160)
@@ -575,7 +575,7 @@ def test_download_replaces_dubbed_audio(tmp_path, monkeypatch):
 
         def download(self, urls):
             seen["format"] = str(self.params.get("format") or "")
-            dest.write_bytes(b"ok")
+            Path(self.opts["outtmpl"] % {"ext": "mp4"}).write_bytes(b"ok")
 
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_file", lambda url=None: None)
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp._video_height", lambda path: 1080)
@@ -616,7 +616,7 @@ def test_low_res_selection_is_skipped_and_not_saved(tmp_path, monkeypatch):
             }
 
         def download(self, urls):
-            dest.write_bytes(b"360p")
+            Path(self.opts["outtmpl"] % {"ext": "mp4"}).write_bytes(b"360p")
 
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_file", lambda url=None: None)
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp._video_height", lambda path: 360)
@@ -645,7 +645,7 @@ def test_download_keeps_reachable_hd_when_listing_is_higher(tmp_path, monkeypatc
             }
 
         def download(self, urls):
-            dest.write_bytes(b"1080p")
+            Path(self.opts["outtmpl"] % {"ext": "mp4"}).write_bytes(b"1080p")
 
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_file", lambda url=None: None)
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp._video_height", lambda path: 1080)
@@ -675,7 +675,7 @@ def test_download_uses_source_lang_audio_selector(tmp_path, monkeypatch):
 
         def download(self, urls):
             seen.append(str(self.params.get("format") or ""))
-            dest.write_bytes(b"en-audio")
+            Path(self.opts["outtmpl"] % {"ext": "mp4"}).write_bytes(b"en-audio")
 
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp.cookie_file", lambda url=None: None)
     monkeypatch.setattr("bilingual_sub.adapters.ytdlp._video_height", lambda path: 1080)

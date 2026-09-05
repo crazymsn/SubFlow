@@ -224,11 +224,30 @@ def to_pcm_wav(src: Path, dest: Path | None = None, *, control=None) -> Path:
     return dest
 
 
-def remux_to_mp4(src: Path, dest: Path) -> Path:
+def remux_to_mp4(src: Path, dest: Path, *, control=None) -> Path:
     """Prefer stream copy into MP4; transcode only if the container rejects the codecs."""
+    from bilingual_sub.core.output_guard import validate_outputs
+
+    if control:
+        control.wait_if_paused()
+    if not src.is_file() or src.stat().st_size == 0:
+        raise FileNotFoundError(f"Missing or empty media: {src}")
     if src.suffix.lower() == ".mp4" and src.resolve() == dest.resolve():
         return src
+    validate_outputs({"MP4": dest}, [src])
     dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".subflow-remux-", dir=dest.parent) as scratch:
+        pending = Path(scratch) / "source.mp4"
+        _remux_into(src, pending, control=control)
+        if not pending.is_file() or pending.stat().st_size <= 32:
+            raise FfmpegError("FFmpeg did not produce a valid MP4")
+        if control:
+            control.wait_if_paused()
+        pending.replace(dest)
+    return dest
+
+
+def _remux_into(src: Path, dest: Path, *, control=None) -> None:
     copy_args = [
         find_ffmpeg(),
         "-y",
@@ -241,9 +260,9 @@ def remux_to_mp4(src: Path, dest: Path) -> Path:
         str(dest),
     ]
     try:
-        run_cmd(copy_args)
+        run_cmd(copy_args, control=control)
         if dest.is_file() and dest.stat().st_size > 32:
-            return dest
+            return
     except FfmpegError:
         logger.info("stream copy to mp4 failed, transcoding %s", src)
     run_cmd(
@@ -261,9 +280,8 @@ def remux_to_mp4(src: Path, dest: Path) -> Path:
             "-movflags",
             "+faststart",
             str(dest),
-        ]
+        ], control=control,
     )
-    return dest
 
 
 def copy_to_ascii_workdir(src: Path, work_dir: Path) -> Path:

@@ -113,6 +113,63 @@ def test_failed_new_url_download_keeps_old_url_and_video_then_retries(tmp_path, 
     assert len(calls) == 2
 
 
+def test_download_cache_validates_work_copy_revision(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    cfg.source_url = "https://example.invalid/video"
+    cfg.work_dir.mkdir()
+    calls = []
+    def download(url, dest, **kwargs):
+        calls.append(url)
+        result = dest / "source.mp4"
+        result.write_bytes(b"downloaded video")
+        return result
+    monkeypatch.setattr(p, "ytdlp_download", download)
+    source = p._download_source(cfg, cfg.work_dir, None, None)
+    assert p._download_source(cfg, cfg.work_dir, None, None) == source
+    assert len(calls) == 1
+    source.write_bytes(b"another video was copied here")
+    assert p._download_source(cfg, cfg.work_dir, None, None).read_bytes() == b"downloaded video"
+    assert len(calls) == 2
+
+
+def test_url_only_marker_is_not_proof_of_cached_download(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    cfg.source_url = "https://example.invalid/video"
+    cfg.work_dir.mkdir()
+    (cfg.work_dir / "source.url.txt").write_text(cfg.source_url)
+    (cfg.work_dir / "source.mp4").write_bytes(b"unverified content")
+    def fail(*args, **kwargs):
+        raise RuntimeError("must download again")
+    monkeypatch.setattr(p, "ytdlp_download", fail)
+    with pytest.raises(RuntimeError, match="must download again"):
+        p._download_source(cfg, cfg.work_dir, None, None)
+    assert (cfg.work_dir / "source.mp4").read_bytes() == b"unverified content"
+
+
+def test_cancel_while_copying_download_preserves_previous_work_video(tmp_path, monkeypatch):
+    cfg = config(tmp_path)
+    cfg.source_url = "https://example.invalid/new-video"
+    cfg.work_dir.mkdir()
+    source = cfg.work_dir / "source.mp4"
+    source.write_bytes(b"old video")
+    marker = cfg.work_dir / "source.url.txt"
+    marker.write_text("old URL")
+    downloaded = tmp_path / "downloaded.mp4"
+    downloaded.write_bytes(b"new video")
+    monkeypatch.setattr(p, "ytdlp_download", lambda *args, **kwargs: downloaded)
+    ctl = JobControl()
+    real_copy = p.shutil.copy2
+    def copy_then_stop(*args, **kwargs):
+        result = real_copy(*args, **kwargs)
+        ctl.stop()
+        return result
+    monkeypatch.setattr(p.shutil, "copy2", copy_then_stop)
+    with pytest.raises(JobStopped):
+        p._download_source(cfg, cfg.work_dir, None, ctl)
+    assert source.read_bytes() == b"old video" and marker.read_text() == "old URL"
+    assert not (cfg.work_dir / "source.download.mp4").exists()
+
+
 def test_stopped_reexport_does_not_touch_outputs(tmp_path):
     cfg = config(tmp_path)
     control = JobControl()

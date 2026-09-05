@@ -640,6 +640,7 @@ def _validate_output_paths(config: JobConfig, work: Path | None = None, *, inclu
             "source.mp4", "speech.wav", "transcript.json", "silences.json",
             "cues.zh.json", "cues.source.json", "cues.bilingual.json", "cues.fitted.json",
             "report.json", "job_state.json", "job_input.json", "source.url.txt",
+            "source.download.json", "source.download.mp4", "source.download.pending.json",
             ".job.lock",
         ))
     validate_outputs(outputs, protected)
@@ -650,8 +651,12 @@ def _download_source(config: JobConfig, work: Path, prog, control: JobControl | 
     url = config.source_url or ""
     source = work / "source.mp4"
     marker = work / "source.url.txt"
+    manifest = work / "source.download.json"
+    saved = _load_json(manifest)
     if (source.is_file() and source.stat().st_size > 0 and marker.is_file()
-            and marker.read_text(encoding="utf-8").strip() == url):
+            and marker.read_text(encoding="utf-8").strip() == url
+            and saved.get("url") == url
+            and saved.get("fingerprint") == video_fingerprint(source)):
         return source
     staging = work / "downloads" / hashlib.sha256(url.encode()).hexdigest()[:16]
     staging.mkdir(parents=True, exist_ok=True)
@@ -659,17 +664,24 @@ def _download_source(config: JobConfig, work: Path, prog, control: JobControl | 
                                source_lang=config.source_lang)
     _gate(control)
     pending = work / "source.download.mp4"
+    pending_manifest = work / "source.download.pending.json"
     try:
         shutil.copy2(downloaded, pending)
         if pending.stat().st_size == 0:
             raise RuntimeError("下载结果为空，请重试")
+        _gate(control)
         # Invalidate the old identity before replacing its media. A failed
         # marker write must never leave another video's URL attached to it.
         marker.unlink(missing_ok=True)
+        manifest.unlink(missing_ok=True)
         pending.replace(source)
         marker.write_text(url, encoding="utf-8")
+        pending_manifest.write_text(json.dumps({"url": url, "fingerprint": video_fingerprint(source)},
+                                               ensure_ascii=False), encoding="utf-8")
+        pending_manifest.replace(manifest)
     finally:
         pending.unlink(missing_ok=True)
+        pending_manifest.unlink(missing_ok=True)
     return source
 
 

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+from filelock import FileLock, Timeout
 
 from bilingual_sub.core.control import JobControl, JobStopped
 
@@ -98,20 +103,28 @@ class DownloadError(RuntimeError):
     pass
 
 
+def _host_matches(url: str, domains: tuple[str, ...]) -> bool:
+    try:
+        parsed = urlparse((url or "").strip())
+        host = (parsed.hostname or "").lower().rstrip(".")
+        return parsed.scheme.lower() in {"http", "https"} and any(
+            host == domain or host.endswith("." + domain) for domain in domains)
+    except ValueError:
+        return False
+
+
 def is_bilibili_url(url: str) -> bool:
-    text = (url or "").lower()
-    return any(part in text for part in ("bilibili.com", "b23.tv", "bili2233.cn", "bilibili.tv"))
+    return _host_matches(url, ("bilibili.com", "b23.tv", "bili2233.cn", "bilibili.tv"))
 
 
 def is_youtube_url(url: str) -> bool:
-    text = (url or "").lower()
-    return any(part in text for part in ("youtube.com", "youtu.be", "youtube-nocookie.com", "music.youtube.com"))
+    return _host_matches(url, ("youtube.com", "youtu.be", "youtube-nocookie.com"))
 
 
-def media_slug(url: str) -> str:
+def _raw_media_slug(url: str) -> str:
     parsed = urlparse(canonicalize_url(url))
-    host = (parsed.netloc or "").lower()
-    if "youtu.be" in host:
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if host == "youtu.be" or host.endswith(".youtu.be"):
         return (parsed.path.strip("/").split("/") or ["video"])[0] or "video"
     video = (parse_qs(parsed.query).get("v") or [""])[0]
     if video:
@@ -120,6 +133,16 @@ def media_slug(url: str) -> str:
         if part.startswith(("BV", "av", "ep")):
             return part
     return "video"
+
+
+def media_slug(url: str) -> str:
+    raw = _raw_media_slug(url)
+    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                *(f"LPT{i}" for i in range(1, 10))}
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", raw) and raw.upper() not in reserved:
+        return raw
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", raw)[:60].strip("_") or "video"
+    return f"{safe}-{hashlib.sha256(raw.encode()).hexdigest()[:12]}"
 
 
 def download_folder(url: str, root: Path | None = None) -> Path:
@@ -930,7 +953,6 @@ def ydl_options(
         "concurrent_fragment_downloads": 3,
         "socket_timeout": 30,
         "geo_bypass": True,
-        "nocheckcertificate": True,
         "http_headers": headers,
         "js_runtimes": runtimes,
         "remote_components": ["ejs:github", "ejs:npm"],
@@ -1075,17 +1097,6 @@ def explain_download_error(exc: BaseException) -> str:
     return f"下载失败：{exc}"
 
 
-def _reset_outputs(dest_dir: Path) -> None:
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    for pattern in ("source.*", ".best*", "*.part"):
-        for path in dest_dir.glob(pattern):
-            try:
-                if path.is_file():
-                    path.unlink()
-            except OSError:
-                continue
-
-
 def _picked_file(dest_dir: Path, *, since: float | None = None) -> Path | None:
     exact = dest_dir / "source.mp4"
     candidates = [exact] if exact.is_file() else sorted(p for p in dest_dir.glob("source.*") if p.is_file())
@@ -1098,19 +1109,24 @@ def _picked_file(dest_dir: Path, *, since: float | None = None) -> Path | None:
     return None
 
 
-def _ensure_mp4(path: Path, dest_dir: Path) -> Path:
+def _ensure_mp4(path: Path, dest_dir: Path, *, control: JobControl | None = None) -> Path:
+    if control:
+        control.wait_if_paused()
     target = dest_dir / "source.mp4"
     if path.suffix.lower() == ".mp4":
         if path.resolve() != target.resolve():
             shutil.copy2(path, target)
+        if control:
+            control.wait_if_paused()
         return target
     try:
         from bilingual_sub.adapters.ffmpeg import remux_to_mp4
 
-        return remux_to_mp4(path, target)
+        return remux_to_mp4(path, target, control=control)
+    except JobStopped:
+        raise
     except Exception as exc:
-        logger.warning("remux to mp4 failed (%s); keeping %s", exc, path)
-        return path
+        raise DownloadError(f"下载文件转为 MP4 失败：{exc}") from exc
 
 
 def _audio_status(path: Path) -> bool | None:
@@ -1140,9 +1156,45 @@ def download(
     progress_range: tuple[float, float] = (0.03, 0.20),
     source_lang: str = "",
 ) -> Path:
+    if control:
+        control.wait_if_paused()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    lock = FileLock(str(dest_dir / ".download.lock"))
+    try:
+        lock.acquire(timeout=0)
+    except Timeout as exc:
+        raise DownloadError(f"该目录正在下载，请等待完成：{dest_dir}") from exc
+    try:
+        with tempfile.TemporaryDirectory(prefix=".subflow-download-", dir=dest_dir) as scratch:
+            staging = Path(scratch)
+            try:
+                result = _download_into(url, staging, on_progress=on_progress, control=control,
+                                        progress_range=progress_range, source_lang=source_lang)
+                if not result.is_file() or result.stat().st_size == 0:
+                    raise DownloadError("下载没有生成有效文件")
+                if control:
+                    control.wait_if_paused()
+                target = dest_dir / "source.mp4"
+                result.replace(target)
+                return target
+            except Exception:
+                log = staging / "ytdlp.log"
+                if log.is_file():
+                    shutil.copy2(log, dest_dir / "ytdlp.log")
+                raise
+    finally:
+        lock.release()
+
+
+def _download_into(
+    url: str, dest_dir: Path, *, on_progress: Callable[[str, float], None] | None = None,
+    control: JobControl | None = None, progress_range: tuple[float, float] = (0.03, 0.20),
+    source_lang: str = "",
+) -> Path:
+    if control:
+        control.wait_if_paused()
     url = canonicalize_url(url)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    _reset_outputs(dest_dir)
     log_path = dest_dir / "ytdlp.log"
     try:
         from yt_dlp import YoutubeDL
@@ -1160,7 +1212,7 @@ def download(
 
     def hook(status: dict) -> None:
         if control:
-            control.check()
+            control.wait_if_paused()
         frac = tracker.feed(status)
         if frac is None:
             return
@@ -1189,12 +1241,16 @@ def download(
     def extract_listing(attempt: dict) -> tuple[dict | None, int]:
         last_exc: Exception | None = None
         for fmt in (LIST_FORMAT, BEST_AV_FORMAT, "all"):
+            if control:
+                control.wait_if_paused()
             try:
                 opts = build_opts(attempt, fmt=fmt, with_hook=False)
                 with YoutubeDL(opts) as ydl:
                     if not hasattr(ydl, "extract_info"):
                         return None, 0
                     info = ydl.extract_info(url, download=False)
+                if control:
+                    control.wait_if_paused()
                 return info, max_video_height(info)
             except JobStopped:
                 raise
@@ -1211,6 +1267,8 @@ def download(
     best_height = -1
     listed_ceiling = 0
     attempts = list(download_attempts(url))
+    if control:
+        control.wait_if_paused()
     cookie_attempts = [item for item in attempts if item.get("cookiefile")]
     stale_cookie = False
     emit(0.02)
@@ -1250,10 +1308,17 @@ def download(
         want = quality_target(listed_ceiling)
         fmt = format_for_height(want, source_lang)
         tracker.begin_attempt()
+        # This is a private staging directory. A failed attempt must not leave
+        # media that a later attempt can accidentally report as its own output.
+        for path in dest_dir.glob("source.*"):
+            if path.is_file():
+                path.unlink()
         started = time.time()
         try:
             opts = build_opts(attempt, fmt=fmt, with_hook=True)
             def after_pp(status: dict) -> None:
+                if control:
+                    control.wait_if_paused()
                 if tracker._last < 0.5:
                     return
                 state = str(status.get("status") or "")
@@ -1267,6 +1332,8 @@ def download(
                 if hasattr(ydl, "extract_info"):
                     try:
                         info = ydl.extract_info(url, download=False)
+                        if control:
+                            control.wait_if_paused()
                         listed_ceiling = max(listed_ceiling, max_video_height(info))
                         want = quality_target(listed_ceiling)
                         n = len((info or {}).get("requested_formats") or ()) or 1
@@ -1275,11 +1342,15 @@ def download(
                         would = selected_height(info)
                         if would and would < HD_FLOOR:
                             raise DownloadError(f"该通道只有 {would}p，低于 {HD_FLOOR}p，已跳过")
-                    except DownloadError:
+                    except (DownloadError, JobStopped):
                         raise
                     except Exception as exc:
                         notes.append(f"{label_of(attempt)} list: {exc}")
+                if control:
+                    control.wait_if_paused()
                 ydl.download([url])
+                if control:
+                    control.wait_if_paused()
         except JobStopped:
             raise
         except Exception as exc:
@@ -1299,7 +1370,14 @@ def download(
             last_error = DownloadError("下载完成但没有找到视频文件")
             notes.append(f"{label_of(attempt)}: missing file")
             continue
-        picked = _ensure_mp4(picked, dest_dir)
+        try:
+            picked = _ensure_mp4(picked, dest_dir, control=control)
+        except JobStopped:
+            raise
+        except DownloadError as exc:
+            last_error = exc
+            notes.append(f"{label_of(attempt)}: {exc}")
+            continue
         audio = _audio_status(picked)
         if audio is False:
             last_error = DownloadError("下载的文件没有音轨，正在改用备用格式")
@@ -1335,7 +1413,7 @@ def download(
     if best_path and best_path.is_file() and (best_height >= want or best_height >= HD_FLOOR):
         if best_height < want:
             logger.warning("listed %sp unavailable; keeping reachable %sp", want, best_height)
-        final = _ensure_mp4(best_path, dest_dir)
+        final = _ensure_mp4(best_path, dest_dir, control=control)
         try:
             best_path.unlink(missing_ok=True)
         except OSError:
