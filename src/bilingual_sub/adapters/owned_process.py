@@ -65,6 +65,9 @@ class _WindowsJob:
 def owned_process(args: list[str], **kwargs):
     options = hidden_run_kwargs()
     options.update(kwargs)
+    environment = options.get("env")
+    options["env"] = dict(os.environ if environment is None else environment)
+    options["env"]["SUBFLOW_WORKER_PROCESS_GROUP"] = "1"
     job = _WindowsJob() if os.name == "nt" else None
     proc = None
     try:

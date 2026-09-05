@@ -19,7 +19,7 @@ def test_install_isolated_and_cached(monkeypatch, tmp_path):
         calls.append(args)
         if args[1] == 'venv':
             py = rt.managed_python('asr')
-            py.parent.mkdir(parents=True)
+            py.parent.mkdir(parents=True, exist_ok=True)
             py.touch()
 
     monkeypatch.setattr(rt, '_run', run)
@@ -29,7 +29,7 @@ def test_install_isolated_and_cached(monkeypatch, tmp_path):
     assert any('torch==2.5.1' in c or 'torch==2.2.2' in c for c in calls)
     before = len(calls)
     assert rt.ensure_python_env('asr') == py
-    assert len(calls) == before
+    assert len(calls) == before + 1  # Recheck imports even when the ready marker matches.
     (py.parent.parent / '.subflow-ready').write_text('outdated')
     rt.ensure_python_env('asr')
     assert len(calls) > before

@@ -1,6 +1,6 @@
 # Apple Silicon GPU 支持与验收记录（1.3.1）
 
-代码实现 Apple M 系列原生客户端的 MPS 自动配置，默认 Whisper 与 GPT-SoVITS 使用 Apple GPU。当前环境没有可用的实体 Apple GPU，因此 GPU 端到端实机验收仍未完成，不能将依赖安装和客户端构建成功当作实际 GPU 推理成功。
+代码实现 Apple M 系列原生客户端的 MPS 自动配置，默认 Whisper 与 GPT-SoVITS 使用 Apple GPU。构建主机没有可用的实体 Apple GPU；用户已有 M1 MacBook Air，并选择最终自行测试，因此 GPU 端到端实机验收仍未完成，不能将依赖安装和客户端构建成功当作实际 GPU 推理成功。
 
 ## 实现范围
 
@@ -37,6 +37,8 @@ GitHub 标准 macOS ARM 虚拟机安装的两套 Torch 环境均报告 `mps_buil
 此现象与 runner-images 仓库记录的 [MPS 分配失败问题](https://github.com/actions/runner-images/issues/11899) 相符。没有通过关闭 MPS 内存上限绕过问题。CI 可验证原生依赖安装、客户端启动与打包，不能在这台虚拟机上完成 GPU 模型验收。
 
 ## 实体 Mac 的验收步骤
+
+用户自行验收请按 [M1 MacBook Air 测试清单](mac-self-test.md) 操作。上面的构建和测试数字是 1.3.1 的历史证据，各后续版本见 [审查记录](code-audit-status.md)。
 
 使用 macOS 14+ 原生 Apple Silicon 客户端，选择默认 Whisper 引擎，完成首次环境和模型下载。确认识别日志出现 `MODEL_LOADED device=mps`，且任务结束记录仍为 `device=mps`。配音请求前后查询本机配音 API 的 `/subflow/runtime`，确认 `device` 为 `mps`、`is_half` 为 `false`。
 

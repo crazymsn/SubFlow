@@ -89,7 +89,7 @@ def should_autostart() -> bool:
 def default_home() -> Path:
     env = (os.environ.get("SUBFLOW_GPTSOVITS_HOME") or "").strip()
     if env:
-        return Path(env).expanduser()
+        return Path(env).expanduser().resolve()
     if os.name == "nt":
         root = Path(os.environ.get("LOCALAPPDATA", Path.home()))
         return root / "SubFlow" / "GPT-SoVITS"
@@ -611,13 +611,14 @@ def ensure_running(endpoint: str | None = None, *, wait_sec: float = 180.0, cont
         proc = _children.get(base)
         if proc is None or proc.poll() is not None:
             from bilingual_sub.adapters.runtime_bootstrap import (
+                assets_update_needed,
                 auto_install_enabled,
                 ensure_sovits_runtime,
                 source_update_needed,
             )
 
             root = discover_home()
-            if root is None or missing_pretrained(root) or find_sovits_python(root) is None or source_update_needed(root):
+            if root is None or missing_pretrained(root) or find_sovits_python(root) is None or source_update_needed(root) or assets_update_needed(root):
                 if auto_install_enabled():
                     root = ensure_sovits_runtime(control=control, progress=progress)
                 else:

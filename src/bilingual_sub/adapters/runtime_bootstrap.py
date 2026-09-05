@@ -8,15 +8,16 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
 from filelock import FileLock, Timeout
 
-from bilingual_sub.adapters.procwin import hidden_run_kwargs, terminate_process_tree
+from bilingual_sub.adapters.owned_process import owned_process
 from bilingual_sub.config import user_config_dir
-from bilingual_sub.core.control import JobControl
+from bilingual_sub.core.control import JobControl, JobStopped, wait_for_process
 
 logger = logging.getLogger(__name__)
 Progress = Callable[[str], None] | None
@@ -28,7 +29,7 @@ def auto_install_enabled() -> bool:
 
 def runtime_root() -> Path:
     override = os.environ.get("SUBFLOW_RUNTIME_DIR", "").strip()
-    return Path(override).expanduser() if override else user_config_dir() / "managed"
+    return Path(override).expanduser().resolve() if override else user_config_dir() / "managed"
 
 
 def bootstrap_assets() -> Path:
@@ -95,34 +96,24 @@ def inference_env() -> dict[str, str]:
     return env
 
 
-def _run(args: list[str], log: Path, control: JobControl | None, *, env=None, cwd=None) -> None:
+def _run(args: list[str], log: Path, control: JobControl | None, *, env=None, cwd=None,
+         timeout: float | None = None) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     if control:
         control.wait_if_paused()
     with log.open("ab") as stream:
-        proc = subprocess.Popen(args, stdout=stream, stderr=subprocess.STDOUT,
-                                env=env or install_env(), cwd=cwd, **hidden_run_kwargs())
-        try:
-            if control:
-                control.attach_proc(proc)
-            while proc.poll() is None:
-                if control:
-                    control.wait_if_paused()
-                try:
-                    proc.wait(timeout=0.2)
-                except subprocess.TimeoutExpired:
-                    pass
-            if control:
-                control.check()
-            if proc.returncode:
-                tail = log.read_text(encoding="utf-8", errors="replace")[-1600:]
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        def check_timeout():
+            if deadline is not None and time.monotonic() >= deadline:
+                raise RuntimeError(f"环境检查超时；可重试。日志：{log}")
+        with owned_process(args, stdout=stream, stderr=subprocess.STDOUT,
+                           env=env if env is not None else install_env(), cwd=cwd) as proc:
+            code = wait_for_process(proc, control=control, on_tick=check_timeout)
+            if code:
+                with log.open("rb") as reader:
+                    reader.seek(max(0, log.stat().st_size - 6400))
+                    tail = reader.read().decode("utf-8", errors="replace")[-1600:]
                 raise RuntimeError(f"自动安装失败；可重试。日志：{log}\n{tail}")
-        finally:
-            if proc.poll() is None:
-                terminate_process_tree(proc)
-                proc.wait(timeout=10)
-            if control:
-                control.detach_proc(proc)
 
 
 def _progress(callback: Progress, message: str) -> None:
@@ -157,30 +148,58 @@ def ensure_python_env(kind: str, *, control: JobControl | None = None, progress:
     stamp = hashlib.sha256(requirements.read_bytes() + f"{version}|{torch_backend()}|v1".encode()).hexdigest()
     python = managed_python(kind)
     marker = managed_env(kind) / ".subflow-ready"
+    log = root / f"install-{kind}.log"
+    module = {
+        "asr": "torch, torchaudio, whisper",
+        "gptsovits": (
+            "torch, torchaudio, fastapi, uvicorn, soundfile, numpy, librosa, yaml, "
+            "onnxruntime, transformers, pyopenjtalk, jieba"
+        ),
+        "whisperx": "torch, whisperx",
+    }[kind]
+    check = [str(python), "-c", f"import {module}"]
     with _locked(root / f"{kind}.lock", control):
-        if python.is_file() and marker.is_file() and marker.read_text() == stamp:
-            return python
+        repair = python.is_file()
+        if python.is_file() and marker.is_file() and marker.read_text(errors="replace") == stamp:
+            try:
+                _run(check, log, control, timeout=90)
+                return python
+            except JobStopped:
+                raise
+            except (OSError, RuntimeError) as exc:
+                if not auto_install_enabled():
+                    raise RuntimeError("运行环境已损坏，自动安装已关闭（SUBFLOW_AUTO_INSTALL=0）") from exc
+                _progress(progress, "运行环境检查失败，正在修复依赖…")
+                repair = True
         if not auto_install_enabled():
             raise RuntimeError("自动安装已关闭（SUBFLOW_AUTO_INSTALL=0）且运行环境尚未准备")
         uv = str(find_uv())
-        log = root / f"install-{kind}.log"
+        marker.unlink(missing_ok=True)
         _progress(progress, "首次运行：正在自动准备 Python 3.11（后续使用缓存）…")
-        if not python.is_file():
+        if not python.is_file() or repair:
             _run([uv, "python", "install", "3.11", "--no-bin", "--no-registry"], log, control)
-            _run([uv, "venv", "--managed-python", "--python", "3.11", "--seed", str(python.parent.parent)], log, control)
+            _run([uv, "venv", "--allow-existing", "--managed-python", "--python", "3.11", "--seed", str(python.parent.parent)], log, control)
         _progress(progress, f"正在安装 {kind} 依赖（{torch_backend().upper()}），首次下载可能需要数分钟…")
         torch_args = [uv, "pip", "install", "--python", str(python), f"torch=={version}", f"torchaudio=={version}"]
+        if repair:
+            torch_args.append("--reinstall")
         if sys.platform != "darwin" and platform.machine().lower() in {"x86_64", "amd64"}:
             torch_args.extend(["--index-url", "https://download.pytorch.org/whl/" + ("cu124" if torch_backend() == "cuda" else "cpu")])
         _run(torch_args, log, control)
         constraints = root / f"torch-{version}.txt"
         constraints.write_text(f"torch=={version}\ntorchaudio=={version}\n", encoding="utf-8")
         args = [uv, "pip", "install", "--python", str(python), "-r", str(requirements)]
+        if repair:
+            args.append("--reinstall")
         args += ["-c", str(constraints)]
         _run(args, log, control)
-        module = {"asr": "whisper", "gptsovits": "torch, torchaudio, fastapi, pyopenjtalk, jieba", "whisperx": "whisperx"}[kind]
-        _run([str(python), "-c", f"import {module}"], log, control)
-        marker.write_text(stamp, encoding="utf-8")
+        _run(check, log, control, timeout=90)
+        pending_marker = marker.with_name(marker.name + ".pending")
+        try:
+            pending_marker.write_text(stamp, encoding="utf-8")
+            pending_marker.replace(marker)
+        finally:
+            pending_marker.unlink(missing_ok=True)
     return python
 
 
@@ -198,6 +217,8 @@ def ensure_sovits_runtime(*, control: JobControl | None = None, progress: Progre
     with _locked(runtime_root() / "gptsovits-home.lock", control):
         source = bundled_src()
         if not (home / "api_v2.py").is_file() or source_update_needed(home):
+            if not auto_install_enabled():
+                raise RuntimeError("自动安装已关闭（SUBFLOW_AUTO_INSTALL=0），配音源码尚未准备")
             if source is None:
                 raise RuntimeError("客户端缺少 GPT-SoVITS 源码，请重新下载完整客户端")
             copy_runtime_tree(source, home)
@@ -205,17 +226,29 @@ def ensure_sovits_runtime(*, control: JobControl | None = None, progress: Progre
 
             (home / ".subflow-source-version").write_text(__version__, encoding="utf-8")
         python = ensure_python_env("gptsovits", control=control, progress=progress)
-        if models and (missing_pretrained(home) or not (home / ".subflow-assets-v1").is_file()):
+        from bilingual_sub._data.bootstrap.download_assets import assets_ready
+
+        if models and (missing_pretrained(home) or not assets_ready(home)):
+            if not auto_install_enabled():
+                raise RuntimeError("自动安装已关闭（SUBFLOW_AUTO_INSTALL=0），配音资源需要修复")
             _progress(progress, "正在下载并校验配音模型与语言数据，下载完成后会自动启动…")
             env = install_env()
             env["NLTK_DATA"] = str(home / "nltk_data")
             _run([str(python), str(bootstrap_assets() / "download_assets.py"), str(home)],
                  runtime_root() / "install-models.log", control, env=env)
             missing = missing_pretrained(home)
-            if missing:
+            if missing or not assets_ready(home):
                 raise RuntimeError("模型下载不完整：" + "; ".join(missing))
-            (home / ".subflow-assets-v1").write_text("ready", encoding="utf-8")
     return home
+
+
+def assets_update_needed(home: Path) -> bool:
+    from bilingual_sub._data.bootstrap.download_assets import assets_ready
+    from bilingual_sub.adapters.tts.gptsovits_runtime import default_home
+
+    if os.environ.get("SUBFLOW_GPTSOVITS_HOME", "").strip() or home != default_home():
+        return False
+    return not assets_ready(home)
 
 
 def source_update_needed(home: Path) -> bool:
