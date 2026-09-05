@@ -23,7 +23,7 @@ def discard_temporary(path: Path) -> None:
         path.unlink(missing_ok=True)
     except PermissionError:
         # copystat/copy2 can make our private temporary file read-only on Windows.
-        if path.is_file():
+        if not path.is_symlink() and path.is_file():
             path.chmod(path.stat().st_mode | stat.S_IWUSR)
         path.unlink(missing_ok=True)
 
@@ -171,11 +171,21 @@ def _commit_files(files: list[tuple[Path, Callable[[Path], object]]], *, checkpo
             os.close(fd)
             produce(pending[path])
             backups[path] = None
-            if path.exists():
+            if path.is_symlink() or path.exists():
                 fd, name = tempfile.mkstemp(dir=path.parent, prefix=".subflow-backup-", suffix=".tmp")
                 os.close(fd)
                 backups[path] = Path(name)
-                copy_file(path, Path(name), checkpoint=checkpoint)
+                if path.is_symlink() and not path.is_dir():
+                    # Back up the directory entry, including a relative or
+                    # dangling target. Copying its contents loses the link.
+                    Path(name).unlink()
+                    directory = path.is_dir() or bool(
+                        getattr(path.lstat(), "st_file_attributes", 0)
+                        & getattr(stat, "FILE_ATTRIBUTE_DIRECTORY", 0)
+                    )
+                    Path(name).symlink_to(path.readlink(), target_is_directory=directory)
+                else:
+                    copy_file(path, Path(name), checkpoint=checkpoint)
         _check(checkpoint)
         _check(before_commit)
         try:

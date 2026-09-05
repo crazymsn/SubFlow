@@ -114,6 +114,10 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m pytest -q -o addopts="" --confcutdir=tests/integration tests/integration/test_nested_ownership.py
+      - name: Verify symbolic link rollback
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q -o addopts="" --confcutdir=tests/integration tests/integration/test_link_rollback.py
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 35
