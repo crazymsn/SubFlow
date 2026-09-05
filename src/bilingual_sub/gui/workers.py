@@ -119,6 +119,9 @@ class VoicePreviewWorker(QThread):
                 prompt_lang=self.prompt_lang,
                 control=self.control,
             )
+            if not self.ref_audio and self.video is not None:
+                if file_digest(self.video, checkpoint=self.control.wait_if_paused) != source_digest:
+                    raise RuntimeError("试听合成期间源视频发生变化，请重试")
             self.ok.emit(str(path))
         except TtsUnavailable as exc:
             self.fail.emit(str(exc))

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from bilingual_sub.core.voice_preview import preview_cache_path, preview_sample, synth_voice_preview
 
 
@@ -102,6 +104,74 @@ def test_preview_request_uses_target_not_subtitle_style():
     assert req.lang == "ja"
     win.close()
     _ = app
+
+
+@pytest.mark.parametrize("field", ["endpoint", "ref_audio", "prompt_text", "prompt_lang", "video"])
+def test_ready_preview_from_stale_settings_is_not_played(tmp_path, monkeypatch, field):
+    from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.workers import VoicePreviewWorker
+    app = QApplication.instance() or QApplication([])
+    win = MainWindow()
+    req = win._preview_request()
+    args = {key: getattr(req, key) for key in
+            ("provider", "voice", "lang", "endpoint", "ref_audio", "prompt_text", "prompt_lang")}
+    if field == "video":
+        win.tts_ref_edit.clear()
+        args["ref_audio"] = ""
+        args["video"] = tmp_path / "old.mp4"
+        win._video = tmp_path / "new.mp4"
+    else:
+        args[field] += "different"
+    worker = VoicePreviewWorker(**args)
+    win._preview_worker = worker
+    worker.ok.connect(win._on_preview_ready)
+    worker.fail.connect(win._on_preview_fail)
+    monkeypatch.setattr(win, "sender", lambda: worker)
+    monkeypatch.setattr(win._preview_player, "play", lambda _: pytest.fail("stale preview must not play"))
+    win._on_preview_ready(str(tmp_path / "old.wav"))
+    assert not win._preview_player.is_active()
+    win.close()
+    app.processEvents()
+
+
+def test_late_worker_error_does_not_replace_current_status(monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from bilingual_sub.gui.app import MainWindow
+    from bilingual_sub.gui.workers import VoicePreviewWorker
+    app = QApplication.instance() or QApplication([])
+    win = MainWindow()
+    old = VoicePreviewWorker("gptsovits", "", "en")
+    win._preview_worker = VoicePreviewWorker("gptsovits", "", "zh")
+    win._preview_worker.ok.connect(win._on_preview_ready)
+    win._preview_worker.fail.connect(win._on_preview_fail)
+    win._set_key_status("current status")
+    monkeypatch.setattr(win, "sender", lambda: old)
+    win._on_preview_fail("old error")
+    assert win.key_status.text() == "current status"
+    win.close()
+    app.processEvents()
+
+
+def test_preview_worker_rechecks_source_after_synthesis(tmp_path, monkeypatch, pcm_wav):
+    from bilingual_sub.gui.workers import VoicePreviewWorker
+    video, output = tmp_path / "video.mp4", tmp_path / "preview.wav"
+    video.write_bytes(b"original source")
+    monkeypatch.setattr("bilingual_sub.core.voice_preview.preview_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr("bilingual_sub.adapters.tts.gptsovits_runtime.ensure_ref_audio", lambda *a, **kw: tmp_path / "reference.wav")
+    def synth(**kwargs):
+        output.write_bytes(pcm_wav())
+        video.write_bytes(b"replacement source")
+        return output
+    monkeypatch.setattr("bilingual_sub.core.voice_preview.synth_voice_preview", synth)
+    worker = VoicePreviewWorker("gptsovits", "", "en", video=video)
+    success, errors = [], []
+    worker.ok.connect(success.append)
+    worker.fail.connect(errors.append)
+    worker.run()
+    assert not success and len(errors) == 1 and "源视频发生变化" in errors[0]
 
 
 def test_preview_without_ref_asks_for_clip(monkeypatch):

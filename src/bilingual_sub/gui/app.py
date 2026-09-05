@@ -222,6 +222,7 @@ class MainWindow(QMainWindow):
         self._sovits_probe_worker: SovitsProbeWorker | None = None
         self._closing = False
         self._preview_player = PreviewPlayer(self)
+        self._preview_player.started.connect(self._on_preview_started)
         self._preview_player.finished.connect(self._on_preview_played)
         self._preview_player.failed.connect(self._on_preview_fail)
         self._dl_worker: DownloadWorker | None = None
@@ -894,7 +895,7 @@ class MainWindow(QMainWindow):
             self._log_line(tr("tts_preview_fail").format(msg=msg))
 
     def _preview_busy(self) -> bool:
-        return bool(self._preview_worker is not None and self._preview_worker.isRunning())
+        return self._preview_player.is_active() or bool(self._preview_worker is not None and self._preview_worker.isRunning())
 
     def _set_preview_busy(self, busy: bool) -> None:
         self.tts_preview_btn.setText(tr("tts_previewing") if busy else tr("tts_preview"))
@@ -950,26 +951,35 @@ class MainWindow(QMainWindow):
         if worker is not None and worker is not self._preview_worker:
             return
         req = self._preview_request()
-        provider, voice, lang = req.provider, req.voice, req.lang
-        if isinstance(worker, VoicePreviewWorker) and (worker.provider, worker.voice, worker.lang) != (
-            provider,
-            voice,
-            lang,
+        voice = req.voice
+        if isinstance(worker, VoicePreviewWorker) and any(
+            getattr(worker, field) != getattr(req, field)
+            for field in ("provider", "voice", "lang", "endpoint", "ref_audio", "prompt_text", "prompt_lang")
         ):
+            self._set_preview_busy(False)
+            return
+        if isinstance(worker, VoicePreviewWorker) and not worker.ref_audio and worker.video != self._video:
             self._set_preview_busy(False)
             return
         audio = Path(path)
         if not audio.is_file():
             self._on_preview_fail(tr("tts_preview_fail").format(msg=path))
             return
-        label = voice or "GPT-SoVITS"
-        self._log_line(tr("tts_preview_ok").format(voice=label))
+        self._preview_voice_label = voice or "GPT-SoVITS"
         self._preview_player.play(audio)
+
+    def _on_preview_started(self) -> None:
+        self._log_line(tr("tts_preview_ok").format(voice=self._preview_voice_label))
 
     def _on_preview_played(self) -> None:
         self._set_preview_busy(False)
 
     def _on_preview_fail(self, msg: str) -> None:
+        if self._closing:
+            return
+        worker = self.sender()
+        if isinstance(worker, VoicePreviewWorker) and worker is not self._preview_worker:
+            return
         self._set_preview_busy(False)
         safe = redact_api_key(msg, get_api_key())
         if safe in {tr("need_token"), "请先保存 API 令牌"}:
