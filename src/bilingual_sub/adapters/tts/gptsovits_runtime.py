@@ -109,6 +109,8 @@ def _frozen_roots() -> list[Path]:
     if getattr(sys, "frozen", False):
         exe = Path(sys.executable).resolve().parent
         roots.extend((exe / "GPT-SoVITS", exe / "_internal" / "GPT-SoVITS"))
+        if sys.platform == "darwin":
+            roots.append(exe.parent / "Resources" / "GPT-SoVITS")
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             roots.append(Path(meipass) / "GPT-SoVITS")

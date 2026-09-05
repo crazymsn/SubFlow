@@ -26,7 +26,7 @@ fi
 python3 -m pip install -e ".[gui,packaging]"
 python3 -m PyInstaller --noconfirm --clean "$ROOT/packaging/subflow.spec"
 APP="$ROOT/dist/SubFlow.app"
-python3 scripts/bundle-gptsovits.py third_party/GPT-SoVITS "$APP/Contents/MacOS/GPT-SoVITS" --source-only
+python3 scripts/bundle-gptsovits.py third_party/GPT-SoVITS "$APP/Contents/Resources/GPT-SoVITS" --source-only
 # PyInstaller signs nested binaries; re-seal the app after adding vendored source.
 codesign --force --sign - "$APP"
 codesign --verify "$APP"
