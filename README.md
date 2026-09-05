@@ -120,11 +120,11 @@ docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp
 
 ## 系统要求
 
-- Windows 10/11 x64 或 macOS 12+（Apple Silicon）客户端，或 Python 3.11+ / Docker
-- FFmpeg 6+（官方 Windows 包已内置 `ffmpeg.exe` / `ffprobe.exe`）
-- 识别建议 8 GB 以上内存；`medium` / `large` 更吃内存
+- Windows 10/11 x64；macOS 14+（Apple Silicon）或 15+（Intel）；也支持 Python 3.11+ / Docker
+- 客户端内置 FFmpeg / ffprobe；源码运行需自行安装含字幕渲染支持的 FFmpeg
+- 建议 16 GB 内存；内存较少时先选 tiny/base 识别模型，避免同时处理多个任务
 - 可选 NVIDIA GPU（`cuda` 额外依赖，不打进官方客户端）
-- 用户自备 meding API 令牌
+- 需要翻译时，用户自备 meding API 令牌；中文单语保留原声不需要翻译令牌
 
 若客户端提示缺少 Qt / VCRUNTIME DLL，安装 [Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。
 
