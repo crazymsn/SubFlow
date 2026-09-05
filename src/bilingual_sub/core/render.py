@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from bilingual_sub.config import StylePreset
+from bilingual_sub.core.file_io import Checkpoint, write_text_files
 from bilingual_sub.core.langs import (
     convert_han,
     is_pair_mode,
@@ -597,6 +598,7 @@ def write_subtitles(
     han_lang: str | None = None,
     target_lang: str = "",
     source_lang: str = "",
+    checkpoint: Checkpoint = None,
 ) -> None:
     ass_text, srt_text = render_ass_srt(
         cues,
@@ -607,9 +609,8 @@ def write_subtitles(
         target_lang=target_lang,
         source_lang=source_lang,
     )
-    ass_path.parent.mkdir(parents=True, exist_ok=True)
-    ass_path.write_text(ass_text, encoding="utf-8-sig")
-    srt_path.write_text(srt_text, encoding="utf-8")
+    write_text_files([(ass_path, ass_text, "utf-8-sig"), (srt_path, srt_text, "utf-8")],
+                     checkpoint=checkpoint)
 
 
 def save_cues_json(cues: list[Cue], path: Path) -> None:

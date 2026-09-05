@@ -175,12 +175,12 @@ def test_cancel_while_copying_download_preserves_previous_work_video(tmp_path, m
     downloaded.write_bytes(b"new video")
     monkeypatch.setattr(p, "ytdlp_download", lambda *args, **kwargs: downloaded)
     ctl = JobControl()
-    real_copy = p.shutil.copy2
+    real_copy = p.copy_file
     def copy_then_stop(*args, **kwargs):
         result = real_copy(*args, **kwargs)
         ctl.stop()
         return result
-    monkeypatch.setattr(p.shutil, "copy2", copy_then_stop)
+    monkeypatch.setattr(p, "copy_file", copy_then_stop)
     with pytest.raises(JobStopped):
         p._download_source(cfg, cfg.work_dir, None, ctl)
     assert source.read_bytes() == b"old video" and marker.read_text() == "old URL"

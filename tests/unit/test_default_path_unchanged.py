@@ -59,7 +59,7 @@ def test_default_pipeline_skips_ytdlp_refine_dub(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
         Path(srt_path).write_text("1\n", encoding="utf-8")
@@ -120,7 +120,7 @@ def test_pipeline_uses_refine_when_enabled(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -181,7 +181,7 @@ def test_pipeline_skips_translate_when_single_source_lang(tmp_path: Path, monkey
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -233,7 +233,7 @@ def test_pipeline_translates_bilingual_when_target_is_chinese(tmp_path: Path, mo
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -288,7 +288,7 @@ def test_pipeline_dubs_onto_burned_output(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -354,7 +354,7 @@ def test_same_lang_job_does_not_dub(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -421,7 +421,7 @@ def test_chinese_gptsovits_checkbox_keeps_original(tmp_path: Path, monkeypatch, 
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
         "bilingual_sub.pipeline.write_subtitles",
         lambda cues, preset, ass_path, srt_path, **k: (
@@ -487,7 +487,7 @@ def test_detected_english_on_zh_target_selects_sovits(tmp_path: Path, monkeypatc
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
         "bilingual_sub.pipeline.write_subtitles",
         lambda cues, preset, ass_path, srt_path, **k: (
@@ -562,7 +562,7 @@ def test_pipeline_pair_translates_english_asr_into_chinese(tmp_path: Path, monke
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -619,7 +619,7 @@ def test_english_speech_target_zh_dubs(tmp_path: Path, monkeypatch):
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
         "bilingual_sub.pipeline.write_subtitles",
         lambda cues, preset, ass_path, srt_path, **k: (
@@ -690,7 +690,7 @@ def test_english_target_dubs_even_when_asr_looks_english(tmp_path: Path, monkeyp
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         seen["mode"] = kwargs.get("mode")
@@ -758,7 +758,7 @@ def test_dub_failure_does_not_keep_original_audio_quietly(tmp_path: Path, monkey
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
         "bilingual_sub.pipeline.write_subtitles",
         lambda cues, preset, ass_path, srt_path, **k: (
@@ -818,7 +818,7 @@ def test_chinese_transcript_dubs_to_english_even_if_source_combo_is_en(tmp_path:
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
         "bilingual_sub.pipeline.write_subtitles",
         lambda cues, preset, ass_path, srt_path, **k: (
@@ -935,7 +935,7 @@ def test_pipeline_translates_screen_and_spoken_for_japanese(tmp_path: Path, monk
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
         Path(ass_path).write_text("[Script Info]\n", encoding="utf-8")
@@ -999,7 +999,7 @@ def test_pipeline_prompt_lang_follows_detected_spoken(tmp_path: Path, monkeypatc
     )
     monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
         "bilingual_sub.pipeline.write_subtitles",
         lambda cues, preset, ass_path, srt_path, **k: (
@@ -1060,7 +1060,7 @@ def test_resume_uses_cached_source_when_url_input_missing(tmp_path: Path, monkey
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, workdir: src)
+    monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, workdir, **kw: src)
     monkeypatch.setattr(
         "bilingual_sub.pipeline.write_subtitles",
         lambda cues, preset, ass_path, srt_path, **k: (

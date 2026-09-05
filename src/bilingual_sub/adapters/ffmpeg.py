@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from bilingual_sub.adapters.procwin import hidden_run_kwargs
+from bilingual_sub.core.file_io import Checkpoint, copy_file
 
 logger = logging.getLogger(__name__)
 
@@ -284,9 +285,9 @@ def _remux_into(src: Path, dest: Path, *, control=None) -> None:
     )
 
 
-def copy_to_ascii_workdir(src: Path, work_dir: Path) -> Path:
+def copy_to_ascii_workdir(src: Path, work_dir: Path, *, checkpoint: Checkpoint = None) -> Path:
     work_dir.mkdir(parents=True, exist_ok=True)
     dst = work_dir / "source.mp4"
     if dst.resolve() != src.resolve():
-        shutil.copy2(src, dst)
+        copy_file(src, dst, checkpoint=checkpoint)
     return dst

@@ -97,3 +97,58 @@ def test_silence_detection_surfaces_actual_ffmpeg_failure(tmp_path):
     broken.write_bytes(b"not an audio file")
     with pytest.raises(FfmpegError):
         detect_silences(broken)
+
+
+@pytest.mark.parametrize("missing", ["srt", "ass", "work_ass"])
+def test_resume_after_render_recreates_missing_subtitle_exports(job, missing):
+    cfg, settings, calls, _, _ = job
+    first = p.run(cfg, settings)
+    path = {"srt": first.output_srt, "ass": first.output_ass,
+            "work_ass": cfg.work_dir / "subs.ass"}[missing]
+    expected = path.read_bytes()
+    path.unlink()
+    cfg.resume_from = "burn"
+    second = p.run(cfg, settings)
+    assert calls["asr"] == 1
+    assert second.output_ass.is_file() and second.output_srt.is_file()
+    assert path.read_bytes() == expected
+
+
+def test_subtitle_export_replace_failure_restores_existing_pair(job, monkeypatch):
+    cfg, settings, _, _, _ = job
+    first = p.run(cfg, settings)
+    originals = {path: path.read_bytes() for path in
+                 (first.output_srt, first.output_ass, cfg.work_dir / "subs.ass")}
+    replace = Path.replace
+    def fail_srt(path, destination):
+        if destination == cfg.output_srt:
+            raise PermissionError("SRT is busy")
+        return replace(path, destination)
+    monkeypatch.setattr(Path, "replace", fail_srt)
+    cfg.resume_from = "render"
+    with pytest.raises(PermissionError, match="SRT is busy"):
+        p.run(cfg, settings)
+    assert all(path.read_bytes() == data for path, data in originals.items())
+
+
+def test_cached_movie_export_cancels_before_replacing_existing_movie(tmp_path, monkeypatch):
+    from bilingual_sub.core.control import JobControl
+
+    previous, destination = tmp_path / "previous.mp4", tmp_path / "new.mp4"
+    previous.write_bytes(b"video" * 1024 * 1024)
+    destination.write_bytes(b"complete old movie")
+    cfg = JobConfig(tmp_path / "input.mp4", destination, tmp_path / "out.srt", tmp_path,
+                    source_lang="zh", target_lang="zh", burn=True)
+    monkeypatch.setattr(p, "_style_same", lambda *a: True)
+    class CancelDuringCopy(JobControl):
+        calls = 0
+        def wait_if_paused(self):
+            self.calls += 1
+            if self.calls == 3:
+                self.stop()
+            super().wait_if_paused()
+    with pytest.raises(JobStopped):
+        p._copy_or_burn(cfg, tmp_path, AppSettings(), {"output_mp4": str(previous)},
+                        control=CancelDuringCopy())
+    assert destination.read_bytes() == b"complete old movie"
+    assert not list(tmp_path.glob(".subflow-output-*.tmp"))

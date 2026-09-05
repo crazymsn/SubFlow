@@ -5,7 +5,6 @@ import json
 import logging
 import math
 import os
-import shutil
 import tempfile
 import time
 import uuid
@@ -29,6 +28,7 @@ from bilingual_sub.core.burn import burn_subtitles
 from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.cues import build_cues
 from bilingual_sub.core.dub import dub_cues
+from bilingual_sub.core.file_io import copy_file
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.core.glossary_ai import extract_glossary
 from bilingual_sub.core.job_profile import processing_profile, render_profile
@@ -434,6 +434,7 @@ def _export_subs(
     work: Path,
     cues: list[Cue],
     play_res: tuple[int, int],
+    control: JobControl | None = None,
 ) -> Path:
     preset = _styled_preset(config)
     ass_path = work / "subs.ass"
@@ -443,16 +444,17 @@ def _export_subs(
     write_subtitles(
         cues,
         preset,
-        ass_path,
+        ass_out,
         srt_out,
         play_res=play_res,
         mode=config.subtitle_mode,
         han_lang=screen_han_lang(config.source_lang, config.target_lang, config.subtitle_mode),
         target_lang=config.target_lang,
         source_lang=config.source_lang,
+        checkpoint=lambda: _gate(control),
     )
     if ass_out != ass_path:
-        shutil.copy2(ass_path, ass_out)
+        copy_file(ass_out, ass_path, checkpoint=lambda: _gate(control))
     return ass_out
 
 
@@ -483,7 +485,7 @@ def _copy_or_burn(
         dest = resolve_dub_sidecar(config.output_video, config.output_srt)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dubbed.resolve() != dest.resolve():
-            shutil.copy2(dubbed, dest)
+            copy_file(dubbed, dest, checkpoint=lambda: _gate(control))
         return dest
     dest = config.output_video or config.output_srt.with_suffix(".mp4")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -492,13 +494,13 @@ def _copy_or_burn(
         if not dubbed.is_file():
             raise FileNotFoundError("previous dub missing; cannot export without re-running")
         if dubbed.resolve() != dest.resolve():
-            shutil.copy2(dubbed, dest)
+            copy_file(dubbed, dest, checkpoint=lambda: _gate(control))
         return dest
     prev = Path(str(report["output_mp4"])) if report.get("output_mp4") else None
     style_same = _style_same(report, config, settings)
     if prev and prev.is_file() and style_same and not report.get("dubbed"):
         if prev.resolve() != dest.resolve():
-            shutil.copy2(prev, dest)
+            copy_file(prev, dest, checkpoint=lambda: _gate(control))
         return dest
     ass_path = work / "subs.ass"
     source = work / "source.mp4"
@@ -649,7 +651,7 @@ def _reexport_if_possible(
     ))
     prog("export", 0.85)
     ts = time.time()
-    ass_out = _export_subs(config, work, cues, play_res)
+    ass_out = _export_subs(config, work, cues, play_res, control=control)
     output_mp4 = _copy_or_burn(config, work, settings, report, control=control)
     _gate(control)
     stages = {"export_sec": time.time() - ts}
@@ -720,7 +722,7 @@ def _download_source(config: JobConfig, work: Path, prog, control: JobControl | 
     pending = work / "source.download.mp4"
     pending_manifest = work / "source.download.pending.json"
     try:
-        shutil.copy2(downloaded, pending)
+        copy_file(downloaded, pending, checkpoint=lambda: _gate(control))
         if pending.stat().st_size == 0:
             raise RuntimeError("下载结果为空，请重试")
         _gate(control)
@@ -841,12 +843,12 @@ def _run_job(
             raise FileNotFoundError("请先选择本地视频，或填写可下载的视频链接")
     _validate_output_paths(config, work)
     if settings.video.copy_to_ascii_path:
-        source = copy_to_ascii_workdir(input_video, work)
+        source = copy_to_ascii_workdir(input_video, work, checkpoint=lambda: _gate(control))
     else:
         source = input_video
         dest = work / "source.mp4"
         if source.resolve() != dest.resolve():
-            shutil.copy2(input_video, dest)
+            copy_file(input_video, dest, checkpoint=lambda: _gate(control))
 
     meta = probe_video(source)
     duration = float(meta.get("duration") or 0)
@@ -1173,20 +1175,21 @@ def _run_job(
         write_subtitles(
             cues,
             preset,
-            ass_path,
+            ass_out,
             srt_out,
             play_res=play_res,
             mode=config.subtitle_mode,
             han_lang=han_lang,
             target_lang=config.target_lang,
             source_lang=config.source_lang,
+            checkpoint=lambda: _gate(control),
         )
         if ass_out != ass_path:
-            shutil.copy2(ass_path, ass_out)
+            copy_file(ass_out, ass_path, checkpoint=lambda: _gate(control))
         stages["render_sec"] = time.time() - ts
         _save_state(work, "render", {"job_id": job_id}, control=control)
-    elif ass_path.is_file() and not srt_out.is_file():
-        shutil.copy2(ass_path, ass_out)
+    elif not srt_out.is_file() or not ass_out.is_file() or not ass_path.is_file():
+        _export_subs(config, work, cues, play_res, control=control)
 
     dest_mp4 = config.output_video or srt_out.with_suffix(".mp4")
     output_mp4: Path | None = None
@@ -1295,12 +1298,12 @@ def _run_job(
             if config.burn:
                 dest_mp4.parent.mkdir(parents=True, exist_ok=True)
                 if Path(dubbed).resolve() != dest_mp4.resolve():
-                    shutil.copy2(dubbed, dest_mp4)
+                    copy_file(dubbed, dest_mp4, checkpoint=lambda: _gate(control))
                 output_mp4 = dest_mp4
             else:
                 if Path(dubbed).resolve() != sidecar.resolve():
                     sidecar.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(dubbed, sidecar)
+                    copy_file(dubbed, sidecar, checkpoint=lambda: _gate(control))
                 output_dub = sidecar
         except JobStopped:
             raise
