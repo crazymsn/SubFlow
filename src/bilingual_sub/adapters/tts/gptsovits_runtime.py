@@ -396,7 +396,7 @@ def launch_python(home: Path | None = None, *, control: JobControl | None = None
     hint = "、".join(checked) if checked else "无"
     raise FileNotFoundError(
         "未找到能 import FastAPI/Torch/soundfile/onnxruntime 并加载 GPT-SoVITS TTS 的 Python"
-        f"（已试：{hint}）。请在 third_party/GPT-SoVITS 运行官方 install.ps1，"
+        f"（已试：{hint}）。请重启客户端以准备运行环境；源码运行可执行 python scripts/prepare-runtime.py gptsovits，"
         "或设置 SUBFLOW_GPTSOVITS_PYTHON 指向整合包里的 python.exe"
     )
 
@@ -420,7 +420,7 @@ def diagnose_runtime(home: Path | None = None) -> str | None:
         problems.append(
             "缺少预训练权重："
             + "；".join(missing)
-            + "。运行 scripts/download-gptsovits-weights.ps1，或按官方 install.ps1 下载到该目录"
+            + "。请重启客户端以准备模型；源码运行可执行 python scripts/prepare-runtime.py gptsovits"
         )
     return " ".join(problems) if problems else None
 

@@ -1,4 +1,4 @@
-# 安装 SubFlow 1.3.3
+# 安装 SubFlow
 
 ## Windows / macOS 客户端
 
@@ -61,6 +61,19 @@ python scripts/prepare-runtime.py gptsovits
 
 主程序、Whisper、GPT-SoVITS、可选 WhisperX 使用隔离环境，避免依赖互相覆盖。WhisperX 不可用时可回退标准 Whisper。
 
+可用 `python scripts/prepare-runtime.py gptsovits --backend cpu` 显式准备 CPU 环境，或在支持的平台选择 `cuda` / `mps`。省略 `--backend` 时沿用 `SUBFLOW_TORCH_BACKEND` 和平台默认值；该参数只决定本次准备，不会改变后续客户端的设备设置。`--skip-models` 仅用于 GPT-SoVITS，跳过模型与语言资源下载。
+
+以下旧 PowerShell 命令仍可使用，现均调用同一安装流程，不再各自创建另一套环境。运行它们的 Python 是已安装 SubFlow 源码依赖的 Python 3.11+；推理用的 Python 3.11 由安装器另行准备，因此主程序使用 Python 3.13 也可以。参数 `-Python` 可指定该主程序解释器，`-Device cpu/cuda/mps` 可显式选择本次安装后端，默认沿用应用配置。
+
+| 兼容入口 | 当前行为 |
+| --- | --- |
+| `scripts/install-gptsovits-runtime.ps1` | 准备配音源码、依赖和校验后的资源；`-SkipWeights` 跳过模型及语言资源 |
+| `scripts/setup-gptsovits.ps1` | 使用本项目随附、已适配的源码，准备依赖，暂不下载资源；不再克隆上游最新分支 |
+| `scripts/download-gptsovits-weights.ps1` | 先准备所需源码和依赖，再下载并校验模型、语言资源；不能仅凭目录非空判为完成 |
+| `scripts/bootstrap-whisperx.ps1` | 在客户端识别的 managed 位置准备固定版本 WhisperX 环境 |
+
+环境和模型默认位置与客户端一致，见下表后的路径说明。已有手动整合包及 `SUBFLOW_GPTSOVITS_HOME` / `SUBFLOW_GPTSOVITS_PYTHON` 覆盖仍需由使用者明确管理；准备 managed 环境不会修改这些覆盖，也不会覆盖仓库内已有的 venv。
+
 ## 自动安装设置
 
 | 环境变量 | 用途 |
@@ -79,9 +92,9 @@ python scripts/prepare-runtime.py gptsovits
 ```powershell
 # Windows 社区包：用户首次自动安装
 ./scripts/build-windows.ps1 -SourceOnly
-# 全离线 GPT 配音包：先用 setup/install 脚本准备完整依赖与模型
-./scripts/build-windows.ps1
 ```
+
+上述准备命令缓存到用户目录，不会自动把缓存收进客户端包。Windows 不加 `-SourceOnly` 时仅收集仓库内 GPT-SoVITS 目录已有的可分发文件，不能据此认定新用户可以完全离线运行；社区发布使用 `-SourceOnly` 和首次联网自动安装。
 
 ```bash
 # macOS 社区包（构建机需 brew install ffmpeg-full）
