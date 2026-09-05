@@ -5,6 +5,9 @@ import math
 from pathlib import Path
 
 from bilingual_sub.adapters.ffmpeg import FfmpegError, find_ffmpeg, run_cmd
+from bilingual_sub.core.audio_cache import pcm_duration
+from bilingual_sub.core.file_io import staged_path
+from bilingual_sub.core.output_guard import validate_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +19,11 @@ def extract_wav(
     preview_sec: float | None = None,
     control=None,
 ) -> None:
-    wav_out.parent.mkdir(parents=True, exist_ok=True)
+    validate_outputs({"提取音频": wav_out}, [video])
+    if preview_sec is not None and (not math.isfinite(preview_sec) or preview_sec <= 0):
+        raise ValueError("preview duration must be positive and finite")
+    if control:
+        control.wait_if_paused()
     args = [
         find_ffmpeg(),
         "-y",
@@ -29,17 +36,23 @@ def extract_wav(
         "1",
         "-ar",
         "16000",
+        "-c:a",
+        "pcm_s16le",
         "-af",
         "aresample=async=1:first_pts=0",
     ]
-    if preview_sec:
+    if preview_sec is not None:
         args[args.index("-i") : args.index("-i")] = ["-t", str(preview_sec)]
-    args.append(str(wav_out))
     try:
-        run_cmd(args, control=control)
+        with staged_path(wav_out, suffix=".wav") as pending:
+            run_cmd([*args, str(pending)], control=control)
+            pcm_duration(pending, control)
+            if control:
+                control.wait_if_paused()
+            pending.replace(wav_out)
     except FfmpegError as exc:
         msg = str(exc).lower()
-        if "does not contain any stream" in msg or "output file #" in msg or "no audio" in msg:
+        if "does not contain any stream" in msg or "no audio" in msg:
             raise FfmpegError(
                 f"no usable audio track in {video}. bilingual-sub needs a speech track."
             ) from exc

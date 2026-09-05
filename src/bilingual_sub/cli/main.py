@@ -29,8 +29,11 @@ from bilingual_sub.config import (
 from bilingual_sub.core.audio import detect_silences, extract_wav
 from bilingual_sub.core.burn import burn_subtitles
 from bilingual_sub.core.cues import build_cues
+from bilingual_sub.core.file_io import copy_files
 from bilingual_sub.core.glossary import Glossary
+from bilingual_sub.core.output_guard import validate_outputs
 from bilingual_sub.core.render import load_cues_json, save_cues_json, write_subtitles
+from bilingual_sub.core.resource_claims import claim_resources
 from bilingual_sub.core.translate import translate_cues
 from bilingual_sub.models import STAGES, JobConfig
 from bilingual_sub.pipeline import run
@@ -396,13 +399,17 @@ def extract(
     output_dir: Annotated[Path, typer.Option("-o", "--output-dir")],
     preview_minutes: Annotated[float | None, typer.Option("--preview-minutes")] = None,
 ) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
     wav = output_dir / "speech.wav"
-    preview = preview_minutes * 60 if preview_minutes else None
-    extract_wav(input_video, wav, preview_sec=preview)
-    silences = detect_silences(wav)
     sil_path = output_dir / "silences.json"
-    sil_path.write_text(json.dumps(silences), encoding="utf-8")
+    validate_outputs({"提取音频": wav, "静音记录": sil_path}, [input_video])
+    preview = preview_minutes * 60 if preview_minutes is not None else None
+    with claim_resources(reads=[input_video], writes=[wav, sil_path]):
+        with tempfile.TemporaryDirectory(prefix="sf-extract-") as temp:
+            pending = Path(temp) / "speech.wav"
+            extract_wav(input_video, pending, preview_sec=preview)
+            silences = detect_silences(pending)
+            copy_files([(pending, wav)],
+                       texts=[(sil_path, json.dumps(silences, allow_nan=False), "utf-8")])
     console.print(f"Wrote {wav}")
     console.print(f"Wrote {sil_path} ({len(silences)} islands)")
 

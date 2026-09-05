@@ -1,3 +1,4 @@
+import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -30,7 +31,13 @@ def test_extract_wav_calls_ffmpeg(tmp_path):
     video = tmp_path / "v.mp4"
     video.write_bytes(b"x")
     wav = tmp_path / "speech.wav"
-    with patch("bilingual_sub.core.audio.run_cmd") as m:
+    def encode(args, **kwargs):
+        with wave.open(args[-1], "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(16000)
+            stream.writeframes(b"\0\0" * 16000)
+    with patch("bilingual_sub.core.audio.run_cmd", side_effect=encode) as m:
         extract_wav(video, wav, preview_sec=30.0)
     args = m.call_args[0][0]
     assert "-t" in args
