@@ -4,7 +4,7 @@
 
 深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
-当前源码版本 **1.3.0**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Hub](https://hub.docker.com/r/crazymsn/subflow) · [API 分发站](https://api.meding.site)
+当前源码版本 **1.3.0**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
 
 ![SubFlow 语幕桌面客户端](docs/images/desktop-light.png)
 
@@ -110,11 +110,12 @@ docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp
 | 文档 | 内容 |
 | --- | --- |
 | [桌面客户端](docs/desktop.md) | 安装、启动、字幕颜色、界面字段 |
-| [安装](docs/install.md) | Docker Hub / Python / 从源码打包 |
+| [安装](docs/install.md) | Docker Compose / Python / 从源码打包 |
 | [API 令牌](docs/api-key.md) | 本机存储、轮换、多用户隔离 |
 | [故障排除](docs/troubleshooting.md) | 识别、翻译、烧录、下载、客户端 |
 | [架构](docs/architecture.md) | 模块边界与 JobConfig |
 | [meding 契约](docs/api-meding.md) | 翻译 API 的固定地址与错误码 |
+| [社区版本验收](docs/community-qa-2026-09-05.md) | Windows / Mac / Docker 构建结果与首次安装验证 |
 | [贡献](CONTRIBUTING.md) | 分支、测试与约束 |
 
 ## 系统要求
