@@ -918,6 +918,12 @@ def run(
     t0 = time.time()
 
     work = _work_dir(config, settings, control=control)
+    from bilingual_sub.core.work_paths import validate_work_inputs
+
+    work_inputs = [config.glossary_path or default_glossary_path()]
+    if config.tts_ref_audio:
+        work_inputs.append(Path(config.tts_ref_audio).expanduser())
+    validate_work_inputs(work, config.input_video, work_inputs, downloaded=bool(config.source_url))
     _validate_output_paths(config, work)
     lock = FileLock(str(work / ".job.lock"))
     try:
@@ -941,12 +947,9 @@ def run(
                       if config.burn else resolve_dub_sidecar(config.output_video, config.output_srt))
         # The tree covers dynamic scratch files; explicit paths also identify
         # existing hardlinks to important work artifacts outside this directory.
-        writes.extend(work / name for name in (
-            "source.mp4", "speech.wav", "transcript.json", "silences.json", "subs.ass",
-            "cues.zh.json", "cues.source.json", "cues.bilingual.json", "cues.fitted.json",
-            "report.json", "job_state.json", "job_input.json", "burned.mp4", "dubbed.mp4",
-            "sovits_ref.wav", "glossary.generated.yaml", "glossary.merged.yaml",
-        ))
+        from bilingual_sub.core.work_paths import WORK_FILES
+
+        writes.extend(work / name for name in WORK_FILES)
         with claim_resources(reads=reads, writes=writes, trees=[work],
                              checkpoint=lambda: _gate(control)):
             return _run_in_work(config, settings, work, on_progress, control, t0)
