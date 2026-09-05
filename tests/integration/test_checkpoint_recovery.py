@@ -92,6 +92,179 @@ def test_corrupt_finished_cues_trigger_processing_instead_of_empty_export(job):
     assert "version 2" in cfg.output_srt.read_text()
 
 
+@pytest.mark.parametrize("name,stage,resume", [
+    ("speech.wav", "extract", "transcribe"),
+    ("silences.json", "silence", "transcribe"),
+    ("transcript.json", "transcribe", "build_cues"),
+    ("cues.zh.json", "build_cues", "translate"),
+    ("cues.source.json", "build_cues", "translate"),
+    ("cues.bilingual.json", "translate", "render"),
+    ("subs.ass", "render", "burn"),
+])
+def test_resume_rejects_changed_artifact_before_export(job, name, stage, resume):
+    cfg, settings, calls, _, _ = job
+    p.run(cfg, settings)
+    before = cfg.output_srt.read_bytes()
+    artifact = cfg.work_dir / name
+    # Whitespace is legal in JSON and ASS; schema-only checks cannot catch this.
+    artifact.write_bytes(artifact.read_bytes() + b" \n")
+    cfg.resume_from = resume
+    with pytest.raises(ValueError, match=f"{stage} 阶段缓存"):
+        p.run(cfg, settings)
+    assert cfg.output_srt.read_bytes() == before and calls["asr"] == 1
+    cfg.resume_from = stage
+    p.run(cfg, settings)
+    assert cfg.output_srt.is_file()
+
+
+@pytest.mark.parametrize("name", ["cues.bilingual.json", "cues.source.json"])
+def test_valid_replacement_cues_force_processing(job, name):
+    cfg, settings, calls, _, _ = job
+    settings.video.work_dir = str(cfg.work_dir)
+    cfg.work_dir = Path("auto")
+    first = p.run(cfg, settings)
+    artifact = first.report_path.parent / name
+    data = json.loads(artifact.read_text())
+    data[0]["zh"] = "unrelated replacement content"
+    artifact.write_text(json.dumps(data))
+    result = p.run(cfg, settings)
+    assert not result.reused and calls["asr"] == 2
+    assert "replacement" not in cfg.output_srt.read_text()
+
+
+def test_reexport_refreshes_render_identity_and_allows_resume(job):
+    cfg, settings, calls, _, _ = job
+    settings.video.work_dir = str(cfg.work_dir)
+    cfg.work_dir = Path("auto")
+    first = p.run(cfg, settings)
+    cfg.subtitle_en_color = "#ABCDEF"
+    assert p.run(cfg, settings).reused
+    work = first.report_path.parent
+    assert p._verify_cache(work, "render")["subs.ass"] == p.file_digest(work / "subs.ass")
+    cfg.resume_from = "burn"
+    p.run(cfg, settings)
+    assert calls["asr"] == 1
+
+
+def test_source_cues_changed_after_export_check_are_rejected(job):
+    cfg, settings, _, _, _ = job
+    settings.video.work_dir, cfg.work_dir = str(cfg.work_dir), Path("auto")
+    first = p.run(cfg, settings)
+    def change(stage, pct):
+        if stage == "export":
+            path = first.report_path.parent / "cues.source.json"
+            path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="build_cues 阶段缓存"):
+        p.run(cfg, settings, on_progress=change)
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_netflix_resume_rejects_missing_or_replaced_fitted_cues(job, missing):
+    cfg, settings, _, _, _ = job
+    cfg.subtitle_mode = "netflix_single"
+    p.run(cfg, settings)
+    fitted = cfg.work_dir / "cues.fitted.json"
+    if missing:
+        fitted.unlink()
+    else:
+        fitted.write_bytes(fitted.read_bytes() + b" ")
+    cfg.resume_from = "render"
+    with pytest.raises(ValueError, match="fit_subs 阶段缓存"):
+        p.run(cfg, settings)
+
+
+def test_translate_resume_restores_generated_glossary(job, monkeypatch):
+    from bilingual_sub.core.glossary import Glossary
+    from bilingual_sub.core.translate import TranslateStats
+
+    cfg, settings, calls, _, _ = job
+    cfg.glossary_generate = True
+    cfg.subtitle_mode = "bilingual"
+    monkeypatch.setattr("bilingual_sub.secrets.store.get_api_key", lambda: "test-placeholder")
+    monkeypatch.setattr("bilingual_sub.adapters.meding.create_client", lambda *a, **kw: object())
+    monkeypatch.setattr(p, "extract_glossary", lambda *a, **kw:
+                        Glossary(replacements=[("special term", "固定译法")]))
+    blocks = []
+    def translate(cues, **kwargs):
+        blocks.append(kwargs["glossary_block"])
+        if len(blocks) == 1:
+            raise RuntimeError("translation interrupted")
+        for cue in cues:
+            cue.en = "这是翻译。"
+        return cues, TranslateStats(), []
+    monkeypatch.setattr(p, "translate_cues", translate)
+    with pytest.raises(RuntimeError, match="translation interrupted"):
+        p.run(cfg, settings)
+    monkeypatch.setattr(p, "extract_glossary", lambda *a, **kw: pytest.fail("must reuse glossary"))
+    cfg.resume_from = "translate"
+    p.run(cfg, settings)
+    assert len(blocks) == 2 and blocks[0] == blocks[1]
+    assert "special term => 固定译法" in blocks[1] and calls["asr"] == 1
+    merged = cfg.work_dir / "glossary.merged.yaml"
+    merged.write_bytes(merged.read_bytes() + b"\n# changed after generation\n")
+    with pytest.raises(ValueError, match="glossary 阶段缓存"):
+        p.run(cfg, settings)
+    assert len(blocks) == 2
+
+
+def test_resume_ignores_unrecorded_stale_glossary(job):
+    cfg, settings, _, _, _ = job
+    p.run(cfg, settings)
+    (cfg.work_dir / "glossary.merged.yaml").write_text("[invalid stale data")
+    cfg.resume_from = "translate"
+    p.run(cfg, settings)
+    assert p._verify_cache(cfg.work_dir, "glossary") == {}
+
+
+@pytest.fixture
+def dub_job(job, monkeypatch):
+    from bilingual_sub.core.translate import TranslateStats
+
+    cfg, settings, calls, _, _ = job
+    cfg.target_lang, cfg.subtitle_mode, cfg.tts_provider = "zh", "single:zh", "edge"
+    cfg.burn, cfg.output_video = True, cfg.output_srt.with_suffix(".mp4")
+    def translate(cues, **kwargs):
+        for cue in cues:
+            cue.en = "这是目标语言的配音。"
+        return cues, TranslateStats(), []
+    def dub(cues, *, video, output, **kwargs):
+        output.write_bytes(video.read_bytes() + b" dubbed")
+        return output
+    monkeypatch.setattr(p, "translate_cues", translate)
+    monkeypatch.setattr("bilingual_sub.adapters.tts.select_tts", lambda *a, **kw: object())
+    monkeypatch.setattr(p, "burn_subtitles", lambda src, ass, out, **kw: out.write_bytes(b"burned"))
+    monkeypatch.setattr(p, "dub_cues", dub)
+    return cfg, settings, calls
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_dub_resume_rejects_bad_burn_before_starting_provider(dub_job, monkeypatch, missing):
+    cfg, settings, _ = dub_job
+    p.run(cfg, settings)
+    old_movie = cfg.output_video.read_bytes()
+    burned = cfg.work_dir / "burned.mp4"
+    if missing:
+        burned.unlink()
+    else:
+        burned.write_bytes(b"another burned video")
+    monkeypatch.setattr("bilingual_sub.adapters.tts.select_tts",
+                        lambda *a, **kw: pytest.fail("do not start synthesis with bad burn cache"))
+    cfg.resume_from = "dub"
+    with pytest.raises(RuntimeError, match="burn 阶段缓存"):
+        p.run(cfg, settings)
+    assert cfg.output_video.read_bytes() == old_movie
+
+
+def test_reexport_rejects_changed_dub_and_rebuilds(dub_job):
+    cfg, settings, calls = dub_job
+    settings.video.work_dir, cfg.work_dir = str(cfg.work_dir), Path("auto")
+    result = p.run(cfg, settings)
+    (result.report_path.parent / "dubbed.mp4").write_bytes(b"unrelated dubbed video")
+    result = p.run(cfg, settings)
+    assert not result.reused and calls["asr"] == 2
+    assert cfg.output_video.read_bytes() == b"burned dubbed"
+
+
 def test_silence_detection_surfaces_actual_ffmpeg_failure(tmp_path):
     broken = tmp_path / "broken.wav"
     broken.write_bytes(b"not an audio file")

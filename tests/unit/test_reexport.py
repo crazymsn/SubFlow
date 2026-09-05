@@ -6,10 +6,20 @@ from pathlib import Path
 import pytest
 
 from bilingual_sub.config import AppSettings
+from bilingual_sub.core.cache_records import FILES
 from bilingual_sub.core.file_io import file_digest
 from bilingual_sub.core.job_profile import processing_profile, render_profile
 from bilingual_sub.models import JobConfig
 from bilingual_sub.pipeline import artifact_key, run, video_fingerprint
+
+
+def _record_artifacts(work: Path, *stages: str) -> None:
+    state = json.loads((work / "job_state.json").read_text(encoding="utf-8"))
+    state["artifact_schema"] = 1
+    records = state.setdefault("artifacts", {})
+    for stage in stages:
+        records[stage] = {name: file_digest(work / name) for name in FILES[stage]}
+    (work / "job_state.json").write_text(json.dumps(state), encoding="utf-8")
 
 
 def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, translate: str, cfg: JobConfig) -> None:
@@ -23,6 +33,12 @@ def _plant_job(work: Path, video: Path, prev_mp4: Path, *, whisper: str, transla
         json.dumps({"stage": "done", "job_id": "reuse1"}),
         encoding="utf-8",
     )
+    for name in FILES["build_cues"]:
+        (work / name).write_text(
+            json.dumps([{"start": 0.0, "end": 1.0, "zh": "你好", "en": None}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+    _record_artifacts(work, "build_cues", "translate", "render")
     prev_mp4.write_bytes(b"burned-mp4")
     (work / "report.json").write_text(
         json.dumps(
@@ -218,6 +234,7 @@ def test_single_zh_with_en_dub_line_can_reexport(tmp_path: Path, video: Path):
     work = tmp_path / "dub-ok"
     _plant_job(work, video, tmp_path / "a.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     (work / "dubbed.mp4").write_bytes(b"dubbed")
+    _record_artifacts(work, "dub")
     report = json.loads((work / "report.json").read_text(encoding="utf-8"))
     report["subtitle_mode"] = "single:zh"
     report["target_lang"] = "en"
@@ -273,6 +290,7 @@ def test_english_target_without_dubbed_file_blocks_reuse(tmp_path: Path, video: 
     (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
     assert _can_reexport(cfg, work) is False
     (work / "dubbed.mp4").write_bytes(b"en-dub")
+    _record_artifacts(work, "dub")
     assert _can_reexport(cfg, work) is True
     cfg.subtitle_zh_color = "#00AAFF"
     assert _can_reexport(cfg, work) is False
@@ -326,6 +344,7 @@ def test_reexport_uses_fitted_cues_for_netflix(tmp_path: Path, video: Path, monk
         json.dumps([{"start": 0.0, "end": 2.0, "zh": "拆开后的短句", "en": None}], ensure_ascii=False),
         encoding="utf-8",
     )
+    _record_artifacts(work, "translate", "fit_subs")
     result = run(cfg)
     assert result.reused is True
     assert "拆开后的短句" in seen
@@ -373,6 +392,7 @@ def test_no_burn_dub_reexport_reports_new_sidecar_on_every_relocation(tmp_path, 
     work = tmp_path / "bilingual-sub" / artifact_key(cfg)
     _plant_job(work, video, tmp_path / "old.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model, cfg=cfg)
     (work / "dubbed.mp4").write_bytes(b"dubbed video")
+    _record_artifacts(work, "dub")
     report = json.loads((work / "report.json").read_text())
     report.update(burn=False, target_lang="en", subtitle_mode="single:zh", translated=False,
                   dubbed=True, detected_spoken="zh", output_dub=str(tmp_path / "old-dub.mp4"))

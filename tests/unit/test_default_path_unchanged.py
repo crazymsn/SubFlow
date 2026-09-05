@@ -16,6 +16,14 @@ def _fake_dub(*_a, output, **_k):
     return dest
 
 
+def _transcript(text, kwargs):
+    from bilingual_sub.models import Segment
+
+    segments = [Segment(0.2, 1.6, text)]
+    kwargs["out_json"].write_text(json.dumps({"segments": [s.__dict__ for s in segments]}), encoding="utf-8")
+    return segments
+
+
 def test_jobconfig_defaults_match_legacy_path():
     cfg = JobConfig(
         input_video=Path("a.mp4"),
@@ -57,7 +65,7 @@ def test_default_pipeline_skips_ytdlp_refine_dub(tmp_path: Path, monkeypatch):
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     def fake_write(cues, preset, ass_path, srt_path, **kwargs):
@@ -118,7 +126,7 @@ def test_pipeline_uses_refine_when_enabled(tmp_path: Path, monkeypatch):
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -179,7 +187,7 @@ def test_pipeline_skips_translate_when_single_source_lang(tmp_path: Path, monkey
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -231,7 +239,7 @@ def test_pipeline_translates_bilingual_when_target_is_chinese(tmp_path: Path, mo
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -286,7 +294,7 @@ def test_pipeline_dubs_onto_burned_output(tmp_path: Path, monkeypatch):
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -352,7 +360,7 @@ def test_same_lang_job_does_not_dub(tmp_path: Path, monkeypatch):
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -407,7 +415,7 @@ def test_same_lang_job_does_not_dub(tmp_path: Path, monkeypatch):
 @pytest.mark.parametrize("source", ["zh", "auto", "en"])
 def test_chinese_gptsovits_checkbox_keeps_original(tmp_path: Path, monkeypatch, target, source):
     from bilingual_sub.core.translate import TranslateStats
-    from bilingual_sub.models import Cue, Segment
+    from bilingual_sub.models import Cue
     from bilingual_sub.pipeline import run
 
     video = tmp_path / "a.mp4"
@@ -419,7 +427,7 @@ def test_chinese_gptsovits_checkbox_keeps_original(tmp_path: Path, monkeypatch, 
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
@@ -431,7 +439,7 @@ def test_chinese_gptsovits_checkbox_keeps_original(tmp_path: Path, monkeypatch, 
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.transcribe",
-        lambda wav, **kwargs: [Segment(0.2, 1.6, "大家好")],
+        lambda wav, **kwargs: _transcript("大家好", kwargs),
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.translate_cues",
@@ -473,7 +481,7 @@ def test_chinese_gptsovits_checkbox_keeps_original(tmp_path: Path, monkeypatch, 
 
 def test_detected_english_on_zh_target_selects_sovits(tmp_path: Path, monkeypatch):
     from bilingual_sub.core.translate import TranslateStats
-    from bilingual_sub.models import Cue, Segment
+    from bilingual_sub.models import Cue
     from bilingual_sub.pipeline import run
 
     video = tmp_path / "a.mp4"
@@ -485,7 +493,7 @@ def test_detected_english_on_zh_target_selects_sovits(tmp_path: Path, monkeypatc
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
@@ -497,7 +505,7 @@ def test_detected_english_on_zh_target_selects_sovits(tmp_path: Path, monkeypatc
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.transcribe",
-        lambda wav, **kwargs: [Segment(0.2, 1.6, "Hello everyone")],
+        lambda wav, **kwargs: _transcript("Hello everyone", kwargs),
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.translate_cues",
@@ -560,7 +568,7 @@ def test_pipeline_pair_translates_english_asr_into_chinese(tmp_path: Path, monke
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -617,7 +625,7 @@ def test_english_speech_target_zh_dubs(tmp_path: Path, monkeypatch):
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
@@ -688,7 +696,7 @@ def test_english_target_dubs_even_when_asr_looks_english(tmp_path: Path, monkeyp
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -746,7 +754,7 @@ def test_english_target_dubs_even_when_asr_looks_english(tmp_path: Path, monkeyp
 
 def test_dub_failure_does_not_keep_original_audio_quietly(tmp_path: Path, monkeypatch):
     from bilingual_sub.core.translate import TranslateStats
-    from bilingual_sub.models import Cue, Segment
+    from bilingual_sub.models import Cue
     from bilingual_sub.pipeline import run
 
     video = tmp_path / "a.mp4"
@@ -756,7 +764,7 @@ def test_dub_failure_does_not_keep_original_audio_quietly(tmp_path: Path, monkey
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
@@ -768,7 +776,7 @@ def test_dub_failure_does_not_keep_original_audio_quietly(tmp_path: Path, monkey
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.transcribe",
-        lambda wav, **kwargs: [Segment(0.2, 1.6, "大家好")],
+        lambda wav, **kwargs: _transcript("大家好", kwargs),
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.translate_cues",
@@ -805,7 +813,7 @@ def test_dub_failure_does_not_keep_original_audio_quietly(tmp_path: Path, monkey
 
 def test_chinese_transcript_dubs_to_english_even_if_source_combo_is_en(tmp_path: Path, monkeypatch):
     from bilingual_sub.core.translate import TranslateStats
-    from bilingual_sub.models import Cue, Segment
+    from bilingual_sub.models import Cue
     from bilingual_sub.pipeline import run
 
     video = tmp_path / "a.mp4"
@@ -816,7 +824,7 @@ def test_chinese_transcript_dubs_to_english_even_if_source_combo_is_en(tmp_path:
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
@@ -828,7 +836,7 @@ def test_chinese_transcript_dubs_to_english_even_if_source_combo_is_en(tmp_path:
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.transcribe",
-        lambda wav, **kwargs: [Segment(0.2, 1.6, "大家好，欢迎回来")],
+        lambda wav, **kwargs: _transcript("大家好，欢迎回来", kwargs),
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.translate_cues",
@@ -933,7 +941,7 @@ def test_pipeline_translates_screen_and_spoken_for_japanese(tmp_path: Path, monk
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -986,7 +994,7 @@ def test_pipeline_translates_screen_and_spoken_for_japanese(tmp_path: Path, monk
 
 def test_pipeline_prompt_lang_follows_detected_spoken(tmp_path: Path, monkeypatch):
     from bilingual_sub.core.translate import TranslateStats
-    from bilingual_sub.models import Cue, Segment
+    from bilingual_sub.models import Cue
     from bilingual_sub.pipeline import run
 
     video = tmp_path / "a.mp4"
@@ -997,7 +1005,7 @@ def test_pipeline_prompt_lang_follows_detected_spoken(tmp_path: Path, monkeypatc
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(
@@ -1009,7 +1017,7 @@ def test_pipeline_prompt_lang_follows_detected_spoken(tmp_path: Path, monkeypatc
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.transcribe",
-        lambda wav, **kwargs: [Segment(0.2, 1.6, "今日は良い天気です")],
+        lambda wav, **kwargs: _transcript("今日は良い天気です", kwargs),
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.translate_cues",
@@ -1101,7 +1109,12 @@ def test_resume_uses_cached_source_when_url_input_missing(tmp_path: Path, monkey
         "input_fingerprint": video_fingerprint(cached), "source_url": cfg.source_url,
         "subtitle_mode": cfg.subtitle_mode, "processing_profile": processing_profile(cfg, load_settings()),
     }), encoding="utf-8")
-    (work / "job_state.json").write_text('{"stage":"transcribe","job_id":"cached-asr"}', encoding="utf-8")
+    from bilingual_sub.core.file_io import file_digest
+    (work / "job_state.json").write_text(json.dumps({
+        "stage": "transcribe", "job_id": "cached-asr", "artifact_schema": 1,
+        "artifacts": {stage: {name: file_digest(work / name)} for stage, name in
+                      (("silence", "silences.json"), ("transcribe", "transcript.json"))},
+    }), encoding="utf-8")
     result = run(cfg)
     assert dest.read_bytes() == b"ok"
     assert result.output_mp4 == dest

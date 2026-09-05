@@ -26,6 +26,7 @@ from bilingual_sub.config import (
 )
 from bilingual_sub.core.audio import detect_silences, extract_wav
 from bilingual_sub.core.burn import burn_subtitles
+from bilingual_sub.core.cache_records import FILES, completed_artifacts, verify_artifacts
 from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.cues import build_cues
 from bilingual_sub.core.dub import dub_cues
@@ -120,16 +121,25 @@ def _save_state(
     extra: dict | None = None,
     *,
     control: JobControl | None = None,
+    produced: dict[str, list[str]] | None = None,
 ) -> None:
     previous = _load_json(work_dir / "job_state.json")
     completed = stage if stage in STAGES else previous.get("completed_stage", previous.get("stage", "init"))
-    data = {"stage": stage, "completed_stage": completed, "paused": False, "stopped": False}
+    data = {"stage": stage, "completed_stage": completed, "paused": False, "stopped": False,
+            "artifact_schema": 1,
+            "artifacts": completed_artifacts(work_dir, previous, completed, produced,
+                checkpoint=(lambda: _gate(control)) if produced else None)}
     if control:
         data["paused"] = control.is_paused()
         data["stopped"] = control.is_stopped()
     if extra:
         data.update(extra)
     write_json(work_dir / "job_state.json", data)
+
+
+def _verify_cache(work: Path, stage: str, control: JobControl | None = None) -> dict:
+    return verify_artifacts(work, _load_json(work / "job_state.json"), stage,
+                            checkpoint=lambda: _gate(control))
 
 
 def video_fingerprint(path: Path, *, control: JobControl | None = None) -> dict:
@@ -345,10 +355,15 @@ def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings |
     report = _load_json(work / "report.json")
     if not state.get("job_id") or report.get("job_id") != state["job_id"]:
         return False
+    _verify_cache(work, "build_cues", control)
+    _verify_cache(work, "translate", control)
     fitted = work / "cues.fitted.json"
     fitted_cues = None
     if config.subtitle_mode == "netflix_single" and fitted.is_file():
+        _verify_cache(work, "fit_subs", control)
         fitted_cues = load_cues_json(fitted)
+    elif config.subtitle_mode == "netflix_single":
+        return False
     play = report.get("play_res")
     if play is not None and (not isinstance(play, list) or len(play) != 2
                             or any(not isinstance(v, int) or isinstance(v, bool)
@@ -413,7 +428,7 @@ def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings |
         config.source_lang,
         heard,
         config.target_lang,
-        cues=_original_cues(work),
+        cues=_original_cues(work, control),
         enable_dub=config.enable_dub,
         tts_provider=config.tts_provider,
     )
@@ -422,6 +437,7 @@ def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings |
     if needs_voice:
         if not (work / "dubbed.mp4").is_file():
             return False
+        _verify_cache(work, "dub", control)
         saved_tts = report.get("tts_fingerprint")
         if saved_tts and saved_tts != _tts_fingerprint(config, detected_spoken=heard, cues=cues):
             return False
@@ -468,6 +484,10 @@ def _export_subs(
     )
     if ass_out != ass_path:
         copy_file(ass_out, ass_path, checkpoint=lambda: _gate(control))
+    state = _load_json(work / "job_state.json")
+    stage = state.get("completed_stage", state.get("stage", "render"))
+    _save_state(work, stage, {"job_id": state.get("job_id")}, control=control,
+                produced={"render": list(FILES["render"])})
     return ass_out
 
 
@@ -483,7 +503,7 @@ def _copy_or_burn(
         config.source_lang,
         heard,
         config.target_lang,
-        cues=_original_cues(work),
+        cues=_original_cues(work, control),
         enable_dub=config.enable_dub,
         tts_provider=config.tts_provider,
     )
@@ -493,6 +513,7 @@ def _copy_or_burn(
         dubbed = work / "dubbed.mp4"
         if not dubbed.is_file():
             raise FileNotFoundError("previous dub missing; cannot export without re-running")
+        _verify_cache(work, "dub", control)
         from bilingual_sub.gui.output_path import resolve_dub_sidecar
 
         dest = resolve_dub_sidecar(config.output_video, config.output_srt)
@@ -506,6 +527,7 @@ def _copy_or_burn(
         dubbed = work / "dubbed.mp4"
         if not dubbed.is_file():
             raise FileNotFoundError("previous dub missing; cannot export without re-running")
+        _verify_cache(work, "dub", control)
         if dubbed.resolve() != dest.resolve():
             copy_file(dubbed, dest, checkpoint=lambda: _gate(control))
         return dest
@@ -529,6 +551,7 @@ def _copy_or_burn(
         raise RuntimeError("缓存源视频与任务记录不符，请从 ingest 重新处理")
     if not ass_path.is_file():
         raise FileNotFoundError("previous subtitles missing; cannot export without re-running")
+    _verify_cache(work, "render", control)
     burn_subtitles(
         source,
         ass_path,
@@ -541,10 +564,11 @@ def _copy_or_burn(
     return dest
 
 
-def _original_cues(work: Path) -> list[Cue]:
+def _original_cues(work: Path, control: JobControl | None = None) -> list[Cue]:
     for name in ("cues.source.json", "cues.zh.json"):
         path = work / name
         if path.is_file():
+            _verify_cache(work, "build_cues", control)
             return load_cues_json(path)
     return []
 
@@ -670,7 +694,7 @@ def _reexport_if_possible(
     logger.info("reexport job %s work_dir=%s", job_id, work)
     _validate_output_paths(config, work, include_dub=job_needs_dub(
         config.source_lang, str(report.get("detected_spoken") or config.source_lang),
-        config.target_lang, cues=_original_cues(work), enable_dub=config.enable_dub,
+        config.target_lang, cues=_original_cues(work, control), enable_dub=config.enable_dub,
         tts_provider=config.tts_provider,
     ))
     prog("export", 0.85)
@@ -955,7 +979,11 @@ def _run_job(
         ts = time.time()
         extract_wav(source, speech, preview_sec=preview_sec, control=control)
         stages["extract_sec"] = time.time() - ts
-        _save_state(work, "extract", {"job_id": job_id}, control=control)
+        _save_state(work, "extract", {"job_id": job_id}, control=control,
+                    produced={"extract": list(FILES["extract"])})
+
+    if _should_run(config.resume_from, "silence") or _should_run(config.resume_from, "transcribe"):
+        _verify_cache(work, "extract", control)
 
     if _should_run(config.resume_from, "silence"):
         _gate(control)
@@ -969,8 +997,10 @@ def _run_job(
         )
         write_json(silences_path, silences)
         stages["silence_sec"] = time.time() - ts
-        _save_state(work, "silence", {"job_id": job_id}, control=control)
+        _save_state(work, "silence", {"job_id": job_id}, control=control,
+                    produced={"silence": list(FILES["silence"])})
     else:
+        _verify_cache(work, "silence", control)
         silences = _load_silences(silences_path)
 
     asr_lang = whisper_language(config.source_lang)
@@ -1009,8 +1039,10 @@ def _run_job(
                 control=control,
             )
         stages["transcribe_sec"] = time.time() - ts
-        _save_state(work, "transcribe", {"job_id": job_id, "asr_backend": "whisperx" if used_x else "whisper"}, control=control)
+        _save_state(work, "transcribe", {"job_id": job_id, "asr_backend": "whisperx" if used_x else "whisper"}, control=control,
+                    produced={"transcribe": list(FILES["transcribe"])})
     else:
+        _verify_cache(work, "transcribe", control)
         segments = load_transcript(transcript_path)
 
     if _should_run(config.resume_from, "build_cues"):
@@ -1029,10 +1061,13 @@ def _run_job(
         save_cues_json(cues, cues_zh_path)
         save_cues_json(cues, work / "cues.source.json")
         stages["build_cues_sec"] = time.time() - ts
-        _save_state(work, "build_cues", {"job_id": job_id, "cue_count": len(cues)}, control=control)
+        _save_state(work, "build_cues", {"job_id": job_id, "cue_count": len(cues)}, control=control,
+                    produced={"build_cues": list(FILES["build_cues"])})
     else:
-        cues = load_cues_json(cues_zh_path if cues_zh_path.is_file() else cues_bi_path)
-    asr_cues = load_cues_json(cues_zh_path) if cues_zh_path.is_file() else cues
+        _verify_cache(work, "build_cues", control)
+        cues = load_cues_json(cues_zh_path)
+    _verify_cache(work, "build_cues", control)
+    asr_cues = load_cues_json(cues_zh_path)
     detected_spoken = spoken_family(asr_cues, config.source_lang)
     _validate_output_paths(config, work, include_dub=job_needs_dub(
         config.source_lang, detected_spoken, config.target_lang, cues=asr_cues,
@@ -1042,6 +1077,7 @@ def _run_job(
     if _should_run(config.resume_from, "glossary"):
         _gate(control)
         ts = time.time()
+        glossary_files: list[str] = []
         if config.glossary_generate:
             prog("glossary", 0.52)
             from bilingual_sub.adapters.meding import create_client
@@ -1062,8 +1098,14 @@ def _run_job(
                 else:
                     glossary = Glossary.merge(glossary, generated)
                 glossary.save(work / "glossary.merged.yaml")
+                glossary_files = list(FILES["glossary"])
         stages["glossary_sec"] = time.time() - ts
-        _save_state(work, "glossary", {"job_id": job_id}, control=control)
+        _save_state(work, "glossary", {"job_id": job_id}, control=control,
+                    produced={"glossary": glossary_files})
+    else:
+        saved_glossary = _verify_cache(work, "glossary", control)
+        if "glossary.merged.yaml" in saved_glossary:
+            glossary = Glossary.load(work / "glossary.merged.yaml")
 
     if _should_run(config.resume_from, "translate"):
         _gate(control)
@@ -1200,8 +1242,10 @@ def _run_job(
             api_calls = tstats.api_calls
         save_cues_json(cues, cues_bi_path)
         stages["translate_sec"] = time.time() - ts
-        _save_state(work, "translate", {"job_id": job_id, "missing_en": len(missing)}, control=control)
+        _save_state(work, "translate", {"job_id": job_id, "missing_en": len(missing)}, control=control,
+                    produced={"translate": list(FILES["translate"])})
     else:
+        _verify_cache(work, "translate", control)
         cues = load_cues_json(cues_bi_path)
 
     if _should_run(config.resume_from, "fit_subs"):
@@ -1212,10 +1256,12 @@ def _run_job(
             cues = fit_cues(cues, config.target_lang, use_target=True)
         save_cues_json(cues, work / "cues.fitted.json")
         stages["fit_subs_sec"] = time.time() - ts
-        _save_state(work, "fit_subs", {"job_id": job_id}, control=control)
+        _save_state(work, "fit_subs", {"job_id": job_id}, control=control,
+                    produced={"fit_subs": list(FILES["fit_subs"])})
     else:
         fitted = work / "cues.fitted.json"
-        if config.subtitle_mode == "netflix_single" and fitted.is_file():
+        if config.subtitle_mode == "netflix_single":
+            _verify_cache(work, "fit_subs", control)
             cues = load_cues_json(fitted)
 
     drop_target_if_unneeded(
@@ -1253,9 +1299,11 @@ def _run_job(
         if ass_out != ass_path:
             copy_file(ass_out, ass_path, checkpoint=lambda: _gate(control))
         stages["render_sec"] = time.time() - ts
-        _save_state(work, "render", {"job_id": job_id}, control=control)
+        _save_state(work, "render", {"job_id": job_id}, control=control,
+                    produced={"render": list(FILES["render"])})
     elif not srt_out.is_file() or not ass_out.is_file() or not ass_path.is_file():
         _export_subs(config, work, cues, play_res, control=control)
+    _verify_cache(work, "render", control)
 
     dest_mp4 = config.output_video or srt_out.with_suffix(".mp4")
     output_mp4: Path | None = None
@@ -1289,7 +1337,8 @@ def _run_job(
         if not need_dub:
             output_mp4 = dest_mp4
         stages["burn_sec"] = time.time() - ts
-        _save_state(work, "burn", {"job_id": job_id}, control=control)
+        _save_state(work, "burn", {"job_id": job_id}, control=control,
+                    produced={"burn": ["burned.mp4"] if need_dub else []})
     elif config.burn and not need_dub and dest_mp4.is_file():
         output_mp4 = dest_mp4
 
@@ -1306,6 +1355,12 @@ def _run_job(
         sidecar = resolve_dub_sidecar(config.output_video, srt_out)
         dub_tmp = work / "dubbed.mp4"
         try:
+            if config.burn:
+                if not _verify_cache(work, "burn", control):
+                    raise RuntimeError("缺少烧录缓存身份，请从 burn 重新处理")
+                video_for_dub = burned_mp4
+            else:
+                video_for_dub = source
             if tts_name == "gptsovits":
                 from bilingual_sub.adapters.tts.gptsovits import to_sovits_lang
                 from bilingual_sub.adapters.tts.gptsovits_runtime import (
@@ -1336,15 +1391,11 @@ def _run_job(
                     else config.source_lang
                 ),
             )
-            if config.burn and burned_mp4.is_file():
-                video_for_dub = burned_mp4
-            elif config.burn and dest_mp4.is_file():
-                video_for_dub = dest_mp4
-            else:
-                video_for_dub = source
             # Subtitle fitting changes display timing and stores only the shown
             # language. Synthesize complete translated sentences at their
             # original intervals, including when resuming directly at dub.
+            if config.subtitle_mode == "netflix_single":
+                _verify_cache(work, "translate", control)
             speech_cues = (load_cues_json(cues_bi_path)
                            if config.subtitle_mode == "netflix_single" else cues)
             if not any(spoken_line(cue, config.target_lang) for cue in speech_cues):
@@ -1378,7 +1429,8 @@ def _run_job(
             logger.warning("dub failed: %s", exc)
             raise RuntimeError(f"配音失败，成片仍是原声：{exc}") from exc
         stages["dub_sec"] = time.time() - ts
-        _save_state(work, "dub", {"job_id": job_id}, control=control)
+        _save_state(work, "dub", {"job_id": job_id}, control=control,
+                    produced={"dub": list(FILES["dub"])})
 
     verify_source()
     if processing_profile(config, settings) != process_identity:

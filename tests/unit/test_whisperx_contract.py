@@ -59,7 +59,7 @@ def test_pipeline_falls_back_without_calling_x(tmp_path, monkeypatch):
     clip.write_bytes(b"x")
 
     monkeypatch.setattr("bilingual_sub.pipeline.probe_video", lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True})
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
 
@@ -119,7 +119,7 @@ def test_pipeline_whisperx_gets_normalized_language(tmp_path, monkeypatch):
         "bilingual_sub.pipeline.probe_video",
         lambda p: {"width": 1280, "height": 720, "duration": 2, "has_audio": True},
     )
-    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda *a, **k: None)
+    monkeypatch.setattr("bilingual_sub.pipeline.extract_wav", lambda src, path, **k: path.write_bytes(b"audio fixture"))
     monkeypatch.setattr("bilingual_sub.pipeline.detect_silences", lambda *a, **k: [])
     monkeypatch.setattr("bilingual_sub.pipeline.copy_to_ascii_workdir", lambda src, work, **kw: src)
     monkeypatch.setattr(

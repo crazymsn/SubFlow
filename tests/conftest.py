@@ -13,6 +13,12 @@ def _isolate_resource_claims(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_last_job(tmp_path_factory, monkeypatch):
+    pointer = tmp_path_factory.mktemp("last-job") / "last_job.json"
+    monkeypatch.setattr("bilingual_sub.pipeline.last_job_pointer", lambda: pointer)
+
+
+@pytest.fixture(autouse=True)
 def _reset_ui_locale():
     set_locale("zh-Hans")
     yield

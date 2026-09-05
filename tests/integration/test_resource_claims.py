@@ -235,6 +235,7 @@ def test_overwritten_or_unverified_previous_movie_is_rebuilt(tmp_path, monkeypat
     cfg.input_video.write_bytes(b"original input")
     report["input_fingerprint"] = p.video_fingerprint(cfg.input_video)
     (tmp_path / "subs.ass").write_text("subtitles")
+    p._save_state(tmp_path, "render", produced={"render": ["subs.ass"]})
     monkeypatch.setattr(p, "_style_same", lambda *a: True)
     burned = []
     def burn(source, ass, output, **kwargs):
