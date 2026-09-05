@@ -532,6 +532,22 @@ def test_resume_after_render_recreates_missing_subtitle_exports(job, missing):
     assert path.read_bytes() == expected
 
 
+@pytest.mark.parametrize("stage", ["burn", "dub", "done"])
+@pytest.mark.parametrize("relocate", [False, True])
+def test_resume_rebuilds_existing_external_subtitles_from_verified_cues(job, stage, relocate):
+    cfg, settings, calls, _, _ = job
+    first = p.run(cfg, settings)
+    expected = (first.output_srt.read_bytes(), first.output_ass.read_bytes())
+    if relocate:
+        cfg.output_srt = cfg.output_srt.with_name("other.srt")
+    cfg.output_srt.write_bytes(b"unrelated SRT")
+    cfg.output_srt.with_suffix(".ass").write_bytes(b"unrelated ASS")
+    cfg.resume_from = stage
+    result = p.run(cfg, settings)
+    assert (result.output_srt.read_bytes(), result.output_ass.read_bytes()) == expected
+    assert calls["asr"] == 1
+
+
 def test_subtitle_export_replace_failure_restores_existing_pair(job, monkeypatch):
     cfg, settings, _, _, _ = job
     first = p.run(cfg, settings)
@@ -547,6 +563,70 @@ def test_subtitle_export_replace_failure_restores_existing_pair(job, monkeypatch
     with pytest.raises(PermissionError, match="SRT is busy"):
         p.run(cfg, settings)
     assert all(path.read_bytes() == data for path, data in originals.items())
+
+
+@pytest.mark.parametrize("resume", ["render", None])
+def test_work_subtitle_commit_failure_restores_external_pair(job, monkeypatch, resume):
+    cfg, settings, _, _, _ = job
+    settings.video.work_dir, cfg.work_dir = str(cfg.work_dir), Path("auto")
+    first = p.run(cfg, settings)
+    work_ass = first.report_path.parent / "subs.ass"
+    originals = {path: path.read_bytes() for path in (first.output_srt, first.output_ass, work_ass)}
+    cfg.subtitle_en_color = "#ABCDEF"
+    cfg.resume_from = resume
+    replace = Path.replace
+    def fail_work_ass(path, destination):
+        if destination == work_ass:
+            raise PermissionError("cache ASS is busy")
+        return replace(path, destination)
+    monkeypatch.setattr(Path, "replace", fail_work_ass)
+    with pytest.raises(PermissionError, match="cache ASS is busy"):
+        p.run(cfg, settings)
+    assert all(path.read_bytes() == data for path, data in originals.items())
+
+
+@pytest.mark.parametrize("missing", ["srt", "ass", "work_ass"])
+def test_missing_subtitle_does_not_allow_resume_with_different_style(job, missing):
+    cfg, settings, _, _, _ = job
+    first = p.run(cfg, settings)
+    path = {"srt": first.output_srt, "ass": first.output_ass,
+            "work_ass": cfg.work_dir / "subs.ass"}[missing]
+    path.unlink()
+    cfg.subtitle_en_color = "#ABCDEF"
+    cfg.resume_from = "burn"
+    with pytest.raises(ValueError, match="render"):
+        p.run(cfg, settings)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("fail_report", [False, True])
+def test_reexport_emits_done_only_after_report_is_saved(job, monkeypatch, fail_report):
+    cfg, settings, _, _, _ = job
+    settings.video.work_dir, cfg.work_dir = str(cfg.work_dir), Path("auto")
+    first = p.run(cfg, settings)
+    previous = first.report_path.read_bytes()
+    cfg.output_srt = cfg.output_srt.with_name("new.srt")
+    write = p.write_json
+    def write_report(path, data):
+        if fail_report and path == first.report_path:
+            raise OSError("report disk error")
+        return write(path, data)
+    monkeypatch.setattr(p, "write_json", write_report)
+    progress = []
+    saved_at_done = []
+    def observe(stage, pct):
+        progress.append((stage, pct))
+        if stage == "done":
+            saved_at_done.append(json.loads(first.report_path.read_text())["output_srt"])
+    if fail_report:
+        with pytest.raises(OSError, match="report disk error"):
+            p.run(cfg, settings, on_progress=observe)
+        assert ("done", 1.0) not in progress
+        assert first.report_path.read_bytes() == previous
+    else:
+        assert p.run(cfg, settings, on_progress=observe).reused
+        assert saved_at_done == [str(cfg.output_srt)]
+        assert progress[-1] == ("done", 1.0)
 
 
 def test_cached_movie_export_cancels_before_replacing_existing_movie(tmp_path, monkeypatch):

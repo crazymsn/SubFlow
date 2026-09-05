@@ -20,6 +20,7 @@ from bilingual_sub.adapters.whisperx_backend import WhisperXBackend, ensure_whis
 from bilingual_sub.adapters.ytdlp import download as ytdlp_download
 from bilingual_sub.config import (
     AppSettings,
+    StylePreset,
     default_glossary_path,
     load_settings,
     load_style_preset,
@@ -30,7 +31,7 @@ from bilingual_sub.core.cache_records import FILES, completed_artifacts, verify_
 from bilingual_sub.core.control import JobControl, JobStopped
 from bilingual_sub.core.cues import build_cues
 from bilingual_sub.core.dub import dub_cues
-from bilingual_sub.core.file_io import copy_file, discard_temporary, file_digest
+from bilingual_sub.core.file_io import copy_file, copy_files, discard_temporary, file_digest
 from bilingual_sub.core.glossary import Glossary
 from bilingual_sub.core.glossary_ai import extract_glossary
 from bilingual_sub.core.job_profile import processing_profile, render_profile
@@ -505,6 +506,40 @@ def _style_same(report: dict, config: JobConfig, settings: AppSettings) -> bool:
     return report.get("render_profile") == render_profile(config, settings)
 
 
+def _write_subtitle_outputs(
+    config: JobConfig, settings: AppSettings, work: Path, cues: list[Cue],
+    play_res: tuple[int, int], preset: StylePreset, render_context: dict,
+    control: JobControl | None = None, *, expected_ass: str | None = None,
+) -> Path:
+    """Publish the external subtitle pair and burn input as one rollback set."""
+    srt_out = config.output_srt
+    ass_out = srt_out.with_suffix(".ass")
+    ass_path = work / "subs.ass"
+    def verify_context() -> None:
+        _gate(control)
+        if render_context != _artifact_context("render", config, settings, work, control):
+            raise ValueError("字幕样式与任务记录不符，请从 render 重新处理")
+    verify_context()
+    with tempfile.TemporaryDirectory(prefix=".subflow-render-", dir=work) as folder:
+        staged_ass, staged_srt = Path(folder) / "subs.ass", Path(folder) / "subs.srt"
+        write_subtitles(
+            cues, preset, staged_ass, staged_srt, play_res=play_res,
+            mode=config.subtitle_mode,
+            han_lang=screen_han_lang(config.source_lang, config.target_lang, config.subtitle_mode),
+            target_lang=config.target_lang, source_lang=config.source_lang,
+            checkpoint=lambda: _gate(control),
+        )
+        digests = {path: file_digest(path, checkpoint=lambda: _gate(control))
+                   for path in (staged_ass, staged_srt)}
+        if expected_ass is not None and digests[staged_ass] != expected_ass:
+            raise ValueError("重建字幕与 render 阶段缓存记录不符，请从 render 重新处理")
+        outputs = [(staged_ass, ass_out), (staged_srt, srt_out)]
+        if ass_out.resolve() != ass_path.resolve():
+            outputs.append((staged_ass, ass_path))
+        copy_files(outputs, expected=digests, checkpoint=lambda: _gate(control), before_commit=verify_context)
+    return ass_out
+
+
 def _export_subs(
     config: JobConfig,
     work: Path,
@@ -512,29 +547,27 @@ def _export_subs(
     play_res: tuple[int, int],
     control: JobControl | None = None,
     settings: AppSettings | None = None,
+    *, restore: bool = False,
 ) -> Path:
     preset = _styled_preset(config)
     context_settings = settings or load_settings()
     render_context = _artifact_context("render", config, context_settings, work, control)
     render_context["preset"] = preset.model_dump()
     ass_path = work / "subs.ass"
-    srt_out = config.output_srt
-    srt_out.parent.mkdir(parents=True, exist_ok=True)
-    ass_out = srt_out.with_suffix(".ass") if srt_out.suffix else Path(str(srt_out) + ".ass")
-    write_subtitles(
-        cues,
-        preset,
-        ass_out,
-        srt_out,
-        play_res=play_res,
-        mode=config.subtitle_mode,
-        han_lang=screen_han_lang(config.source_lang, config.target_lang, config.subtitle_mode),
-        target_lang=config.target_lang,
-        source_lang=config.source_lang,
-        checkpoint=lambda: _gate(control),
-    )
-    if ass_out != ass_path:
-        copy_file(ass_out, ass_path, checkpoint=lambda: _gate(control))
+    expected_ass = None
+    if restore:
+        state = _load_json(work / "job_state.json")
+        contexts, artifacts = state.get("artifact_contexts"), state.get("artifacts")
+        record = artifacts.get("render") if isinstance(artifacts, dict) else None
+        if (state.get("artifact_schema") != 1 or not isinstance(contexts, dict)
+                or contexts.get("render") != render_context or not isinstance(record, dict)
+                or set(record) != {"subs.ass"} or not isinstance(record["subs.ass"], str)):
+            raise ValueError("字幕设置或记录与 render 阶段缓存不符，请从 render 重新处理")
+        expected_ass = record["subs.ass"]
+        if ass_path.exists():
+            _verify_cache(work, "render", control)
+    ass_out = _write_subtitle_outputs(config, context_settings, work, cues, play_res, preset,
+                                      render_context, control, expected_ass=expected_ass)
     if render_context != _artifact_context("render", config, context_settings, work, control):
         raise RuntimeError("导出期间字幕样式发生变化，请从 render 重新处理")
     state = _load_json(work / "job_state.json")
@@ -760,8 +793,7 @@ def _reexport_if_possible(
     output_mp4 = _copy_or_burn(config, work, settings, report, control=control)
     _gate(control)
     stages = {"export_sec": time.time() - ts}
-    prog("done", 1.0)
-    return _result_from_work(
+    result = _result_from_work(
         job_id=job_id,
         config=config,
         settings=settings,
@@ -776,6 +808,8 @@ def _reexport_if_possible(
         reused=True,
         control=control,
     )
+    prog("done", 1.0)
+    return result
 
 
 def _gate(control: JobControl | None) -> None:
@@ -1342,7 +1376,6 @@ def _run_job(
     )
     if is_pair_mode(config.subtitle_mode):
         normalize_pair_fields(cues)
-    han_lang = screen_han_lang(config.source_lang, config.target_lang, config.subtitle_mode)
     spoken_han = spoken_han_lang(config.target_lang)
     if spoken_han:
         apply_han_to_cues(cues, spoken_han)
@@ -1353,28 +1386,15 @@ def _run_job(
         ts = time.time()
         if render_context != _artifact_context("render", config, settings, work, control):
             raise RuntimeError("处理期间字幕样式发生变化，请从 render 重新处理")
-        write_subtitles(
-            cues,
-            preset,
-            ass_out,
-            srt_out,
-            play_res=play_res,
-            mode=config.subtitle_mode,
-            han_lang=han_lang,
-            target_lang=config.target_lang,
-            source_lang=config.source_lang,
-            checkpoint=lambda: _gate(control),
-        )
-        if ass_out != ass_path:
-            copy_file(ass_out, ass_path, checkpoint=lambda: _gate(control))
+        _write_subtitle_outputs(config, settings, work, cues, play_res, preset, render_context, control)
         stages["render_sec"] = time.time() - ts
         if render_context != _artifact_context("render", config, settings, work, control):
             raise RuntimeError("渲染期间字幕样式发生变化，请从 render 重新处理")
         _save_state(work, "render", {"job_id": job_id}, control=control,
                     produced={"render": list(FILES["render"])},
                     artifact_context=render_context)
-    elif not srt_out.is_file() or not ass_out.is_file() or not ass_path.is_file():
-        _export_subs(config, work, cues, play_res, control=control, settings=settings)
+    else:
+        _export_subs(config, work, cues, play_res, control=control, settings=settings, restore=True)
     _verify_artifact_context(work, "render", config, settings, control)
 
     dest_mp4 = config.output_video or srt_out.with_suffix(".mp4")
