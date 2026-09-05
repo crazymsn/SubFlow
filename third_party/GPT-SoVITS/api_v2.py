@@ -340,17 +340,17 @@ def check_params(req: dict):
         return JSONResponse(status_code=400, content={"message": "text is required"})
     if text_lang in [None, ""]:
         return JSONResponse(status_code=400, content={"message": "text_lang is required"})
-    elif text_lang.lower() not in tts_config.languages:
+    elif text_lang.lower() not in tts_pipeline.configs.languages:
         return JSONResponse(
             status_code=400,
-            content={"message": f"text_lang: {text_lang} is not supported in version {tts_config.version}"},
+            content={"message": f"text_lang: {text_lang} is not supported in version {tts_pipeline.configs.version}"},
         )
     if prompt_lang in [None, ""]:
         return JSONResponse(status_code=400, content={"message": "prompt_lang is required"})
-    elif prompt_lang.lower() not in tts_config.languages:
+    elif prompt_lang.lower() not in tts_pipeline.configs.languages:
         return JSONResponse(
             status_code=400,
-            content={"message": f"prompt_lang: {prompt_lang} is not supported in version {tts_config.version}"},
+            content={"message": f"prompt_lang: {prompt_lang} is not supported in version {tts_pipeline.configs.version}"},
         )
     if media_type not in ["wav", "raw", "ogg", "aac"]:
         return JSONResponse(status_code=400, content={"message": f"media_type: {media_type} is not supported"})
@@ -480,11 +480,8 @@ async def tts_handle(req: dict):
             if (not streaming_mode and str(tts_pipeline.configs.device) == "mps"
                     and isinstance(e, (RuntimeError, NotImplementedError))):
                 print(f"Apple GPU preprocessing failed ({e}); retrying once on CPU.")
-                config = tts_pipeline.configs
-                config.device = torch.device("cpu")
-                config.is_half = False
                 try:
-                    tts_pipeline.__init__(config)
+                    tts_pipeline.reset_models(device="cpu", is_half=False)
                     return synthesize_response()
                 except Exception as retry_error:
                     return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(retry_error)})

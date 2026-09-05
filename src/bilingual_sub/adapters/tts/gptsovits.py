@@ -215,7 +215,7 @@ def tts_job_fingerprint(
             ref_digest = hashlib.file_digest(stream, "sha256").hexdigest()
     return hashlib.sha256(json.dumps(
         [
-            "validated-synthesis-v3",
+            "transactional-models-v4",
             name,
             voice or "",
             (endpoint or "").rstrip("/"),

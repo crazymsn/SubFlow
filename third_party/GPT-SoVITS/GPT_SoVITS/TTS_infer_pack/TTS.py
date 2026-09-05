@@ -31,6 +31,7 @@ from process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 from tools.audio_sr import AP_BWE
+from tools.subflow_model_transaction import atomic_config_write, model_update
 from tools.subflow_validation import NoSpeechError, SynthesisStopped, require_speech_segments, validate_request
 from tools.i18n.i18n import I18nAuto, scan_language_list
 from TTS_infer_pack.text_segmentation_method import splits
@@ -382,14 +383,15 @@ class TTS_Config:
         return configs
 
     def save_configs(self, configs_path: str = None) -> None:
+        if getattr(self, "_defer_save", False):
+            return
         configs = deepcopy(self.default_configs)
         if self.configs is not None:
             configs["custom"] = self.update_configs()
 
         if configs_path is None:
             configs_path = self.configs_path
-        with open(configs_path, "w") as f:
-            yaml.dump(configs, f)
+        atomic_config_write(configs_path, yaml.safe_dump(configs, allow_unicode=True))
 
     def update_configs(self):
         self.config = {
@@ -461,6 +463,7 @@ class TTS:
         self.stop_flag: bool = False
         self.precision: torch.dtype = torch.float16 if self.configs.is_half else torch.float32
 
+    @model_update
     def _init_models(
         self,
     ):
@@ -470,8 +473,10 @@ class TTS:
         self.init_cnhuhbert_weights(self.configs.cnhuhbert_base_path)
         # self.enable_half_precision(self.configs.is_half)
 
+    @model_update
     def init_cnhuhbert_weights(self, base_path: str):
         invalidate_prompt_cache(self)
+        self.configs.cnhuhbert_base_path = base_path
         print(f"Loading CNHuBERT weights from {base_path}")
         self.cnhuhbert_model = CNHubert(base_path)
         self.cnhuhbert_model = self.cnhuhbert_model.eval()
@@ -479,8 +484,10 @@ class TTS:
         if self.configs.is_half and str(self.configs.device) != "cpu":
             self.cnhuhbert_model = self.cnhuhbert_model.half()
 
+    @model_update
     def init_bert_weights(self, base_path: str):
         invalidate_prompt_cache(self)
+        self.configs.bert_base_path = base_path
         print(f"Loading BERT weights from {base_path}")
         self.bert_tokenizer = AutoTokenizer.from_pretrained(base_path)
         self.bert_model = AutoModelForMaskedLM.from_pretrained(base_path)
@@ -491,6 +498,7 @@ class TTS:
         if hasattr(self, "text_preprocessor"):
             self.text_preprocessor = TextPreprocessor(self.bert_model, self.bert_tokenizer, self.configs.device)
 
+    @model_update
     def init_vits_weights(self, weights_path: str):
         invalidate_prompt_cache(self)
         self.configs.vits_weights_path = weights_path
@@ -559,6 +567,11 @@ class TTS:
                 del vits_model.enc_q
 
         self.is_v2pro = model_version in {"v2Pro", "v2ProPlus"}
+        if not self.is_v2pro:
+            self.sv_model = None
+        if not self.configs.use_vocoder:
+            self.vocoder = None
+            self.vocoder_configs = {key: None for key in self.vocoder_configs}
 
         if if_lora_v3 == False:
             print(
@@ -589,10 +602,12 @@ class TTS:
         if self.configs.is_half and str(self.configs.device) != "cpu":
             self.vits_model = self.vits_model.half()
 
+        self._refresh_mute_similarity()
         self.configs.save_configs()
 
 
 
+    @model_update
     def init_t2s_weights(self, weights_path: str):
         invalidate_prompt_cache(self)
         print(f"Loading Text2Semantic weights from {weights_path}")
@@ -610,19 +625,36 @@ class TTS:
         if self.configs.is_half and str(self.configs.device) != "cpu":
             self.t2s_model = self.t2s_model.half()
 
-        codebook = t2s_model.model.ar_audio_embedding.weight.clone()
-        mute_emb = codebook[self.configs.mute_tokens[self.configs.version]].unsqueeze(0)
-        sim_matrix = F.cosine_similarity(mute_emb.float(), codebook.float(), dim=-1)
-        self.configs.mute_emb_sim_matrix = sim_matrix
+        self._refresh_mute_similarity()
+
+    def _refresh_mute_similarity(self):
+        if self.t2s_model is None:
+            return
+        with torch.no_grad():
+            codebook = self.t2s_model.model.ar_audio_embedding.weight
+            mute_emb = codebook[self.configs.mute_tokens[self.configs.version]].unsqueeze(0)
+            self.configs.mute_emb_sim_matrix = F.cosine_similarity(mute_emb.float(), codebook.float(), dim=-1)
+
+    @model_update
+    def reset_models(self, *, device=None, is_half=None, save=True):
+        config = self.configs
+        if device is not None:
+            config.device = torch.device(device)
+        if torch.device(config.device).type in {"cpu", "mps"}:
+            config.device = torch.device(torch.device(config.device).type)
+        if is_half is not None:
+            config.is_half = is_half
+        if torch.device(config.device).type in {"cpu", "mps"}:
+            config.is_half = False
+        self.__init__(config)
+
 
     def init_vocoder(self, version: str):
         if version == "v3":
             if self.vocoder is not None and self.vocoder.__class__.__name__ == "BigVGAN":
                 return
             if self.vocoder is not None:
-                self.vocoder.cpu()
-                del self.vocoder
-                self.empty_cache()
+                self.vocoder = None
 
             self.vocoder = BigVGAN.from_pretrained(
                 "%s/GPT_SoVITS/pretrained_models/models--nvidia--bigvgan_v2_24khz_100band_256x" % (now_dir,),
@@ -640,9 +672,7 @@ class TTS:
             if self.vocoder is not None and self.vocoder.__class__.__name__ == "Generator":
                 return
             if self.vocoder is not None:
-                self.vocoder.cpu()
-                del self.vocoder
-                self.empty_cache()
+                self.vocoder = None
 
             self.vocoder = Generator(
                 initial_channel=100,
@@ -691,71 +721,25 @@ class TTS:
         self.sv_model = SV(self.configs.device, self.configs.is_half)
 
     def enable_half_precision(self, enable: bool = True, save: bool = True):
-        """
-        To enable half precision for the TTS model.
-        Args:
-            enable: bool, whether to enable half precision.
-
-        """
-        if str(self.configs.device) in {"cpu", "mps"} and enable:
+        if torch.device(self.configs.device).type in {"cpu", "mps"} and enable:
             print("Half precision is disabled on CPU and Apple GPU.")
             return
-
-        invalidate_prompt_cache(self)
-        self.configs.is_half = enable
-        self.precision = torch.float16 if enable else torch.float32
-        if save:
-            self.configs.save_configs()
-        if enable:
-            if self.t2s_model is not None:
-                self.t2s_model = self.t2s_model.half()
-            if self.vits_model is not None:
-                self.vits_model = self.vits_model.half()
-            if self.bert_model is not None:
-                self.bert_model = self.bert_model.half()
-            if self.cnhuhbert_model is not None:
-                self.cnhuhbert_model = self.cnhuhbert_model.half()
-            if self.vocoder is not None:
-                self.vocoder = self.vocoder.half()
-        else:
-            if self.t2s_model is not None:
-                self.t2s_model = self.t2s_model.float()
-            if self.vits_model is not None:
-                self.vits_model = self.vits_model.float()
-            if self.bert_model is not None:
-                self.bert_model = self.bert_model.float()
-            if self.cnhuhbert_model is not None:
-                self.cnhuhbert_model = self.cnhuhbert_model.float()
-            if self.vocoder is not None:
-                self.vocoder = self.vocoder.float()
+        if self.configs.is_half == enable:
+            if save:
+                self.configs.save_configs()
+            return
+        self.reset_models(is_half=enable, save=save)
 
     def set_device(self, device: torch.device, save: bool = True):
-        """
-        To set the device for all models.
-        Args:
-            device: torch.device, the device to use for all models.
-        """
-        invalidate_prompt_cache(self)
-        self.configs.device = device
-        if str(device) in {"cpu", "mps"} and self.configs.is_half:
-            self.enable_half_precision(False, save=False)
-        self.text_preprocessor.device = device
-        if save:
-            self.configs.save_configs()
-        if self.t2s_model is not None:
-            self.t2s_model = self.t2s_model.to(device)
-        if self.vits_model is not None:
-            self.vits_model = self.vits_model.to(device)
-        if self.bert_model is not None:
-            self.bert_model = self.bert_model.to(device)
-        if self.cnhuhbert_model is not None:
-            self.cnhuhbert_model = self.cnhuhbert_model.to(device)
-        if self.vocoder is not None:
-            self.vocoder = self.vocoder.to(device)
-        if self.sr_model is not None:
-            self.sr_model = self.sr_model.to(device)
-        if self.sv_model is not None:
-            self.sv_model = self.sv_model.to(device)
+        device = torch.device(device)
+        if device.type in {"cpu", "mps"}:
+            device = torch.device(device.type)
+        if str(self.configs.device) == str(device):
+            if save:
+                self.configs.save_configs()
+            return
+        is_half = self.configs.is_half if torch.device(device).type not in {"cpu", "mps"} else False
+        self.reset_models(device=device, is_half=is_half, save=save)
 
     def set_ref_audio(self, ref_audio_path: str):
         """
@@ -1492,20 +1476,14 @@ class TTS:
             if (str(self.configs.device) == "mps" and isinstance(e, (RuntimeError, NotImplementedError))
                     and not streaming_mode and not return_fragment):
                 print("Apple GPU inference failed; retrying this request once on CPU.")
-                config = deepcopy(self.configs)
-                config.device = torch.device("cpu")
-                config.is_half = False
-                self.__init__(config)
+                self.reset_models(device="cpu", is_half=False)
                 yield from self.run(inputs)
                 return
-            # Never return fake silence as a successful synthesis result.
-            # 重置模型, 否则会导致显存释放不完全。
-            del self.t2s_model
-            del self.vits_model
-            self.t2s_model = None
-            self.vits_model = None
-            self.init_t2s_weights(self.configs.t2s_weights_path)
-            self.init_vits_weights(self.configs.vits_weights_path)
+            # Keep the currently loaded state if recovery itself fails.
+            try:
+                self.reset_models()
+            except Exception as recovery_error:
+                e.add_note(f"Model recovery also failed: {recovery_error}")
             raise e
         finally:
             self.empty_cache()

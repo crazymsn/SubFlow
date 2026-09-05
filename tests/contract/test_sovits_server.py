@@ -34,6 +34,9 @@ def api(monkeypatch):
             self.configs = configs
         def run(self, req):
             yield 16000, b"audio"
+        def reset_models(self, *, device=None, is_half=None):
+            self.configs.device = device
+            self.configs.is_half = is_half
     monkeypatch.setitem(sys.modules, "GPT_SoVITS.TTS_infer_pack.TTS", SimpleNamespace(TTS=Pipeline, TTS_Config=config))
     spec = importlib.util.spec_from_file_location("subflow_api_contract", root / "api_v2.py")
     module = importlib.util.module_from_spec(spec)
@@ -269,3 +272,26 @@ def test_preprocessing_failure_retries_once_on_cpu_and_closes_generators(api, mo
     assert response.body == b"cpu audio"
     assert calls == closed == ["mps", "cpu"]
     assert api.tts_pipeline.configs.is_half is False
+
+
+def test_language_validation_uses_current_model_configuration(api):
+    api.tts_pipeline.configs = SimpleNamespace(device="cpu", is_half=False, languages=["en"], version="v1")
+    request = payload()
+    request["text_lang"] = "zh"
+    response = asyncio.run(api.tts_handle(request))
+    assert response.status_code == 400
+    assert "version v1" in json.loads(response.body)["message"]
+
+
+def test_failed_cpu_recovery_does_not_mutate_serving_config(api, monkeypatch):
+    config = api.tts_pipeline.configs
+    config.device = "mps"
+    def fail_inference(req):
+        raise NotImplementedError("MPS failure")
+    def fail_recovery(**kwargs):
+        raise RuntimeError("CPU model failed to load")
+    monkeypatch.setattr(api.tts_pipeline, "run", fail_inference)
+    monkeypatch.setattr(api.tts_pipeline, "reset_models", fail_recovery)
+    response = asyncio.run(api.tts_handle(payload()))
+    assert response.status_code == 400
+    assert api.tts_pipeline.configs is config and config.device == "mps"
