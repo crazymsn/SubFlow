@@ -24,7 +24,10 @@ def discard_temporary(path: Path) -> None:
     except PermissionError:
         # copystat/copy2 can make our private temporary file read-only on Windows.
         if not path.is_symlink() and path.is_file():
-            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+            info = path.stat()
+            # Hardlinks share permissions with every other name for the file.
+            if info.st_nlink == 1:
+                path.chmod(info.st_mode | stat.S_IWUSR)
         path.unlink(missing_ok=True)
 
 
@@ -184,15 +187,35 @@ def _commit_files(files: list[tuple[Path, Callable[[Path], object]]], *, checkpo
                         & getattr(stat, "FILE_ATTRIBUTE_DIRECTORY", 0)
                     )
                     Path(name).symlink_to(path.readlink(), target_is_directory=directory)
+                elif path.is_file() and path.stat().st_nlink > 1:
+                    # Preserve the existing relationship for rollback. Do not
+                    # silently downgrade to a content copy if linking fails.
+                    if os.name == "nt" and not path.stat().st_mode & stat.S_IWUSR:
+                        raise PermissionError(f"输出文件为只读，无法替换：{path}")
+                    Path(name).unlink()
+                    Path(name).hardlink_to(path)
                 else:
                     copy_file(path, Path(name), checkpoint=checkpoint)
         _check(checkpoint)
         _check(before_commit)
+        # Keep recovery copies until publication or rollback has completed,
+        # including a second signal between individual rollback operations.
+        retained.update(backup for backup in backups.values() if backup is not None)
+        attempted: Path | None = None
         try:
             for path in paths:
+                attempted = path
                 pending[path].replace(path)
                 committed.append(path)
-        except Exception as exc:
+                attempted = None
+        except BaseException as exc:
+            # A signal may arrive after replace succeeds but before append.
+            # The consumed staging path records that publication took place.
+            if attempted is not None and attempted not in committed and not pending[attempted].exists():
+                committed.append(attempted)
+            for path in paths:
+                if path not in committed and backups[path] is not None:
+                    retained.discard(backups[path])
             failures = []
             for path in reversed(committed):
                 backup = backups[path]
@@ -203,13 +226,15 @@ def _commit_files(files: list[tuple[Path, Callable[[Path], object]]], *, checkpo
                         if path.is_file() and not path.stat().st_mode & stat.S_IWUSR:
                             path.chmod(path.stat().st_mode | stat.S_IWUSR)
                         backup.replace(path)
-                except OSError:
+                except BaseException:
                     if backup is not None:
                         retained.add(backup)
                     failures.append(f"{path} (备份：{backup})")
             if failures:
                 raise OSError("文件提交失败，部分文件需从保留备份恢复：" + "; ".join(failures)) from exc
             raise
+        else:
+            retained.clear()
     finally:
         for temp in [*pending.values(), *backups.values()]:
             if temp is not None and temp not in retained:
