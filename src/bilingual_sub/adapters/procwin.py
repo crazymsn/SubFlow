@@ -49,6 +49,10 @@ def signal_posix_process(proc: subprocess.Popen, sig: int) -> None:
     """Signal an owned session's children; never signal a shared shell group."""
     if sys.platform == "win32":
         raise NotImplementedError("POSIX process signals are unavailable on Windows")
+    scope = vars(proc).get("_subflow_posix_scope")
+    if scope is not None:
+        scope.signal(sig)
+        return
     pid = proc.pid
     try:
         if os.getpgid(pid) == pid:

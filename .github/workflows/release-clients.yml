@@ -101,6 +101,19 @@ jobs:
           name: smoke-${{ matrix.label }}
           path: client-smoke.json
           if-no-files-found: ignore
+  linux-process-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install psutil pytest
+      - name: Verify nested task cleanup and independent pause
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q -o addopts="" --confcutdir=tests/integration tests/integration/test_nested_ownership.py
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -123,7 +136,7 @@ jobs:
           docker compose run --rm --entrypoint python subflow /app/scripts/check-sovits-audio.py
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [clients, docker]
+    needs: [clients, docker, linux-process-lifecycle]
     runs-on: ubuntu-latest
     permissions:
       contents: write
