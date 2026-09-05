@@ -126,8 +126,19 @@ def copy_finished_outputs(
     src_srt: Path | None,
     src_ass: Path | None,
     src_dub: Path | None = None,
+    protected_inputs: tuple[Path, ...] = (),
 ) -> dict[str, Path]:
     """Copy an already-finished job to a new folder/name. No ASR or translate."""
+    from bilingual_sub.core.output_guard import same_file, validate_outputs
+
+    plan = [("mp4", src_mp4, dest_mp4), ("srt", src_srt, sidecar_srt(dest_mp4)),
+            ("ass", src_ass, sidecar_ass(dest_mp4)), ("dub", src_dub, sidecar_dub(dest_mp4))]
+    active = [(kind, src, dest) for kind, src, dest in plan if src is not None and src.is_file()]
+    validate_outputs({kind: dest for kind, src, dest in active}, list(protected_inputs))
+    for kind, src, dest in active:
+        for other_kind, other_src, _ in active:
+            if kind != other_kind and same_file(dest, other_src):
+                raise ValueError(f"{kind}输出路径会覆盖已有{other_kind}文件：{dest}")
     dest_mp4.parent.mkdir(parents=True, exist_ok=True)
     copied: dict[str, Path] = {}
     mp4 = _copy_if_needed(src_mp4, dest_mp4)

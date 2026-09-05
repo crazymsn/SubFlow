@@ -356,3 +356,27 @@ def test_url_job_reexport_matches_work_copy(tmp_path: Path, monkeypatch):
     (work / "report.json").write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr("bilingual_sub.pipeline.tempfile.gettempdir", lambda: str(tmp_path))
     assert _can_reexport(cfg, work) is True
+
+
+def test_no_burn_dub_reexport_reports_new_sidecar_on_every_relocation(tmp_path, video, monkeypatch):
+    from bilingual_sub.gui.output_path import resolve_dub_sidecar
+
+    monkeypatch.setattr("bilingual_sub.pipeline.tempfile.gettempdir", lambda: str(tmp_path))
+    cfg = JobConfig(video, None, tmp_path / "new.srt", Path("auto"), burn=False,
+                    source_lang="zh", target_lang="en", subtitle_mode="single:zh")
+    work = tmp_path / "bilingual-sub" / artifact_key(cfg)
+    _plant_job(work, video, tmp_path / "old.mp4", whisper=cfg.whisper_model, translate=cfg.translate_model)
+    (work / "dubbed.mp4").write_bytes(b"dubbed video")
+    report = json.loads((work / "report.json").read_text())
+    report.update(burn=False, target_lang="en", subtitle_mode="single:zh", translated=False,
+                  dubbed=True, detected_spoken="zh", output_dub=str(tmp_path / "old-dub.mp4"))
+    (work / "report.json").write_text(json.dumps(report))
+    for name in ("new.srt", "another.srt"):
+        cfg.output_srt = tmp_path / name
+        result = run(cfg, AppSettings())
+        expected = resolve_dub_sidecar(None, cfg.output_srt)
+        assert result.reused and result.output_mp4 is None
+        assert result.output_dub == expected
+        assert expected.read_bytes() == b"dubbed video"
+        saved = json.loads(result.report_path.read_text(encoding="utf-8"))
+        assert saved["output_dub"] == str(expected) and saved["output_mp4"] is None

@@ -1049,6 +1049,7 @@ def test_resume_uses_cached_source_when_url_input_missing(tmp_path: Path, monkey
     work.mkdir()
     cached = work / "source.mp4"
     cached.write_bytes(b"cached-src")
+    (work / "source.url.txt").write_text("https://youtu.be/missing", encoding="utf-8")
     (work / "silences.json").write_text("[]", encoding="utf-8")
     (work / "transcript.json").write_text(
         json.dumps({"language": "zh", "segments": [{"start": 0.2, "end": 1.6, "text": "大家好"}]}),

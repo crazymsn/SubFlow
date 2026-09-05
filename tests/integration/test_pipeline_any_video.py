@@ -148,3 +148,34 @@ def test_resume_from_translate(clip: Path, tmp_path: Path, monkeypatch):
     )
     run(cfg2)
     assert calls["transcribe"] == 1
+
+
+def test_resume_after_translation_failure_uses_saved_input_identity(clip, tmp_path, monkeypatch):
+    work = tmp_path / "interrupted"
+    calls = {"asr": 0, "translation": 0}
+
+    def fake_transcribe(wav, **kwargs):
+        calls["asr"] += 1
+        segments = [Segment(0.2, 1.6, "大家好")]
+        kwargs["out_json"].write_text(json.dumps({
+            "language": "zh", "segments": [segments[0].__dict__],
+        }), encoding="utf-8")
+        return segments
+
+    def fake_translate(cues, **kwargs):
+        calls["translation"] += 1
+        if calls["translation"] == 1:
+            raise RuntimeError("temporary translation failure")
+        return [Cue(c.start, c.end, c.zh, "Hello.") for c in cues], TranslateStats(api_calls=1), []
+
+    monkeypatch.setattr("bilingual_sub.pipeline.transcribe", fake_transcribe)
+    monkeypatch.setattr("bilingual_sub.pipeline.translate_cues", fake_translate)
+    cfg = JobConfig(clip, None, tmp_path / "resumed.srt", work, burn=False)
+    with pytest.raises(RuntimeError, match="temporary translation failure"):
+        run(cfg)
+    assert (work / "job_input.json").is_file()
+    assert not (work / "report.json").exists()
+    cfg.resume_from = "translate"
+    result = run(cfg)
+    assert result.output_srt.is_file()
+    assert calls == {"asr": 1, "translation": 2}

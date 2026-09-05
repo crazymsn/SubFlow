@@ -4,7 +4,7 @@
 
 深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
-当前源码版本 **1.3.1**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
+当前源码版本 **1.3.2**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
 
 ![SubFlow 语幕桌面客户端](docs/images/desktop-light.png)
 
@@ -117,6 +117,7 @@ docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp
 | [meding 契约](docs/api-meding.md) | 翻译 API 的固定地址与错误码 |
 | [社区版本验收](docs/community-qa-2026-09-05.md) | Windows / Mac / Docker 构建结果与首次安装验证 |
 | [Apple GPU 验证](docs/apple-gpu-qa-2026-09-05.md) | MPS 自动环境、兼容修复与实机验收范围 |
+| [全量代码审查进度](docs/code-audit-status.md) | 已修复问题、回归证据与尚未完成的审查范围 |
 | [贡献](CONTRIBUTING.md) | 分支、测试与约束 |
 
 ## 系统要求

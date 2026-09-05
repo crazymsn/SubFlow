@@ -62,8 +62,6 @@ from bilingual_sub.gui.output_path import (
     refresh_output_path,
     relocate_output,
     resolve_output_mp4,
-    sidecar_ass,
-    sidecar_dub,
     sidecar_srt,
 )
 from bilingual_sub.gui.progress import format_pct, should_log_stage, stage_text
@@ -530,7 +528,7 @@ class MainWindow(QMainWindow):
             return None
         return mp4, srt, ass, dub
 
-    def _patch_report_outputs(self, dest_mp4: Path, dest_srt: Path) -> None:
+    def _patch_report_outputs(self) -> None:
         result = self._last_result
         if result is None or not result.report_path.is_file():
             return
@@ -540,8 +538,10 @@ class MainWindow(QMainWindow):
             return
         if not isinstance(data, dict):
             return
-        data["output_mp4"] = str(dest_mp4)
-        data["output_srt"] = str(dest_srt)
+        data["output_mp4"] = str(result.output_mp4) if result.output_mp4 else None
+        data["output_srt"] = str(result.output_srt)
+        data["output_ass"] = str(result.output_ass)
+        data["output_dub"] = str(result.output_dub) if result.output_dub else None
         try:
             result.report_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
@@ -563,26 +563,25 @@ class MainWindow(QMainWindow):
                 src_srt=src_srt,
                 src_ass=src_ass,
                 src_dub=src_dub,
+                protected_inputs=(self._video,) if self._video is not None else (),
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             QMessageBox.warning(self, PRODUCT_ZH, tr("out_mkdir").format(exc=exc))
             return False
         if not copied:
             return False
         dest_srt = sidecar_srt(dest_mp4)
-        dest_ass = sidecar_ass(dest_mp4)
-        dest_dub = sidecar_dub(dest_mp4) if src_dub else None
         self._last_result = replace(
             self._last_result,
-            output_mp4=dest_mp4 if dest_mp4.is_file() else src_mp4,
-            output_srt=dest_srt if dest_srt.is_file() else self._last_result.output_srt,
-            output_ass=dest_ass if dest_ass.is_file() else self._last_result.output_ass,
-            output_dub=dest_dub if dest_dub is not None and dest_dub.is_file() else src_dub,
+            output_mp4=copied.get("mp4", src_mp4),
+            output_srt=copied.get("srt", self._last_result.output_srt),
+            output_ass=copied.get("ass", self._last_result.output_ass),
+            output_dub=copied.get("dub", src_dub),
             reused=True,
         )
-        self._last_output = dest_mp4 if dest_mp4.is_file() else dest_srt
+        self._last_output = self._last_result.output_mp4 or self._last_result.output_dub or dest_srt
         self.open_btn.setEnabled(True)
-        self._patch_report_outputs(dest_mp4, dest_srt)
+        self._patch_report_outputs()
         self.out_edit.setText(str(dest_mp4))
         if log and self._last_result is not None:
             self._log_line(tr("reused_log").format(n=self._last_result.cue_count))

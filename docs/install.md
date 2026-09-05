@@ -1,4 +1,4 @@
-# 安装 SubFlow 1.3.1
+# 安装 SubFlow 1.3.2
 
 ## Windows / macOS 客户端
 

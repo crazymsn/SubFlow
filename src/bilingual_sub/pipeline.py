@@ -191,7 +191,7 @@ def artifact_key(config: JobConfig) -> str:
         f"{int(translation_needed(config.source_lang, config.target_lang, config.subtitle_mode))}|"
         f"{int(should_dub(config.source_lang, config.source_lang, config.target_lang))}|"
         f"{int(config.enable_dub)}|{_tts_fingerprint(config)}|"
-        f"{config.asr_backend}|{int(config.refine_translate)}|{gloss}|"
+        f"{config.asr_backend}|{int(config.refine_translate)}|{gloss}|{int(config.glossary_generate)}|"
         f"{int(config.burn)}|{config.source_url or ''}|"
         f"pair-script-v1|original-audio-v2|bounded-mix-v1"
     )
@@ -216,7 +216,9 @@ def _same_fingerprint(saved: dict | None, config: JobConfig, work: Path | None =
         return False
     if url_txt.read_text(encoding="utf-8").strip() != config.source_url:
         return False
-    return int(saved.get("size") or -1) == src.stat().st_size and src.stat().st_size > 0
+    stat = src.stat()
+    return (int(saved.get("size") or -1) == stat.st_size and stat.st_size > 0
+            and int(saved.get("mtime_ns") or -1) == stat.st_mtime_ns)
 
 
 def _job_profile_matches(report: dict, config: JobConfig) -> bool:
@@ -233,23 +235,20 @@ def _job_profile_matches(report: dict, config: JobConfig) -> bool:
 
 
 def _resume_dir_matches(config: JobConfig, work: Path) -> bool:
-    report = _load_json(work / "report.json")
+    report = _load_json(work / "job_input.json") or _load_json(work / "report.json")
     if report and not _job_profile_matches(report, config):
         return False
     if report:
         saved = report.get("input_fingerprint") if isinstance(report.get("input_fingerprint"), dict) else None
-        if config.input_video.is_file() and saved:
-            cur = video_fingerprint(config.input_video)
-            if int(saved.get("size") or -1) == cur["size"] and cur["size"] > 0:
-                return True
+        if config.source_url and str(report.get("source_url") or "") != config.source_url:
+            return False
+        if config.input_video.is_file():
+            return _same_fingerprint(saved, config, work)
         saved_url = str(report.get("source_url") or "")
         if config.source_url and saved_url:
-            return saved_url == config.source_url
-    src = work / "source.mp4"
-    if config.input_video.is_file() and src.is_file():
-        return config.input_video.stat().st_size == src.stat().st_size
+            return saved_url == config.source_url and _same_fingerprint(saved, config, work)
     url_txt = work / "source.url.txt"
-    if config.source_url and url_txt.is_file():
+    if config.source_url and url_txt.is_file() and (work / "source.mp4").is_file():
         return url_txt.read_text(encoding="utf-8").strip() == config.source_url
     return False
 
@@ -262,6 +261,9 @@ def _work_dir(config: JobConfig, settings: AppSettings) -> Path:
     explicit = not _auto_work_dir(config)
     if explicit:
         wd = config.work_dir
+        if (config.resume_from and _stage_index(config.resume_from) > _stage_index("ingest")
+                and not _resume_dir_matches(config, wd)):
+            raise FileNotFoundError("工作目录不是这部片子或字幕/识别设置不同；请从 ingest 重新处理")
     elif config.resume_from:
         last = load_last_job()
         if last is None:
@@ -477,6 +479,7 @@ def _result_from_work(
     config: JobConfig,
     work: Path,
     output_mp4: Path | None,
+    output_dub: Path | None,
     ass_out: Path,
     cues: list[Cue],
     report: dict,
@@ -499,6 +502,7 @@ def _result_from_work(
         "work_dir": str(work),
         "play_res": report.get("play_res") or [2560, 1600],
         "output_mp4": str(output_mp4) if output_mp4 else None,
+        "output_dub": str(output_dub) if output_dub else None,
         "output_srt": str(config.output_srt),
         "input_fingerprint": video_fingerprint(config.input_video),
         "whisper_model": config.whisper_model,
@@ -549,7 +553,7 @@ def _result_from_work(
         translate_api_calls=int(payload["translate_api_calls"]),
         stages=stages,
         reused=reused,
-        output_dub=Path(str(report["output_dub"])) if report.get("output_dub") else output_mp4 if not config.burn else None,
+        output_dub=output_dub,
         translated=translation_needed(config.source_lang, config.target_lang, config.subtitle_mode),
     )
 
@@ -580,17 +584,24 @@ def _reexport_if_possible(
             on_progress(stage, pct)
 
     logger.info("reexport job %s work_dir=%s", job_id, work)
+    _validate_output_paths(config, work, include_dub=job_needs_dub(
+        config.source_lang, str(report.get("detected_spoken") or config.source_lang),
+        config.target_lang, cues=_original_cues(work), enable_dub=config.enable_dub,
+        tts_provider=config.tts_provider,
+    ))
     prog("export", 0.85)
     ts = time.time()
     ass_out = _export_subs(config, work, cues, play_res)
     output_mp4 = _copy_or_burn(config, work, settings, report, control=control)
+    _gate(control)
     stages = {"export_sec": time.time() - ts}
     prog("done", 1.0)
     return _result_from_work(
         job_id=job_id,
         config=config,
         work=work,
-        output_mp4=output_mp4,
+        output_mp4=output_mp4 if config.burn else None,
+        output_dub=output_mp4 if not config.burn else None,
         ass_out=ass_out,
         cues=cues,
         report=report,
@@ -605,6 +616,57 @@ def _gate(control: JobControl | None) -> None:
         control.wait_if_paused()
 
 
+def _validate_output_paths(config: JobConfig, work: Path | None = None, *, include_dub=False) -> None:
+    from bilingual_sub.core.output_guard import validate_outputs
+    from bilingual_sub.gui.output_path import resolve_dub_sidecar
+
+    outputs = {"SRT": config.output_srt, "ASS": config.output_srt.with_suffix(".ass")}
+    if config.burn:
+        outputs["视频"] = config.output_video or config.output_srt.with_suffix(".mp4")
+    elif include_dub:
+        outputs["配音"] = resolve_dub_sidecar(config.output_video, config.output_srt)
+    protected = [config.input_video]
+    if config.glossary_path:
+        protected.append(config.glossary_path)
+    if config.tts_ref_audio:
+        protected.append(Path(config.tts_ref_audio))
+    if work is not None:
+        protected.extend(work / name for name in (
+            "source.mp4", "speech.wav", "transcript.json", "silences.json",
+            "cues.zh.json", "cues.source.json", "cues.bilingual.json", "cues.fitted.json",
+            "report.json", "job_state.json", "job_input.json", "source.url.txt",
+        ))
+    validate_outputs(outputs, protected)
+
+
+def _download_source(config: JobConfig, work: Path, prog, control: JobControl | None) -> Path:
+    """Only associate a URL with the work copy after its download succeeds."""
+    url = config.source_url or ""
+    source = work / "source.mp4"
+    marker = work / "source.url.txt"
+    if (source.is_file() and source.stat().st_size > 0 and marker.is_file()
+            and marker.read_text(encoding="utf-8").strip() == url):
+        return source
+    staging = work / "downloads" / hashlib.sha256(url.encode()).hexdigest()[:16]
+    staging.mkdir(parents=True, exist_ok=True)
+    downloaded = ytdlp_download(url, staging, on_progress=prog, control=control,
+                               source_lang=config.source_lang)
+    _gate(control)
+    pending = work / "source.download.mp4"
+    try:
+        shutil.copy2(downloaded, pending)
+        if pending.stat().st_size == 0:
+            raise RuntimeError("下载结果为空，请重试")
+        # Invalidate the old identity before replacing its media. A failed
+        # marker write must never leave another video's URL attached to it.
+        marker.unlink(missing_ok=True)
+        pending.replace(source)
+        marker.write_text(url, encoding="utf-8")
+    finally:
+        pending.unlink(missing_ok=True)
+    return source
+
+
 def run(
     config: JobConfig,
     settings: AppSettings | None = None,
@@ -612,12 +674,15 @@ def run(
     on_progress: ProgressCb = None,
     control: JobControl | None = None,
 ) -> JobResult:
+    _gate(control)
+    _validate_output_paths(config)
     setup_logging(api_key=get_api_key())
     settings = settings or load_settings()
     t0 = time.time()
     stages: dict[str, float] = {}
 
     work = _work_dir(config, settings)
+    _validate_output_paths(config, work)
     reused = _reexport_if_possible(config, settings, work, on_progress, t0, control=control)
     if reused:
         return reused
@@ -661,53 +726,28 @@ def _run_job(
     if _should_run(config.resume_from, "ingest"):
         _gate(control)
         if config.source_url:
-            existing = work / "source.mp4"
-            url_txt = work / "source.url.txt"
-            same_url = (
-                existing.is_file()
-                and existing.stat().st_size > 64
-                and url_txt.is_file()
-                and url_txt.read_text(encoding="utf-8").strip() == config.source_url
-            )
-            if same_url:
-                config.input_video = existing
-            else:
-                prog("ingest", 0.03)
-                ts = time.time()
-                url_txt.write_text(config.source_url, encoding="utf-8")
-                downloaded = ytdlp_download(
-                    config.source_url,
-                    work,
-                    on_progress=prog,
-                    control=control,
-                    source_lang=config.source_lang,
-                )
-                config.input_video = downloaded
-                stages["ingest_sec"] = time.time() - ts
+            prog("ingest", 0.03)
+            ts = time.time()
+            config.input_video = _download_source(config, work, prog, control)
+            stages["ingest_sec"] = time.time() - ts
         _save_state(work, "ingest", {"job_id": job_id}, control=control)
 
     input_video = config.input_video
     if not input_video.is_file():
         fallback = work / "source.mp4"
-        if fallback.is_file():
+        if fallback.is_file() and config.resume_from and _resume_dir_matches(config, work):
             input_video = fallback
             config.input_video = fallback
         elif config.source_url:
             prog("ingest", 0.03)
             ts = time.time()
-            (work / "source.url.txt").write_text(config.source_url, encoding="utf-8")
-            downloaded = ytdlp_download(
-                config.source_url,
-                work,
-                on_progress=prog,
-                control=control,
-                source_lang=config.source_lang,
-            )
+            downloaded = _download_source(config, work, prog, control)
             config.input_video = downloaded
             input_video = downloaded
             stages["ingest_sec"] = time.time() - ts
         else:
             raise FileNotFoundError("请先选择本地视频，或填写可下载的视频链接")
+    _validate_output_paths(config, work)
     if settings.video.copy_to_ascii_path:
         source = copy_to_ascii_workdir(input_video, work)
     else:
@@ -721,6 +761,12 @@ def _run_job(
     play_res = (int(meta["width"]), int(meta["height"]))
     if not meta.get("has_audio"):
         raise FfmpegError(f"no audio stream in {input_video}")
+    identity = {"input_fingerprint": video_fingerprint(config.input_video),
+                "source_url": config.source_url,
+                "source_lang": config.source_lang, "target_lang": config.target_lang,
+                "subtitle_mode": config.subtitle_mode, "whisper_model": config.whisper_model,
+                "translate_model": config.translate_model, "asr_backend": config.asr_backend}
+    (work / "job_input.json").write_text(json.dumps(identity, ensure_ascii=False), encoding="utf-8")
 
     speech = work / "speech.wav"
     silences_path = work / "silences.json"
@@ -830,6 +876,10 @@ def _run_job(
         cues = load_cues_json(cues_zh_path if cues_zh_path.is_file() else cues_bi_path)
     asr_cues = load_cues_json(cues_zh_path) if cues_zh_path.is_file() else cues
     detected_spoken = spoken_family(asr_cues, config.source_lang)
+    _validate_output_paths(config, work, include_dub=job_needs_dub(
+        config.source_lang, detected_spoken, config.target_lang, cues=asr_cues,
+        enable_dub=config.enable_dub, tts_provider=config.tts_provider,
+    ))
 
     if _should_run(config.resume_from, "glossary"):
         _gate(control)
@@ -1154,6 +1204,7 @@ def _run_job(
                 output_mp4 = dest_mp4
             else:
                 if Path(dubbed).resolve() != sidecar.resolve():
+                    sidecar.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(dubbed, sidecar)
                 output_dub = sidecar
         except JobStopped:
