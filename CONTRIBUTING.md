@@ -17,6 +17,8 @@ mypy src/bilingual_sub
 
 `.verify/`、`dist/`、`build/` 是本机产物，不要提交。Docker 官方镜像名为 `crazymsn/subflow`，令牌只放 `.env`。
 
+回归测试使用合成输入，运行文件写入 pytest 的 `tmp_path`，不要把真实视频、转写、参考音频或调试日志放进仓库。`tests/` 中的有效测试代码应保留。清理本地产物时保留正在使用的客户端、模型及运行环境；GPT-SoVITS 的 `TEMP/ja` 可能包含日语运行词典，不能仅按目录名删除。目录链接只删除链接本身，不递归清理其目标。
+
 ## PR 检查清单
 
 - [ ] `ruff check` + `ruff format --check`

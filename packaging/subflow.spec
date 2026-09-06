@@ -59,8 +59,6 @@ hidden = [
     "bilingual_sub.adapters.ytdlp",
     "bilingual_sub.adapters.tts",
     "bilingual_sub.adapters.tts.base",
-    "bilingual_sub.adapters.tts.openai_tts",
-    "bilingual_sub.adapters.tts.azure_tts",
     "bilingual_sub.adapters.tts.gptsovits",
     "bilingual_sub.adapters.tts.gptsovits_runtime",
     "bilingual_sub.i18n",
