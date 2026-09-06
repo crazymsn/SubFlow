@@ -158,6 +158,8 @@ jobs:
         run: |
           docker compose config --quiet
           docker compose run --rm subflow --help
+          printf 'host-owned input' > data/.compose-write-check
+          docker compose run --rm --entrypoint python subflow -c "from pathlib import Path; p=Path('/data/.compose-write-check'); assert p.read_text() == 'host-owned input'; p.write_text('container write'); p.unlink()"
           docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py asr
           docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py gptsovits --skip-models
           docker compose run --rm --entrypoint python subflow /app/scripts/check-sovits-audio.py

@@ -33,6 +33,10 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Bind-mounted /data can belong to the host UID, while this image runs as root.
+    # Retain filesystem access without restoring unrelated default capabilities.
+    cap_add:
+      - DAC_OVERRIDE
     logging:
       driver: json-file
       options:
