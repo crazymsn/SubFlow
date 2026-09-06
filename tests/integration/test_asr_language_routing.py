@@ -205,3 +205,39 @@ def test_pair_with_third_voice_translates_original_audio_text(pipeline_job, monk
     assert all(src == "ja" and texts == [SAMPLES["ja"]] for src, _dest, texts in calls)
     assert spoken == ["안녕하세요"]
     assert "Welcome" in result.output_srt.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("screen", ["fr", "de", "es"])
+def test_pipeline_keeps_screen_translation_separate_from_japanese_voice(
+    pipeline_job, monkeypatch, mock_sovits_runtime, screen,
+):
+    from bilingual_sub.core.langs import spoken_line
+
+    cfg = pipeline_job
+    cfg.source_lang, cfg.target_lang, cfg.subtitle_mode = "auto", "ja", "single:" + screen
+    translations = {"fr": "Bonjour à tous", "de": "Hallo zusammen", "es": "Hola a todos", "ja": "こんにちは"}
+    def recognize(wav, **kwargs):
+        segment = Segment(0.1, 1.8, SAMPLES["zh"])
+        kwargs["out_json"].write_text(json.dumps({"language": "zh", "segments": [segment.__dict__]}), encoding="utf-8")
+        return [segment]
+    spoken = []
+    def translate(cues, *, source_lang, target_lang, **kwargs):
+        assert source_lang == "zh"
+        return [Cue(c.start, c.end, c.zh, translations[target_lang]) for c in cues], TranslateStats(api_calls=1), []
+    def dub(cues, *, lang, output, **kwargs):
+        spoken.extend(spoken_line(cue, lang) for cue in cues)
+        output.write_bytes(b"synthesized fixture")
+        return output
+    monkeypatch.setattr(p, "transcribe", recognize)
+    monkeypatch.setattr(p, "translate_cues", translate)
+    monkeypatch.setattr(p, "dub_cues", dub)
+    monkeypatch.setattr("bilingual_sub.adapters.tts.select_tts", lambda *a, **k: object())
+    result = p.run(cfg, AppSettings())
+    assert spoken == [translations["ja"]]
+    assert translations[screen] in result.output_srt.read_text(encoding="utf-8")
+    assert translations["ja"] not in result.output_srt.read_text(encoding="utf-8")
+    cfg.resume_from = "done"
+    cfg.output_srt = cfg.output_srt.with_name("resumed.srt")
+    resumed = p.run(cfg, AppSettings())
+    assert spoken == [translations["ja"]]
+    assert translations[screen] in resumed.output_srt.read_text(encoding="utf-8")

@@ -30,6 +30,7 @@ class Cue:
     en: str | None = None
     words: list[WordSpan] = field(default_factory=list)
     spoken: str | None = None
+    language_texts: dict[str, str] = field(default_factory=dict)
 
     @property
     def source(self) -> str:
@@ -54,6 +55,7 @@ class Cue:
             "zh": self.zh,
             "en": self.en,
             "spoken": self.spoken,
+            "language_texts": dict(self.language_texts),
             "source": self.zh,
             "target": self.en,
             "words": [
@@ -81,6 +83,12 @@ class Cue:
         tgt = d.get("target") if "target" in d else d.get("en")
         tgt = text(tgt, "target")
         spoken = text(d.get("spoken"), "spoken")
+        language_texts = d.get("language_texts", {})
+        if not isinstance(language_texts, dict) or any(
+            not isinstance(lang, str) or not lang or not isinstance(value, str)
+            for lang, value in language_texts.items()
+        ):
+            raise ValueError("字幕 language_texts 必须是语言到文本的映射")
         start, end = time(d.get("start")), time(d.get("end"))
         if end <= start:
             raise ValueError("字幕结束时间必须大于开始时间")
@@ -109,6 +117,7 @@ class Cue:
             en=tgt,
             words=words,
             spoken=spoken,
+            language_texts=dict(language_texts),
         )
 
 

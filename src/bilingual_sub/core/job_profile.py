@@ -9,7 +9,7 @@ def processing_profile(config: JobConfig, settings: AppSettings) -> dict:
     glossary = config.glossary_path or default_glossary_path()
     return {
         "schema": 1,
-        "processing_revision": "asr-language-routing-v15",
+        "processing_revision": "language-text-slots-v16",
         "asr": {"backend": config.asr_backend,
                 "model": config.whisper_model or settings.asr.model,
                 "device": config.device or settings.asr.device,

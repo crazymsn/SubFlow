@@ -9,9 +9,6 @@ if (-not $SkipInstall) {
     python -m pip install -e ".[gui,packaging]"
     if ($LASTEXITCODE -ne 0) { throw "Package installation failed" }
 }
-python -m PyInstaller --noconfirm --clean --distpath $DistPath "$Root\packaging\subflow.spec"
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-
 $dist = Join-Path $DistPath "SubFlow"
 
 function Resolve-RealExe([string]$Name) {
@@ -25,17 +22,23 @@ function Resolve-RealExe([string]$Name) {
             $choco = Join-Path $env:ChocolateyInstall "lib\ffmpeg\tools\ffmpeg\bin\$Name.exe"
         }
         if (Test-Path $choco) { return (Get-Item $choco).FullName }
+        throw "Cannot locate the real $Name executable behind the Chocolatey shim."
     }
     return $path
 }
 
 $ffmpeg = Resolve-RealExe "ffmpeg"
 $probe = Resolve-RealExe "ffprobe"
-if ($ffmpeg) {
-    Copy-Item $ffmpeg (Join-Path $dist "ffmpeg.exe") -Force
-    if ($probe) { Copy-Item $probe (Join-Path $dist "ffprobe.exe") -Force }
-    Write-Host "Copied ffmpeg from $ffmpeg"
+foreach ($tool in @($ffmpeg, $probe)) {
+    if (-not $tool) { throw "FFmpeg and FFprobe are required to build the client. Run scripts/install-windows-ffmpeg.ps1 first." }
+    & $tool -version *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Media executable failed verification: $tool" }
 }
+python -m PyInstaller --noconfirm --clean --distpath $DistPath "$Root\packaging\subflow.spec"
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+Copy-Item $ffmpeg (Join-Path $dist "ffmpeg.exe") -Force
+Copy-Item $probe (Join-Path $dist "ffprobe.exe") -Force
+Write-Host "Copied ffmpeg from $ffmpeg"
 
 # PyInstaller may hoist a foreign ICU next to python313.dll; Qt6Core then dies with WinError 127.
 $internal = Join-Path $dist "_internal"

@@ -1021,7 +1021,7 @@ def test_pipeline_prompt_lang_follows_detected_spoken(tmp_path: Path, monkeypatc
     )
     monkeypatch.setattr(
         "bilingual_sub.pipeline.translate_cues",
-        lambda cues, **k: ([Cue(c.start, c.end, "今天天气很好", None) for c in cues], TranslateStats(), []),
+        lambda cues, **k: ([Cue(c.start, c.end, c.zh, "今天天气很好") for c in cues], TranslateStats(), []),
     )
     monkeypatch.setattr("bilingual_sub.pipeline.ytdlp_download", lambda *a, **k: video)
 

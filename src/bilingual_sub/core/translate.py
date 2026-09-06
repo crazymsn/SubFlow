@@ -159,6 +159,7 @@ def place_translated_line(cue: Cue, text: str, dest_lang: str) -> None:
     if not text:
         return
     fam = lang_family(dest_lang)
+    cue.language_texts[fam] = text
     if fam == "zh":
         if text_family(cue.zh or "") not in {"", "zh"} and not (cue.en or "").strip():
             cue.en = cue.zh
@@ -181,6 +182,8 @@ def fill_translated_languages(
     """Translate the original ASR line into each destination language."""
     work = translator or translate_cues
     originals = [(cue.zh or cue.en or "") for cue in cues]
+    for cue, original in zip(cues, originals):
+        cue.language_texts.setdefault(spoken_family([cue], source_lang), original)
     stats = TranslateStats()
     missing: list[str] = []
     for dest in dest_langs:
@@ -212,6 +215,8 @@ def translate_pair_cues(
     for i, cue in enumerate(cues):
         original = (cue.zh or cue.en or "").strip()
         family = spoken_family([cue], source_lang) if text_family(original) else ""
+        if family:
+            cue.language_texts.setdefault(family, original)
         if family not in {"", "zh", "en"}:
             other_sources.setdefault(family, []).append((i, original))
     need_en, need_zh = park_pair_source(cues, source_lang)
@@ -226,6 +231,8 @@ def translate_pair_cues(
         missing.extend(miss)
         for index, updated in zip(need_en, out):
             cues[index].en = updated.en
+            if updated.en:
+                cues[index].language_texts["en"] = updated.en
             if updated.zh:
                 cues[index].zh = updated.zh
 
@@ -244,6 +251,7 @@ def translate_pair_cues(
             chinese = cand_en if text_family(cand_en) == "zh" else cand_zh
             if text_family(chinese) == "zh":
                 cues[index].zh = chinese
+                cues[index].language_texts["zh"] = chinese
 
     for src, originals in other_sources.items():
         for index, _original in originals:

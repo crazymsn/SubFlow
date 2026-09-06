@@ -38,7 +38,9 @@ jobs:
           python-version: '3.11'
       - name: Install Windows FFmpeg
         if: runner.os == 'Windows'
-        run: choco install ffmpeg -y --no-progress
+        shell: pwsh
+        timeout-minutes: 12
+        run: ./scripts/install-windows-ffmpeg.ps1
       - name: Install macOS FFmpeg
         if: runner.os == 'macOS'
         run: |

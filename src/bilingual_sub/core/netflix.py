@@ -6,7 +6,7 @@ import math
 import re
 import unicodedata
 
-from bilingual_sub.core.langs import is_cjk, screen_line
+from bilingual_sub.core.langs import is_cjk, lang_family, screen_line
 from bilingual_sub.models import Cue, WordSpan
 
 MAX_DURATION = 7.0
@@ -132,7 +132,7 @@ def fit_cues(cues: list[Cue], lang: str, *, use_target: bool = True) -> list[Cue
             # Fitted cues are a display projection. Keep full bilingual cues
             # separately for dubbing; repeating their other slots here can make
             # language heuristics render the unsplit sentence on every frame.
-            fitted.append(Cue(part.start, part.end, part.zh))
+            fitted.append(Cue(part.start, part.end, part.zh, language_texts={lang_family(lang): part.zh}))
     return fitted
 
 

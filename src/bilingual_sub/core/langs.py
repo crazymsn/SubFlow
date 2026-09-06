@@ -464,6 +464,9 @@ def has_distinct_target_line(cues) -> bool:
 def line_matching(cue, lang: str) -> str:
     """Return the cue slot whose script matches lang, or empty."""
     target = lang_family(lang)
+    texts = getattr(cue, "language_texts", None)
+    if texts:
+        return texts.get(target, "").strip()
     slots = ("en", "zh") if target == "en" else ("zh", "en")
     for slot in slots:
         text = (getattr(cue, slot, None) or "").strip()
@@ -474,6 +477,8 @@ def line_matching(cue, lang: str) -> str:
 
 def spoken_line(cue, target_lang: str) -> str:
     """Text the dubber should speak. Pick the line that matches the target script."""
+    if getattr(cue, "language_texts", None):
+        return line_matching(cue, target_lang)
     spoken = (getattr(cue, "spoken", None) or "").strip()
     target = lang_family(target_lang)
     if spoken and target not in {"zh", "en"}:
@@ -502,6 +507,8 @@ def screen_line(cue, mode: str, target_lang: str = "", source_lang: str = "") ->
     if not lang and mode == "netflix_single":
         lang = screen_translate_lang(source_lang or "zh", target_lang or "en", mode)
     if lang:
+        if getattr(cue, "language_texts", None):
+            return line_matching(cue, lang)
         matched = line_matching(cue, lang)
         if matched:
             return matched
@@ -603,6 +610,10 @@ def drop_target_if_unneeded(
     for cue in cues:
         cue.en = None
         cue.spoken = None
+        texts = getattr(cue, "language_texts", None)
+        if texts:
+            original = lang_family(detected_spoken or source_lang)
+            cue.language_texts = {lang: text for lang, text in texts.items() if lang == original}
 
 
 class _HanConverter(Protocol):
@@ -638,6 +649,9 @@ def apply_han_to_cues(cues, han_lang: str) -> None:
     if han_lang not in {"zh", "zh-Hant"}:
         return
     for cue in cues:
+        texts = getattr(cue, "language_texts", None)
+        if texts and "zh" in texts:
+            texts["zh"] = convert_han(texts["zh"], han_lang)
         if text_family(getattr(cue, "zh", None) or "") == "zh":
             cue.zh = convert_han(cue.zh, han_lang)
         if text_family(getattr(cue, "en", None) or "") == "zh":

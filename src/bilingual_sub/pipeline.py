@@ -1198,6 +1198,8 @@ def _run_job(
                          and value.strip() and lang_family(value) != "auto"), None)
     detected_spoken = spoken_family(asr_cues, config.source_lang,
                                    asr_language=asr_language if isinstance(asr_language, str) else None)
+    for cue in cues:
+        cue.language_texts.setdefault(spoken_family([cue], detected_spoken), cue.zh or cue.en or "")
     _validate_output_paths(config, work, include_dub=job_needs_dub(
         config.source_lang, detected_spoken, config.target_lang, cues=asr_cues,
         enable_dub=config.enable_dub, tts_provider=config.tts_provider,
@@ -1304,6 +1306,7 @@ def _run_job(
                     )
                     for cue, spoken_cue in zip(cues, spoken_cues):
                         cue.spoken = spoken_cue.spoken
+                        cue.language_texts.update(spoken_cue.language_texts)
                     tstats.cache_hits += extra_stats.cache_hits
                     tstats.api_calls += extra_stats.api_calls
                     missing.extend(extra_miss)
