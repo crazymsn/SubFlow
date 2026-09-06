@@ -100,6 +100,4 @@ SubFlow 采用 [MIT License](LICENSE)。请自觉遵循相应许可。
 
 ## 联系我们
 
-使用微信扫描下方企业微信二维码，联系深度云创科技。
-
 ![联系深度云创科技：企业微信二维码](docs/images/contact-wecom.jpg)
