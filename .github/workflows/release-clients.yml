@@ -261,3 +261,4 @@ jobs:
             SHA256SUMS
           body_path: docs/release-1.3.60.md
           fail_on_unmatched_files: true
+          preserve_order: true

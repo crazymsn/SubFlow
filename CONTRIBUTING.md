@@ -45,6 +45,8 @@ API Key、Cookie、`.env` 和凭据文件不得出现在提交、测试样本、
 
 Docker Hub 凭据通过 GitHub Actions Secrets 提供：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。密钥不写入工作流或文档。
 
+若客户端验收已经通过、只有 Release 上传中断，先重跑失败的发布任务。也可手动运行 [Recover client publication](.github/workflows/publish-clients.yml)，填写原构建的 `source_run` 和版本 `tag`。它核对标签对应的提交、包版本和三平台验收，复用原工作流附件；逐一上传分卷，跳过哈希一致的已有文件，仅清理草稿中的未完成上传，拒绝覆盖内容冲突的文件。全部文件的大小和 SHA-256 校验通过后才公开 Release。原附件保留三天，过期后需要重新构建；不要移动已发布标签。
+
 完整 Windows 包使用 `scripts/build-windows.ps1`，Mac 使用 `scripts/build-macos.sh`。完整包内置三种配音模式的模型，以及四套可迁移的识别/配音环境；所选识别模型按需下载。`-SourceOnly` 仅构建需要首次联网安装环境的 Windows 开发包。推理环境放在独立的 `offline` 目录，不混入 Qt 的 `_internal`。Mac 构建成功后按 [实机验收手册](docs/mac-self-test.md) 检查真实设备与完整视频流程。
 
 仅改文档且无需构建时，可在提交信息中使用 `[skip ci]` 避免重复客户端和镜像发布；先检查 Markdown 链接、示例参数、版本和事实。不要移动已发布的版本标签来覆盖相同版本的二进制内容。

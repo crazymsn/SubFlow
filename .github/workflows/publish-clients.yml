@@ -1,0 +1,63 @@
+name: Recover client publication
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Successful client build run ID (publication may have failed)
+        required: true
+      tag:
+        description: Existing version tag, for example v1.3.60
+        required: true
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: clients-refs/tags/${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_RUN: ${{ inputs.source_run }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify accepted clients and exact source tag
+        id: source
+        run: python .github/scripts/verify-release.py source --tag "$RELEASE_TAG" --run-id "$SOURCE_RUN"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          path: release-source
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+          pattern: SubFlow-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify local volumes and previously uploaded files
+        id: assets
+        run: python .github/scripts/verify-release.py preflight --tag "$RELEASE_TAG"
+      - uses: softprops/action-gh-release@v2
+        if: steps.assets.outputs.already_published != 'true'
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: SubFlow 语幕 ${{ inputs.tag }}
+          draft: true
+          preserve_order: true
+          overwrite_files: false
+          files: |
+            release-assets/SubFlow-*.7z.*
+            release-assets/SHA256SUMS
+          body_path: release-source/docs/release-${{ steps.source.outputs.version }}.md
+          fail_on_unmatched_files: true
+      - name: Verify complete uploads before publishing
+        run: |
+          python .github/scripts/verify-release.py verify --tag "$RELEASE_TAG"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
