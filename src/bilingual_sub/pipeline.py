@@ -326,7 +326,8 @@ def _job_profile_matches(report: dict, config: JobConfig) -> bool:
         and str(report.get("target_lang") or "zh") == config.target_lang
         and str(report.get("subtitle_mode") or "bilingual") == config.subtitle_mode
         and str(report.get("whisper_model") or config.whisper_model) == config.whisper_model
-        and str(report.get("translate_model") or config.translate_model) == config.translate_model
+        and (config.resume_from in {"glossary", "translate"}
+             or str(report.get("translate_model") or config.translate_model) == config.translate_model)
         and str(report.get("asr_backend") or "whisper") == config.asr_backend
     )
 
@@ -334,7 +335,10 @@ def _job_profile_matches(report: dict, config: JobConfig) -> bool:
 def _resume_dir_matches(config: JobConfig, work: Path, settings: AppSettings | None = None,
                         *, control: JobControl | None = None) -> bool:
     report = _load_json(work / "job_input.json") or _load_json(work / "report.json")
-    if report.get("processing_profile") != processing_profile(config, settings or load_settings()):
+    from bilingual_sub.core.job_profile import resume_profile_matches
+
+    if not resume_profile_matches(report.get("processing_profile"),
+                                  processing_profile(config, settings or load_settings()), config.resume_from):
         return False
     if report and not _job_profile_matches(report, config):
         return False
@@ -1053,9 +1057,11 @@ def _run_job(
     input_identity = video_fingerprint(input_video, control=control)
     process_identity = processing_profile(config, settings)
     if config.resume_from and _stage_index(config.resume_from) > _stage_index("ingest"):
+        from bilingual_sub.core.job_profile import resume_profile_matches
+
         previous = _load_json(work / "job_input.json") or _load_json(work / "report.json")
         if (previous.get("input_fingerprint") != input_identity
-                or previous.get("processing_profile") != process_identity):
+                or not resume_profile_matches(previous.get("processing_profile"), process_identity, config.resume_from)):
             raise RuntimeError("恢复前输入内容或处理配置发生变化，请从 ingest 重新处理")
     if settings.video.copy_to_ascii_path:
         source = copy_to_ascii_workdir(input_video, work, checkpoint=lambda: _gate(control))

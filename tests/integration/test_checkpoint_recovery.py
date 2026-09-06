@@ -92,6 +92,52 @@ def test_translation_retry_reuses_recognition_and_saved_work(job, monkeypatch):
     assert "你好" in cfg.output_srt.read_text(encoding="utf-8")
 
 
+def test_translation_retry_accepts_new_model_without_repeating_asr(job, monkeypatch):
+    from dataclasses import replace
+
+    from bilingual_sub.core.translate import TranslateStats
+    from bilingual_sub.models import Cue
+
+    cfg, settings, calls, _, _ = job
+    cfg.target_lang, cfg.subtitle_mode = "zh", "single:zh"
+    monkeypatch.setattr(p, "job_needs_dub", lambda *a, **k: False)
+    attempts = []
+    def translate(cues, **kwargs):
+        attempts.append(kwargs["model"])
+        if kwargs["model"] == cfg.translate_model:
+            raise RuntimeError("model temporarily unavailable")
+        return [Cue(c.start, c.end, c.zh, "翻译已恢复") for c in cues], TranslateStats(), []
+    monkeypatch.setattr(p, "translate_cues", translate)
+    with pytest.raises(RuntimeError, match="temporarily unavailable"):
+        p.run(cfg, settings)
+    original = (cfg.work_dir / "transcript.json").read_bytes()
+    retry = replace(cfg, resume_from="translate", translate_model="replacement-model", translate_batch_size=1)
+    result = p.run(retry, settings)
+    assert not result.missing_en
+    assert calls == {"asr": 1, "silence": 1}
+    assert attempts == [cfg.translate_model, "replacement-model"]
+    assert (cfg.work_dir / "transcript.json").read_bytes() == original
+    assert "翻译已恢复" in cfg.output_srt.read_text(encoding="utf-8")
+    record = json.loads((cfg.work_dir / "job_input.json").read_text())
+    assert record["processing_profile"]["translation"]["model"] == "replacement-model"
+
+
+@pytest.mark.parametrize("change", [
+    {"whisper_model": "tiny"}, {"source_lang": "fr"}, {"target_lang": "fr"},
+    {"subtitle_mode": "bilingual"}, {"preview_minutes": 1},
+    {"resume_from": "render", "translate_model": "another-model"},
+])
+def test_translation_rewind_still_rejects_incompatible_cached_inputs(job, change):
+    from dataclasses import replace
+
+    cfg, settings, calls, _, _ = job
+    p.run(cfg, settings)
+    retry = replace(cfg, **{"resume_from": "translate", **change})
+    with pytest.raises(FileNotFoundError, match="设置不同"):
+        p.run(retry, settings)
+    assert calls["asr"] == 1
+
+
 def test_cancelled_rewind_cannot_skip_the_failed_stage(job, monkeypatch):
     cfg, settings, calls, _, extract = job
     p.run(cfg, settings)

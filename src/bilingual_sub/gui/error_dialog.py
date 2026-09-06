@@ -21,8 +21,9 @@ from bilingual_sub.secrets.store import get_api_key
 
 
 class ErrorDialog(QDialog):
-    def __init__(self, parent, details: str, *, preview: bool = False) -> None:
+    def __init__(self, parent, details: str, *, preview: bool = False, translation_retry: bool = False) -> None:
         super().__init__(parent)
+        self.translation_retry = translation_retry
         self._theme = getattr(parent, "_theme", "dark")
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -37,6 +38,10 @@ class ErrorDialog(QDialog):
         if "成片仍是原声" in self.safe_details:
             summary += "\n" + tr("error_original_kept")
         title = tr("error_reference_title") if reference else self.windowTitle()
+        if translation_retry:
+            reference = False
+            title = tr("error_translation_title")
+            summary = tr("error_translation_help")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -109,7 +114,14 @@ class ErrorDialog(QDialog):
         self.action = QPushButton(tr("error_choose_reference") if reference and hasattr(parent, "_browse_ref_audio") else tr("error_close"))
         self.action.setObjectName("errorPrimary")
         self.action.setDefault(True)
-        if reference and hasattr(parent, "_browse_ref_audio"):
+        if translation_retry:
+            self.action.setText(tr("error_translation_retry"))
+            self.action.setEnabled(parent.resume_btn.isEnabled())
+            def retry() -> None:
+                self.accept()
+                parent._resume()
+            self.action.clicked.connect(retry)
+        elif reference and hasattr(parent, "_browse_ref_audio"):
             def choose_reference() -> None:
                 self.accept()
                 parent._browse_ref_audio()
@@ -166,12 +178,12 @@ class ErrorDialog(QDialog):
         self.copy_button.setText(tr("error_copied"))
 
 
-def show_error(parent, details: str, *, preview: bool = False) -> ErrorDialog:
+def show_error(parent, details: str, *, preview: bool = False, translation_retry: bool = False) -> ErrorDialog:
     previous = getattr(parent, "_error_dialog", None)
     if previous is not None:
         previous.close()
         previous.deleteLater()
-    dialog = ErrorDialog(parent, details, preview=preview)
+    dialog = ErrorDialog(parent, details, preview=preview, translation_retry=translation_retry)
     parent._error_dialog = dialog
     dialog.open()
     return dialog

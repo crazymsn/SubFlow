@@ -22,7 +22,14 @@ class PipelineWorker(QThread):
         super().__init__(parent)
         self.config = config
         self.control = control
-        self.work_dir: Path | None = None
+        # Keep a retry's checkpoint even when lock acquisition or validation
+        # fails before the pipeline can invoke on_work_ready.
+        self.work_dir: Path | None = config.work_dir if config.resume_from and str(config.work_dir) not in {'', 'auto'} else None
+        self.last_stage = config.resume_from or ""
+
+    def _progress(self, stage: str, fraction: float) -> None:
+        self.last_stage = stage
+        self.progress.emit(stage, fraction)
 
     def _work_ready(self, path: Path) -> None:
         self.work_dir = path
@@ -33,7 +40,7 @@ class PipelineWorker(QThread):
 
             result = run_job(
                 self.config,
-                on_progress=lambda s, p: self.progress.emit(s, p),
+                on_progress=self._progress,
                 control=self.control,
                 on_work_ready=self._work_ready,
             )

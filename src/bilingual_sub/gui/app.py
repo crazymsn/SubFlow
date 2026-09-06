@@ -1148,6 +1148,9 @@ class MainWindow(QMainWindow):
         self.resume_btn.setEnabled((bool(running) and paused and not stopping)
                                   or (not busy and not self._job_busy() and self._resume_config is not None))
         self.resume_btn.setToolTip(tr("resume_translation") if self._resume_config is not None else tr("resume"))
+        dialog = getattr(self, "_error_dialog", None)
+        if dialog is not None and getattr(dialog, "translation_retry", False):
+            dialog.action.setEnabled(self.resume_btn.isEnabled())
         self.stop_btn.setEnabled(bool(running) and not stopping)
         self.run_btn.update()
         self._sync_download()
@@ -1158,6 +1161,7 @@ class MainWindow(QMainWindow):
             # finished is emitted before native thread-local cleanup completes.
             # Keep Qt ownership until the native thread has fully terminated.
             if worker.isRunning():
+                QTimer.singleShot(20, lambda: self._release_job() if self._worker is worker else None)
                 return
             worker.wait()
             worker.deleteLater()
@@ -1171,8 +1175,9 @@ class MainWindow(QMainWindow):
                 retry = self._retry_translation or bool(translation.get("missing"))
                 from bilingual_sub.pipeline import STAGES
 
-                if retry and completed in STAGES and STAGES.index(completed) >= STAGES.index("glossary"):
-                    self._resume_config = replace(worker.config, work_dir=worker.work_dir, resume_from="translate")
+                if retry and completed in STAGES and STAGES.index(completed) >= STAGES.index("build_cues"):
+                    resume = "translate" if STAGES.index(completed) >= STAGES.index("glossary") else "glossary"
+                    self._resume_config = replace(worker.config, work_dir=worker.work_dir, resume_from=resume)
                     self._log_line(tr("resume_translation"))
             except (OSError, ValueError, TypeError, AttributeError):
                 pass
@@ -1187,8 +1192,7 @@ class MainWindow(QMainWindow):
     def _on_worker_finished(self) -> None:
         if not self._is_current_worker():
             return
-        if not self._job_busy():
-            self._release_job()
+        self._release_job()
 
     def _set_stage_failed(self, failed: bool) -> None:
         self.stage_label.setProperty("failed", failed)
@@ -1207,11 +1211,17 @@ class MainWindow(QMainWindow):
             cfg = self._resume_config
             if self.key_edit.text().strip():
                 set_api_key(self.key_edit.text().strip())
-            self._bar_floor = 60
-            self.progress.setValue(60)
-            self.pct_label.setText(format_pct(60))
+                self.key_edit.clear()
+                self.key_edit.setPlaceholderText(tr("token_kept"))
+            model = self.model_combo.currentText().strip() or cfg.translate_model
+            cfg = replace(cfg, translate_model=model, refine_translate=self.refine_check.isChecked())
+            if model:
+                save_user_overrides({"translate": {"model": model}})
+            self._bar_floor = 52 if cfg.resume_from == "glossary" else 60
+            self.progress.setValue(self._bar_floor)
+            self.pct_label.setText(format_pct(self._bar_floor))
             self._last_log_stage = None
-            self._show_stage("translate")
+            self._show_stage(cfg.resume_from)
             self._log_line(tr("resume_translation_running"))
             self._launch_job(cfg)
             return
@@ -1222,7 +1232,7 @@ class MainWindow(QMainWindow):
         self._log_line(tr("resume"))
 
     def _stop(self) -> None:
-        self._retry_translation = self._retry_translation or self._progress_stage == "translate"
+        self._retry_translation = self._retry_translation or getattr(self._worker, "last_stage", self._progress_stage) in {"glossary", "translate"}
         if self._control is not None:
             self._control.stop()
         self._show_stage("stop")
@@ -1351,7 +1361,7 @@ class MainWindow(QMainWindow):
 
     def _launch_job(self, cfg: JobConfig) -> None:
         self._resume_config = None
-        self._retry_translation = False
+        self._retry_translation = cfg.resume_from in {"glossary", "translate"}
         self._set_stage_failed(False)
         self._control = JobControl()
         self._set_running_ui(True, paused=False)
@@ -1412,7 +1422,7 @@ class MainWindow(QMainWindow):
             return
         if not self._is_current_worker():
             return
-        self._retry_translation = self._retry_translation or self._progress_stage == "translate"
+        self._retry_translation = self._retry_translation or getattr(self._worker, "last_stage", self._progress_stage) in {"glossary", "translate"}
         self._set_running_ui(False)
         stopped = msg in {tr("stop"), "job stopped"} or bool(self._control and self._control.is_stopped())
         safe = redact_api_key(msg, get_api_key())
@@ -1423,7 +1433,7 @@ class MainWindow(QMainWindow):
                 self._log_line(tr("stop"))
         else:
             self._log_line(tr("error_prefix").format(msg=safe))
-            show_error(self, safe)
+            show_error(self, safe, translation_retry=self._retry_translation)
 
     def _open_folder(self) -> None:
         if not self._last_output:

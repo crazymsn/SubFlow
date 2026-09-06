@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 from bilingual_sub.gui.error_dialog import ErrorDialog, show_error
 from bilingual_sub.gui.theme import contrast_ratio, tokens_for
@@ -64,3 +64,19 @@ def test_repeated_error_replaces_previous_dialog():
     assert isinstance(parent._error_dialog, ErrorDialog) and new.safe_details == "second"
     parent.close()
     app.processEvents()
+
+
+def test_translation_error_offers_translation_retry_without_dubbing_advice():
+    app = QApplication.instance() or QApplication([])
+    parent = QWidget()
+    parent.resume_btn = QPushButton()
+    retried = []
+    parent._resume = lambda: retried.append(not dialog.isVisible())
+    dialog = show_error(parent, "API timeout", translation_retry=True)
+    app.processEvents()
+    assert dialog.heading.text() == tr("error_translation_title")
+    assert dialog.summary.text() == tr("error_translation_help")
+    assert dialog.action.text() == tr("error_translation_retry")
+    dialog.action.click()
+    assert retried == [True]
+    parent.close()

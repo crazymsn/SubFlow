@@ -34,3 +34,20 @@ def render_profile(config: JobConfig, settings: AppSettings) -> dict:
                                    config.subtitle_zh_color, config.subtitle_en_color)
     return {"schema": 1, "subtitle_pack": SUBTITLE_PACK,
             "preset": preset.model_dump(), "burn": settings.burn.model_dump()}
+
+
+def resume_profile_matches(saved: object, current: dict, stage: str | None) -> bool:
+    """A translation rewind can change translation options, never ASR inputs."""
+    if saved == current:
+        return True
+    if stage not in {"glossary", "translate"} or not isinstance(saved, dict):
+        return False
+    old_translation, new_translation = saved.get("translation"), current.get("translation")
+    if not isinstance(old_translation, dict) or not isinstance(new_translation, dict):
+        return False
+    if old_translation.keys() != new_translation.keys():
+        return False
+    allowed = {"model", "batch_size", "max_en_chars", "refine"}
+    old = {**saved, "translation": {k: v for k, v in old_translation.items() if k not in allowed}}
+    new = {**current, "translation": {k: v for k, v in new_translation.items() if k not in allowed}}
+    return old == new

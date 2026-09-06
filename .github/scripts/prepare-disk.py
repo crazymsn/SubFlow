@@ -15,6 +15,10 @@ def main():
         runtime = Path(os.environ['RUNNER_TEMP']) / 'subflow-runtime'
         environment.write(f'SUBFLOW_RUNTIME_DIR={runtime}\n')
     print(f'Workspace free before: {shutil.disk_usage(workspace).free / 2**30:.1f} GiB', flush=True)
+    minimum_gib = 60 if sys.platform == 'win32' else 45 if sys.platform == 'darwin' else 40
+    if shutil.disk_usage(workspace).free >= minimum_gib * 2**30:
+        print('Sufficient free space; no SDK cleanup needed.', flush=True)
+        return
     targets = []
     if sys.platform == 'darwin':
         active = Path(subprocess.check_output(['xcode-select', '-p'], text=True).strip()).resolve()

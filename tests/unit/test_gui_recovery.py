@@ -113,6 +113,53 @@ def test_missing_translation_remains_retryable_after_later_stage_failure(window,
     assert window.resume_btn.isEnabled() and window._resume_config.resume_from == "translate"
 
 
+def test_continue_uses_changed_translation_settings_and_original_job(window, tmp_path, monkeypatch):
+    cfg = JobConfig(tmp_path / "original.mp4", None, tmp_path / "original.srt", tmp_path,
+                    resume_from="translate", translate_model="old-model")
+    window._resume_config = cfg
+    window.model_combo.addItem("new-model")
+    window.model_combo.setCurrentText("new-model")
+    window.refine_check.setChecked(True)
+    window.key_edit.setText("replacement-test-token")
+    keys, launched = [], []
+    monkeypatch.setattr("bilingual_sub.gui.app.set_api_key", keys.append)
+    monkeypatch.setattr(window, "_launch_job", launched.append)
+    window._resume()
+    assert keys == ["replacement-test-token"] and not window.key_edit.text()
+    assert launched[0].translate_model == "new-model" and launched[0].refine_translate
+    assert launched[0].input_video == cfg.input_video and launched[0].work_dir == cfg.work_dir
+    assert cfg.translate_model == "old-model"
+
+
+def test_retry_failure_before_work_ready_keeps_continue_and_dialog_action(window, tmp_path, monkeypatch):
+    import time
+
+    from PySide6.QtTest import QTest
+
+    cfg = JobConfig(tmp_path / "video.mp4", None, tmp_path / "out.srt", tmp_path,
+                    resume_from="translate")
+    (tmp_path / "job_state.json").write_text(json.dumps({"completed_stage": "glossary"}))
+    attempts = []
+    def locked(config, **kwargs):
+        attempts.append(config)
+        raise RuntimeError("work directory temporarily locked")
+    monkeypatch.setattr("bilingual_sub.pipeline.run", locked)
+    def finish():
+        deadline = time.monotonic() + 5
+        while window._worker is not None and time.monotonic() < deadline:
+            QTest.qWait(10)
+        assert window._worker is None
+        assert window.resume_btn.isEnabled() and window._error_dialog.action.isEnabled()
+    window._launch_job(cfg)
+    finish()
+    window._error_dialog.action.click()
+    finish()
+    assert len(attempts) == 2
+    assert all(c.work_dir == tmp_path and c.resume_from == "translate" for c in attempts)
+    assert window._resume_config is not None
+    window._error_dialog.close()
+
+
 @pytest.mark.parametrize("partial", [False, True])
 def test_worker_failure_or_partial_result_enables_continue(window, tmp_path, monkeypatch, partial):
     import time
