@@ -93,6 +93,6 @@ Windows 已完成本地客户端自检、真实 CUDA 识别与配音验证；跨
 
 ## 数据与许可
 
-识别和内置配音在本机执行；云端翻译会向 meding 发送字幕、提示词和术语，并携带用户令牌鉴权。密钥存储方式见 [API 与数据说明](docs/api-key.md)。
+识别和内置配音在本机执行;
 
-SubFlow 采用 [MIT License](LICENSE)。第三方源码、模型和字体各自遵循相应许可，参见 [NOTICE](NOTICE)、[GPT-SoVITS 说明](third_party/GPT-SoVITS/README.md) 和 [字体许可](LICENSE-fonts.txt)。
+SubFlow 采用 [MIT License](LICENSE)。请自觉遵循相应许可。
