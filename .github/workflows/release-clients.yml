@@ -31,7 +31,6 @@ jobs:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
       SUBFLOW_BUNDLE_HARDLINK: '1'
-      SUBFLOW_RUNTIME_DIR: ${{ runner.temp }}/subflow-runtime
       UV_LINK_MODE: hardlink
       PIP_NO_CACHE_DIR: '1'
     steps:

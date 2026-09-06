@@ -10,6 +10,10 @@ def main():
     if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
         raise SystemExit('This script only runs on disposable GitHub-hosted runners.')
     workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve()
+    # runner context is only available after the job is assigned a host.
+    with Path(os.environ['GITHUB_ENV']).open('a', encoding='utf-8') as environment:
+        runtime = Path(os.environ['RUNNER_TEMP']) / 'subflow-runtime'
+        environment.write(f'SUBFLOW_RUNTIME_DIR={runtime}\n')
     print(f'Workspace free before: {shutil.disk_usage(workspace).free / 2**30:.1f} GiB', flush=True)
     targets = []
     if sys.platform == 'darwin':
