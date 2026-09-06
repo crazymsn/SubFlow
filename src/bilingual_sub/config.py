@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from filelock import FileLock, Timeout
 from pydantic import BaseModel, Field
+
+from bilingual_sub.core.file_io import write_text_files
 
 
 class AsrSettings(BaseModel):
@@ -156,12 +159,18 @@ def _legacy_user_config_path() -> Path:
     return Path.home() / ".config" / "bilingual-sub" / "config.yaml"
 
 
-def _load_yaml(path: Path) -> dict[str, Any]:
+def _load_yaml(path: Path, *, require_mapping: bool = False) -> dict[str, Any]:
     if not path.is_file():
         return {}
     with path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return data if isinstance(data, dict) else {}
+        data = yaml.safe_load(f)
+    if data is None:
+        return {}
+    if isinstance(data, dict):
+        return data
+    if require_mapping:
+        raise ValueError(f"配置文件顶层必须是键值映射，原文件未修改：{path}")
+    return {}
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -232,11 +241,17 @@ def load_ui_theme() -> str:
 
 def save_user_overrides(overrides: dict[str, Any]) -> Path:
     path = _user_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    current = _load_yaml(path)
-    merged = _deep_merge(current, overrides)
-    path.write_text(
-        yaml.safe_dump(merged, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
+    # Follow a user-managed symlink, retaining the link itself when publishing.
+    destination = path.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        # Lock the complete read/merge/write operation across app processes.
+        # Keep the lock file: unlinking it can split ownership between writers.
+        with FileLock(str(destination) + ".lock", timeout=5):
+            current = _load_yaml(destination, require_mapping=True)
+            merged = _deep_merge(current, overrides)
+            text = yaml.safe_dump(merged, allow_unicode=True, sort_keys=False)
+            write_text_files([(destination, text, "utf-8")])
+    except Timeout as exc:
+        raise RuntimeError("配置正在被其他窗口保存，请稍后重试") from exc
     return path
