@@ -83,6 +83,7 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
 _HANGUL_RE = re.compile(r"[\uac00-\ud7af]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
+_CYRILLIC_RE = re.compile(r"[\u0400-\u052f]")
 
 
 def whisper_language(code: str) -> str:
@@ -168,12 +169,14 @@ def spoken_han_lang(target_lang: str) -> str | None:
 
 
 def text_family(text: str) -> str:
-    """Classify a subtitle line as zh, en, ja, ko, or empty."""
+    """Classify script; Latin text defaults to en without language metadata."""
     raw = text or ""
     if _KANA_RE.search(raw):
         return "ja"
     if _HANGUL_RE.search(raw):
         return "ko"
+    if _CYRILLIC_RE.search(raw):
+        return "ru"
     cjk = len(_CJK_RE.findall(raw))
     latin = len(_LATIN_RE.findall(raw))
     if cjk == 0 and latin == 0:
@@ -185,31 +188,41 @@ def text_family(text: str) -> str:
     return "zh"
 
 
-def spoken_family(cues, declared_source: str = "zh") -> str:
-    """Majority script of ASR text. Declared source is only a fallback."""
+def _script_language(family: str, hint: str) -> str:
+    # Latin letters do not establish English. Prefer the audio language hint
+    # unless its script conflicts with the observed transcript.
+    if family == "en" and hint not in {"", "auto", "zh", "ja", "ko", "ru"}:
+        return hint
+    return family
+
+
+def spoken_family(cues, declared_source: str = "zh", *, asr_language: str | None = None) -> str:
+    """Combine transcript script with the recognizer's language metadata."""
+    hint = lang_family(asr_language or "")
+    if hint in {"", "auto"}:
+        hint = lang_family(declared_source)
     votes: dict[str, int] = {}
     for cue in cues:
         raw = getattr(cue, "zh", None) or getattr(cue, "en", None) or ""
-        fam = text_family(raw)
+        fam = _script_language(text_family(raw), hint)
         if fam:
             votes[fam] = votes.get(fam, 0) + max(1, len(raw))
     if not votes:
-        if declared_source == "auto":
+        if hint in {"", "auto"}:
             return "zh"
-        fam = lang_family(declared_source)
-        return "zh" if fam == "zh" else fam
+        return hint
     if set(votes) <= {"zh", "en"}:
         return "zh" if votes.get("zh", 0) >= votes.get("en", 0) else "en"
     return max(votes, key=lambda family: votes[family])
 
 
-def park_pair_source(cues) -> tuple[list[int], list[int]]:
+def park_pair_source(cues, source_lang: str = "") -> tuple[list[int], list[int]]:
     """Move English ASR out of cue.zh. Return (need_en_idx, need_zh_idx)."""
     need_en: list[int] = []
     need_zh: list[int] = []
     for i, cue in enumerate(cues):
         spoken = (cue.zh or cue.en or "").strip()
-        fam = text_family(spoken)
+        fam = _script_language(text_family(spoken), lang_family(source_lang))
         if fam == "en":
             if text_family(cue.en or "") != "en":
                 cue.en = spoken
@@ -299,10 +312,11 @@ def original_lang_votes(declared_source: str, detected_spoken: str, cues=None) -
     if heard and heard != "auto":
         votes.add(lang_family(heard))
     if cues:
-        votes.add(spoken_family(cues, declared_source or "zh"))
+        hint = lang_family(heard if heard and heard != "auto" else declared_source)
+        votes.add(spoken_family(cues, hint or "zh"))
         for cue in cues:
             raw = getattr(cue, "zh", None) or getattr(cue, "en", None) or ""
-            fam = text_family(raw)
+            fam = _script_language(text_family(raw), hint)
             if fam:
                 votes.add(fam)
     return votes
@@ -425,9 +439,9 @@ def job_needs_translation(
     tts_provider: str = "",
 ) -> bool:
     """Screen translation or the target-language line required by dubbing."""
-    if translation_needed(source_lang, target_lang, mode):
+    heard = detected_spoken if detected_spoken and detected_spoken != "auto" else source_lang
+    if translation_needed(heard, target_lang, mode):
         return True
-    heard = source_lang if detected_spoken is None else detected_spoken
     return job_needs_dub(
         source_lang,
         heard,
@@ -450,10 +464,9 @@ def has_distinct_target_line(cues) -> bool:
 def line_matching(cue, lang: str) -> str:
     """Return the cue slot whose script matches lang, or empty."""
     target = lang_family(lang)
-    for text in (
-        (getattr(cue, "zh", None) or "").strip(),
-        (getattr(cue, "en", None) or "").strip(),
-    ):
+    slots = ("en", "zh") if target == "en" else ("zh", "en")
+    for slot in slots:
+        text = (getattr(cue, slot, None) or "").strip()
         if text and text_family(text) == target:
             return text
     return ""
@@ -517,8 +530,9 @@ def job_translation_langs(
     else:
         src_fam = ""
     dests: list[str] = []
-    if translation_needed(source_lang, target_lang, mode):
-        dests.append(screen_translate_lang(source_lang, target_lang, mode))
+    screen_source = heard if heard and heard != "auto" else source_lang
+    if translation_needed(screen_source, target_lang, mode):
+        dests.append(screen_translate_lang(screen_source, target_lang, mode))
     if job_needs_dub(
         source_lang,
         heard,
@@ -550,27 +564,16 @@ def token_required_for_job(
     tts_provider: str = "",
 ) -> bool:
     """True when the client must collect a translation token before starting."""
-    if job_needs_translation(
+    if source_lang == "auto":
+        # When screen and voice request the same language, ASR may prove that
+        # translation is unnecessary. Defer authentication until then.
+        return is_pair_mode(mode) or (
+            lang_family(screen_translate_lang(source_lang, target_lang, mode)) != lang_family(target_lang)
+        )
+    return job_needs_translation(
         source_lang,
         target_lang,
         mode,
-        enable_dub=enable_dub,
-        tts_provider=tts_provider,
-    ):
-        return True
-    if source_lang != "auto":
-        return False
-    if is_pair_mode(mode):
-        return True
-    screen = single_subtitle_lang(mode)
-    if screen and lang_family(screen) != "zh":
-        return True
-    if lang_family(target_lang) != "zh":
-        return True
-    return job_needs_dub(
-        source_lang,
-        source_lang,
-        target_lang,
         enable_dub=enable_dub,
         tts_provider=tts_provider,
     )

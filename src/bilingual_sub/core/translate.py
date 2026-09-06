@@ -16,6 +16,7 @@ from bilingual_sub.core.langs import (
     lang_family,
     normalize_pair_fields,
     park_pair_source,
+    spoken_family,
     text_family,
 )
 from bilingual_sub.models import Cue
@@ -200,11 +201,20 @@ def translate_pair_cues(
     cues: list[Cue],
     *,
     translator=None,
+    source_lang: str = "",
     **kwargs,
 ) -> tuple[list[Cue], TranslateStats, list[str]]:
     """Fill a 中英 pair from whatever script ASR actually produced."""
     work = translator or translate_cues
-    need_en, need_zh = park_pair_source(cues)
+    # Capture third-language originals before either paired translation mutates
+    # the display slots. Group scripts separately for mixed-language clips.
+    other_sources: dict[str, list[tuple[int, str]]] = {}
+    for i, cue in enumerate(cues):
+        original = (cue.zh or cue.en or "").strip()
+        family = spoken_family([cue], source_lang) if text_family(original) else ""
+        if family not in {"", "zh", "en"}:
+            other_sources.setdefault(family, []).append((i, original))
+    need_en, need_zh = park_pair_source(cues, source_lang)
     stats = TranslateStats()
     missing: list[str] = []
 
@@ -235,29 +245,21 @@ def translate_pair_cues(
             if text_family(chinese) == "zh":
                 cues[index].zh = chinese
 
-    need_both = [
-        i
-        for i, cue in enumerate(cues)
-        if text_family((cue.zh or cue.en or "").strip()) not in {"", "zh", "en"}
-    ]
-    if need_both:
-        subset = [cues[i] for i in need_both]
-        src = text_family(subset[0].zh or subset[0].en or "") or "ja"
-        to_zh, st, miss = work(subset, source_lang=src, target_lang="zh", **kwargs)
-        stats.cache_hits += getattr(st, "cache_hits", 0)
-        stats.api_calls += getattr(st, "api_calls", 0)
-        missing.extend(miss)
-        to_en, st2, miss2 = work(subset, source_lang=src, target_lang="en", **kwargs)
-        stats.cache_hits += getattr(st2, "cache_hits", 0)
-        stats.api_calls += getattr(st2, "api_calls", 0)
-        missing.extend(miss2)
-        for index, zh_cue, en_cue in zip(need_both, to_zh, to_en):
-            chinese = (zh_cue.en or "").strip()
-            english = (en_cue.en or "").strip()
-            if text_family(chinese) == "zh":
-                cues[index].zh = chinese
-            if english:
-                cues[index].en = english
+    for src, originals in other_sources.items():
+        for index, _original in originals:
+            # Missing translations must not masquerade as an English line.
+            cues[index].zh = ""
+            cues[index].en = None
+        for dest in ("zh", "en"):
+            subset = [Cue(cues[i].start, cues[i].end, original) for i, original in originals]
+            out, st, miss = work(subset, source_lang=src, target_lang=dest, **kwargs)
+            stats.cache_hits += getattr(st, "cache_hits", 0)
+            stats.api_calls += getattr(st, "api_calls", 0)
+            missing.extend(miss)
+            for (index, _original), updated in zip(originals, out):
+                translated = (updated.en or "").strip()
+                if translated and (dest == "en" or text_family(translated) == "zh"):
+                    place_translated_line(cues[index], translated, dest)
 
     normalize_pair_fields(cues)
     return cues, stats, list(dict.fromkeys(missing))

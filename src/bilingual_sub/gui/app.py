@@ -564,7 +564,7 @@ class MainWindow(QMainWindow):
             str(self.target_lang_combo.currentData() or "zh"),
             mode,
         )
-        if (not translation_needed(source_lang, target_lang, mode)) and getattr(result, "translated", False):
+        if source_lang != "auto" and (not translation_needed(source_lang, target_lang, mode)) and getattr(result, "translated", False):
             return None
         return mp4, srt, ass, dub
 

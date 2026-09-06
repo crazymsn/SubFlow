@@ -244,3 +244,40 @@ def test_fill_translated_languages_puts_third_lang_on_spoken():
     assert out[0].en == "Hello"
     assert out[0].spoken == "今日は良い天気です"
     assert out[0].zh == "大家好"
+
+
+def test_english_translation_precedes_latin_source():
+    from bilingual_sub.core.langs import spoken_line
+    from bilingual_sub.models import Cue
+
+    cue = Cue(0, 1, "Bonjour à tous", "Hello everyone")
+    assert spoken_line(cue, "en") == "Hello everyone"
+    assert screen_line(cue, "single:en") == "Hello everyone"
+
+
+def test_pair_groups_scripts_and_keeps_originals_for_mutating_translator():
+    from bilingual_sub.core.translate import TranslateStats, translate_pair_cues
+    from bilingual_sub.models import Cue
+
+    originals = {"ja": "こんにちは", "ru": "Добрый день"}
+    calls = []
+    def translate(batch, *, source_lang, target_lang):
+        calls.append((source_lang, target_lang, batch[0].zh))
+        batch[0].zh = "mutated source"
+        batch[0].en = "你好" if target_lang == "zh" else "Hello"
+        return batch, TranslateStats(), []
+    cues = [Cue(i, i + 1, text) for i, text in enumerate(originals.values())]
+    out, _, _ = translate_pair_cues(cues, translator=translate, source_lang="ja")
+    assert len(calls) == 4
+    assert all(text == originals[src] for src, _target, text in calls)
+    assert all(c.zh == "你好" and c.en == "Hello" for c in out)
+
+
+def test_missing_pair_translation_does_not_display_foreign_source_as_english():
+    from bilingual_sub.core.translate import TranslateStats, translate_pair_cues
+    from bilingual_sub.models import Cue
+
+    def translate(batch, **kwargs):
+        return batch, TranslateStats(), [c.zh for c in batch]
+    out, _, missing = translate_pair_cues([Cue(0, 1, "Bonjour")], translator=translate, source_lang="fr")
+    assert missing == ["Bonjour"] and not out[0].zh and not out[0].en

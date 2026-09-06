@@ -468,7 +468,7 @@ def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings |
     if "burn" in report and bool(report.get("burn")) != bool(config.burn):
         return False
     heard = str(report.get("detected_spoken") or config.source_lang)
-    need_screen = translation_needed(config.source_lang, config.target_lang, config.subtitle_mode)
+    need_screen = translation_needed(heard, config.target_lang, config.subtitle_mode)
     need_any = job_needs_translation(
         config.source_lang,
         config.target_lang,
@@ -696,6 +696,8 @@ def _result_from_work(
     control: JobControl | None = None,
 ) -> JobResult:
     missing = list(report.get("missing_en_samples") or [])
+    screen_translated = translation_needed(str(report.get("detected_spoken") or config.source_lang),
+                                           config.target_lang, config.subtitle_mode)
     output_hashes = {kind: file_digest(path, checkpoint=lambda: _gate(control)) for kind, path in
                      (("mp4", output_mp4), ("srt", config.output_srt), ("ass", ass_out), ("dub", output_dub)) if path}
     payload: dict = {
@@ -734,6 +736,7 @@ def _result_from_work(
         "burn": bool(config.burn),
         "source_url": config.source_url,
         "detected_spoken": report.get("detected_spoken"),
+        "translated": screen_translated,
         "dubbed": bool(report.get("dubbed")),
         "tts_provider": report.get("tts_provider")
         or _resolved_tts_provider(
@@ -770,7 +773,7 @@ def _result_from_work(
         stages=stages,
         reused=reused,
         output_dub=output_dub,
-        translated=translation_needed(config.source_lang, config.target_lang, config.subtitle_mode),
+        translated=screen_translated,
     )
 
 
@@ -1188,7 +1191,13 @@ def _run_job(
         cues = load_cues_json(cues_zh_path)
     _verify_cache(work, "build_cues", control)
     asr_cues = load_cues_json(cues_zh_path)
-    detected_spoken = spoken_family(asr_cues, config.source_lang)
+    _verify_cache(work, "transcribe", control)
+    transcript_meta = _load_json(transcript_path)
+    asr_language = next((value.strip() for key in ("detected_language", "language")
+                         if isinstance(value := transcript_meta.get(key), str)
+                         and value.strip() and lang_family(value) != "auto"), None)
+    detected_spoken = spoken_family(asr_cues, config.source_lang,
+                                   asr_language=asr_language if isinstance(asr_language, str) else None)
     _validate_output_paths(config, work, include_dub=job_needs_dub(
         config.source_lang, detected_spoken, config.target_lang, cues=asr_cues,
         enable_dub=config.enable_dub, tts_provider=config.tts_provider,
@@ -1283,15 +1292,18 @@ def _run_job(
                             control=control,
                         )
 
-                cues, tstats, missing = translate_pair_cues(cues, translator=translator)
+                originals = [Cue(c.start, c.end, c.zh or c.en or "") for c in cues]
+                cues, tstats, missing = translate_pair_cues(cues, translator=translator, source_lang=heard_src)
                 extra = [lang for lang in dests if lang_family(lang) not in {"zh", "en"}]
                 if extra:
-                    cues, extra_stats, extra_miss = fill_translated_languages(
-                        cues,
+                    spoken_cues, extra_stats, extra_miss = fill_translated_languages(
+                        originals,
                         extra,
                         translator=translator,
                         source_lang=heard_src,
                     )
+                    for cue, spoken_cue in zip(cues, spoken_cues):
+                        cue.spoken = spoken_cue.spoken
                     tstats.cache_hits += extra_stats.cache_hits
                     tstats.api_calls += extra_stats.api_calls
                     missing.extend(extra_miss)
@@ -1604,7 +1616,7 @@ def _run_job(
         "source_url": config.source_url,
         "ui_locale": config.ui_locale,
         "detected_spoken": detected_spoken,
-        "translated": translation_needed(config.source_lang, config.target_lang, config.subtitle_mode),
+        "translated": translation_needed(detected_spoken, config.target_lang, config.subtitle_mode),
         "dubbed": bool(need_dub),
         "tts_provider": _resolved_tts_provider(config, asr_cues, detected_spoken=detected_spoken),
         "tts_model_revision": (_load_json(work / "job_state.json").get("artifact_contexts", {})
@@ -1638,5 +1650,5 @@ def _run_job(
         stages=stages,
         reused=False,
         output_dub=output_dub,
-        translated=translation_needed(config.source_lang, config.target_lang, config.subtitle_mode),
+        translated=translation_needed(detected_spoken, config.target_lang, config.subtitle_mode),
     )
