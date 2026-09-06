@@ -31,13 +31,16 @@ jobs:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
       SUBFLOW_BUNDLE_HARDLINK: '1'
-      UV_NO_CACHE: '1'
+      SUBFLOW_RUNTIME_DIR: ${{ runner.temp }}/subflow-runtime
+      UV_LINK_MODE: hardlink
       PIP_NO_CACHE_DIR: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Prepare space for full inference payloads
+        run: python .github/scripts/prepare-disk.py
       - name: Verify release version
         shell: bash
         run: |
@@ -172,6 +175,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - name: Prepare space for image layers
+        run: python3 .github/scripts/prepare-disk.py
       - name: Read image version
         id: version
         run: python3 -c "import os,tomllib; v=tomllib.load(open('pyproject.toml','rb'))['project']['version']; open(os.environ['GITHUB_OUTPUT'],'a').write('value='+v+'\n')"

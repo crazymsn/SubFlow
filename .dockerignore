@@ -15,6 +15,9 @@ htmlcov
 *.md
 !README.md
 .env
+**/.env
+**/credentials.json
+**/*cookies*.txt
 *.zip
 Cookies
 third_party/GPT-SoVITS/venv

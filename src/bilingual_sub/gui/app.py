@@ -349,8 +349,10 @@ class MainWindow(QMainWindow):
             self.workspace_layout.setDirection(direction)
         self.task_panel.setMinimumWidth(300 if wide else 0)
         self.task_panel.setMaximumWidth(380 if wide else 16777215)
-        self.task_panel.setMinimumHeight(0 if wide else 228)
-        self.task_panel.setMaximumHeight(16777215 if wide else 228)
+        # macOS font metrics need more room for the two hardware lines and
+        # the log viewport padding than the former 228 px compact panel.
+        self.task_panel.setMinimumHeight(0 if wide else 240)
+        self.task_panel.setMaximumHeight(16777215 if wide else 240)
         self.form_scroll.widget().updateGeometry()
 
     def _set_key_status(self, text: str) -> None:

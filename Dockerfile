@@ -11,7 +11,7 @@ FROM base AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE LICENSE-fonts.txt ./
+COPY pyproject.toml README.md LICENSE LICENSE-fonts.txt NOTICE ./
 # Keep ordinary application dependency installation independent of source edits.
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -c "import pathlib,tomllib; pathlib.Path('/tmp/requirements.txt').write_text('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" \
