@@ -1,6 +1,8 @@
 # SubFlow 语幕
 
-本地语音识别、字幕翻译、视频烧录与多语种配音。支持 Windows、M 系列 / Intel Mac 以及 Docker 等多种方式。
+SubFlow 语幕 — 新一代 AI 视频语音识别、AI 配音、自动翻译、字幕生成工具
+
+采用本地语音识别、字幕翻译、视频烧录与多语种配音。支持 Windows、M 系列 / Intel Mac 以及 Docker 等多端设备使用。
 
 **版本 1.3.60** · [下载完整客户端](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Hub](https://hub.docker.com/r/crazymsn/subflow) · [使用文档](docs/README.md) · [更新记录](CHANGELOG.md)
 
