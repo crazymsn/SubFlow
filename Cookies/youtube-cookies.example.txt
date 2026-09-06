@@ -1,0 +1,3 @@
+# Netscape HTTP Cookie File
+# Example only: no login credentials.
+# Export your own browser cookies and save as youtube-cookies.txt in this folder.
