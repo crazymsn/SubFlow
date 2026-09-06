@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable
+from decimal import Decimal
 from itertools import groupby
 
 from bilingual_sub.core.glossary import Glossary
@@ -247,7 +248,18 @@ def build_cues(
     min_duration: float = 0.90,
     max_duration: float = 8.0,
     silence_split_threshold: float = 0.55,
+    media_duration: float | None = None,
 ) -> list[Cue]:
+    limit = None
+    if media_duration is not None:
+        if not math.isfinite(media_duration) or media_duration < 0:
+            raise ValueError("媒体时长必须是有限非负数")
+        # ASS timestamps have centisecond precision. Round inward so exporting
+        # a fractional final frame cannot extend past the available media.
+        limit = int(Decimal(str(media_duration)) * 100) / 100
+        # Exclude entirely out-of-range segments before aligned runs combine
+        # words from multiple segments into a single subtitle.
+        segments = [s for s in segments if s.start < limit and s.end > 0]
     out: list[Cue] = []
     for aligned, group in groupby(segments, key=_has_complete_alignment):
         run = list(group)
@@ -260,4 +272,17 @@ def build_cues(
         if out and chunk and out[-1].start < chunk[0].start < out[-1].end:
             out[-1].end = chunk[0].start
         out.extend(chunk)
-    return out
+    if limit is None:
+        return out
+    bounded = []
+    for cue in out:
+        cue.start = max(0.0, cue.start)
+        cue.end = min(cue.end, limit)
+        if cue.start >= cue.end:
+            continue
+        if any(w.start < cue.start or w.end > cue.end for w in cue.words):
+            # Keep the recognized phrase, but do not advertise word alignment
+            # that extends beyond this cue's actual display interval.
+            cue.words = []
+        bounded.append(cue)
+    return bounded

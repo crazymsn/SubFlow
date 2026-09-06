@@ -1180,6 +1180,8 @@ def _run_job(
             min_duration=settings.cues.min_duration,
             max_duration=settings.cues.max_duration,
             silence_split_threshold=settings.cues.silence_split_threshold,
+            media_duration=min(duration, preview_sec) if duration > 0 and preview_sec
+            else duration if duration > 0 else preview_sec,
         )
         save_cues_json(cues, cues_zh_path)
         save_cues_json(cues, work / "cues.source.json")
