@@ -4,7 +4,7 @@
 
 深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
 
-当前源码版本 **1.3.29**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
+当前源码版本 **1.3.46**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
 
 Apple Silicon 实机验收请参照 [M1 MacBook Air 测试清单](docs/mac-self-test.md)。
 
@@ -90,18 +90,20 @@ Mac 上请勿将同一批输出命名为仅大小写或 Unicode 组合形式不�
 
 ## Docker
 
-Compose 从当前源码自动构建 CPU 镜像，安装 FFmpeg、识别和配音环境。宿主机仅需安装 Docker 和 Compose。
+Compose 默认拉取 `crazymsn/subflow:1.3.46`，镜像内已安装 FFmpeg、识别和配音环境。宿主机仅需安装 Docker 和 Compose，无显卡可直接使用。镜像分别在 Linux amd64 / arm64 原生构建机上验证后发布。
 
 ```bash
 cp .env.example .env
 # 编辑 .env，填入 SUBFLOW_API_KEY（不要提交 .env）
-docker compose build
+docker compose pull
 docker compose run --rm subflow doctor
 docker compose run --rm subflow models
 docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp4
 ```
 
-输入输出位于 `./data`，模型使用命名卷持久缓存。首次跨语种配音会自动下载模型；重复运行无需重装。旧 Docker Hub 镜像不代表本次源码构建。
+输入输出位于 `./data`；识别 / 配音权重、语言数据、设置和下载缓存使用命名卷持久化。首次跨语种配音会自动下载模型，后续复用。`.env` 可设置 `SUBFLOW_CPU_THREADS`、配音超时及 `SUBFLOW_IMAGE` 来选择其他已发布版本。任务结束后容器正常退出，不需要常驻服务或对外开放配音端口。
+
+需要从当前源码构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml build`，随后使用同样的两个 `-f` 参数执行 `run`。Apple M 系列的 Docker 容器使用 arm64 CPU；Apple GPU 加速请使用原生 macOS 客户端。
 
 同一 Compose 项目的容器共用文件占用登记，避免两个任务同时写同一输出，或覆盖另一任务正在读取的文件。原生客户端默认使用当前用户的缓存目录。自定义多个部署共享输入输出时，应让它们使用同一 `SUBFLOW_LOCK_DIR`、相同的文件路径映射和支持文件锁的存储；不要把登记目录放进任务工作目录。
 

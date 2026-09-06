@@ -129,8 +129,18 @@ jobs:
           PYTHONPATH: src
         run: python -m pytest -q -o addopts="" --confcutdir=tests/integration tests/integration/test_commit_interruptions.py
   docker:
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      SUBFLOW_IMAGE: subflow:local
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -139,8 +149,11 @@ jobs:
           context: .
           load: true
           tags: subflow:local
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=subflow-${{ matrix.arch }}
+          cache-to: type=gha,scope=subflow-${{ matrix.arch }},mode=max
       - name: Compose CPU smoke
         run: |
           docker compose config --quiet
@@ -148,9 +161,45 @@ jobs:
           docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py asr
           docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py gptsovits --skip-models
           docker compose run --rm --entrypoint python subflow /app/scripts/check-sovits-audio.py
+      - name: Log in to Docker Hub
+        if: github.repository == 'crazymsn/SubFlow'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push tested architecture image
+        if: github.repository == 'crazymsn/SubFlow'
+        run: |
+          docker tag subflow:local crazymsn/subflow:sha-${{ github.sha }}-${{ matrix.arch }}
+          docker push crazymsn/subflow:sha-${{ github.sha }}-${{ matrix.arch }}
+  docker-publish:
+    if: github.repository == 'crazymsn/SubFlow'
+    needs: [clients, docker, linux-process-lifecycle]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish verified multi-platform tags
+        run: |
+          VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          docker buildx imagetools create \
+            --tag crazymsn/subflow:"$VERSION" \
+            --tag crazymsn/subflow:latest \
+            --tag crazymsn/subflow:sha-${{ github.sha }} \
+            crazymsn/subflow:sha-${{ github.sha }}-amd64 \
+            crazymsn/subflow:sha-${{ github.sha }}-arm64
+          docker buildx imagetools inspect crazymsn/subflow:"$VERSION"
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [clients, docker, linux-process-lifecycle]
+    needs: [clients, docker-publish, linux-process-lifecycle]
     runs-on: ubuntu-latest
     permissions:
       contents: write

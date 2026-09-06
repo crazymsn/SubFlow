@@ -1,0 +1,8 @@
+# Optional source build: docker compose -f docker-compose.yml -f docker-compose.build.yml build
+services:
+  subflow:
+    image: ${SUBFLOW_IMAGE:-subflow:local}
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile

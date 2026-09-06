@@ -42,14 +42,16 @@ python scripts/check-apple-gpu.py --require-gpu
 cp .env.example .env
 # 需要翻译时在 .env 设置 SUBFLOW_API_KEY
 mkdir -p data
-docker compose build
+docker compose pull
 docker compose run --rm subflow doctor
 docker compose run --rm subflow run /data/in.mp4 -o /data/out.mp4
 ```
 
-Compose 构建当前源码的 CPU 镜像，镜像内已安装 FFmpeg、识别及配音依赖。输入输出放入 `./data`。首次配音自动下载模型；Whisper、GPT-SoVITS、语言数据和下载缓存分别持久化在命名卷。不要执行 `docker compose down -v`，除非确实需要删除这些缓存。CLI 任务结束后容器退出是正常行为；Docker 入口不是桌面 GUI。
+Compose 默认使用 Docker Hub 的 `crazymsn/subflow:1.3.46`，镜像内已安装 FFmpeg、识别及配音依赖。输入输出放入 `./data`。首次配音自动下载模型；Whisper、GPT-SoVITS、语言词典、用户设置和下载缓存分别持久化在命名卷。不要执行 `docker compose down -v`，除非确实需要删除这些缓存。CLI 任务结束后容器退出是正常行为；Docker 入口不是桌面 GUI。停止任务预留 60 秒用于清理子进程，容器日志轮转，默认不分配交互终端；交互式配置可使用 `docker compose run --rm -it subflow config set-api-key`。
 
-可在 `.env` 设置 `HF_ENDPOINT` 指向可访问且可信的兼容镜像。不要将 API Key、Cookie 或 `.env` 提交到 GitHub。默认验收平台为 Linux x86_64 CPU；ARM Linux 依赖可用性另行验证。
+可在 `.env` 设置 `HF_ENDPOINT`、`SUBFLOW_CPU_THREADS`、`SUBFLOW_GPTSOVITS_TIMEOUT` 和 `SUBFLOW_IMAGE`。镜像支持 Linux amd64 / arm64 CPU，不要求显卡。Apple GPU 加速使用原生 macOS 客户端；Docker 中的 Linux 不使用 MPS。不要将 API Key、Cookie 或 `.env` 提交到 GitHub。
+
+源码构建使用 `docker compose -f docker-compose.yml -f docker-compose.build.yml build`，运行时继续带上这两个 `-f` 参数。Dockerfile 将编译工具留在构建阶段，缓存依赖下载，最终镜像仅保留应用与运行环境。发布流水线对每种架构完成 CLI、依赖及音频检查，客户端检查也通过后再合并并更新版本和 `latest` 标签。
 
 ## 源码运行
 

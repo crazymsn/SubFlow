@@ -1,17 +1,19 @@
-# docker compose build
+# docker compose pull
 # docker compose run --rm subflow run /data/input.mp4 -o /data/output.mp4
 # CPU works without a graphics card. Models download once into named volumes.
 services:
   subflow:
-    image: subflow:local
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${SUBFLOW_IMAGE:-crazymsn/subflow:1.3.46}
+    pull_policy: missing
     environment:
       SUBFLOW_API_KEY: ${SUBFLOW_API_KEY:-}
       SUBFLOW_TRANSLATE_MODEL: ${SUBFLOW_TRANSLATE_MODEL:-}
       SUBFLOW_GPTSOVITS_DEVICE: cpu
+      SUBFLOW_TORCH_BACKEND: cpu
+      SUBFLOW_GPTSOVITS_TIMEOUT: ${SUBFLOW_GPTSOVITS_TIMEOUT:-1800}
       SUBFLOW_LOCK_DIR: /root/.cache/bilingual-sub/resource-locks
+      OMP_NUM_THREADS: ${SUBFLOW_CPU_THREADS:-4}
+      MKL_NUM_THREADS: ${SUBFLOW_CPU_THREADS:-4}
       HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
     volumes:
       - ./data:/data
@@ -21,10 +23,21 @@ services:
       - sovits-models:/opt/GPT-SoVITS/GPT_SoVITS/pretrained_models
       - sovits-g2pw:/opt/GPT-SoVITS/GPT_SoVITS/text/G2PWModel
       - sovits-nltk:/opt/GPT-SoVITS/nltk_data
+      - sovits-language-cache:/opt/GPT-SoVITS/TEMP
+      - subflow-config:/root/.config/subflow
     working_dir: /data
     init: true
-    stdin_open: true
-    tty: true
+    stop_grace_period: 60s
+    shm_size: 1gb
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
 volumes:
   whisper-cache:
   subflow-cache:
@@ -32,3 +45,5 @@ volumes:
   sovits-models:
   sovits-g2pw:
   sovits-nltk:
+  sovits-language-cache:
+  subflow-config:

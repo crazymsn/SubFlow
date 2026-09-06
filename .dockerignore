@@ -29,3 +29,6 @@ third_party/GPT-SoVITS/GPT_SoVITS/text/G2PWModel
 **/*.onnx
 **/*.safetensors
 .mypy_cache
+client-smoke.json
+apple-gpu-report.json
+sovits-audio-report.json
