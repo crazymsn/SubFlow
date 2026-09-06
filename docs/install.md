@@ -1,8 +1,10 @@
-# 安装 SubFlow
+# 安装与运行环境
+
+[返回文档索引](README.md) · 适用于 **SubFlow 语幕 1.3.46**
 
 ## Windows / macOS 客户端
 
-从 [Releases](https://github.com/crazymsn/SubFlow/releases) 下载已发布版本；main 分支的最新构建位于 [Actions](https://github.com/crazymsn/SubFlow/actions/workflows/release-clients.yml) 的 Artifacts。
+从 [1.3.46 Release](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.46) 下载正式客户端。下载、校验和第一次处理见 [桌面指南](desktop.md)。Actions 中的开发工件不等同于新的正式发布。
 
 - Windows x64：`SubFlow-Windows-x64.zip`，整夹解压并运行 `SubFlow/SubFlow.exe`。
 - Apple Silicon：`SubFlow-macOS-arm64.zip`。
@@ -36,26 +38,19 @@ python scripts/check-apple-gpu.py --require-gpu
 
 ## Docker Compose
 
-安装 Docker 和 Compose 后，在仓库根目录执行：
-
-```bash
-cp .env.example .env
-# 需要翻译时在 .env 设置 SUBFLOW_API_KEY
-mkdir -p data
-docker compose pull
-docker compose run --rm subflow doctor
-docker compose run --rm subflow run /data/in.mp4 -o /data/out.mp4
-```
-
-Compose 默认使用 Docker Hub 的 `crazymsn/subflow:1.3.46`，镜像内已安装 FFmpeg、识别及配音依赖。输入输出放入 `./data`。首次配音自动下载模型；Whisper、GPT-SoVITS、语言词典、用户设置和下载缓存分别持久化在命名卷。不要执行 `docker compose down -v`，除非确实需要删除这些缓存。CLI 任务结束后容器退出是正常行为；Docker 入口不是桌面 GUI。停止任务预留 60 秒用于清理子进程，容器日志轮转，默认不分配交互终端；交互式配置可使用 `docker compose run --rm -it subflow config set-api-key`。
-
-可在 `.env` 设置 `HF_ENDPOINT`、`SUBFLOW_CPU_THREADS`、`SUBFLOW_GPTSOVITS_TIMEOUT` 和 `SUBFLOW_IMAGE`。镜像支持 Linux amd64 / arm64 CPU，不要求显卡。Apple GPU 加速使用原生 macOS 客户端；Docker 中的 Linux 不使用 MPS。不要将 API Key、Cookie 或 `.env` 提交到 GitHub。
-
-源码构建使用 `docker compose -f docker-compose.yml -f docker-compose.build.yml build`，运行时继续带上这两个 `-f` 参数。Dockerfile 将编译工具留在构建阶段，缓存依赖下载，最终镜像仅保留应用与运行环境。发布流水线对每种架构完成 CLI、依赖及音频检查，客户端检查也通过后再合并并更新版本和 `latest` 标签。
+默认使用已发布的 `crazymsn/subflow:1.3.46`，支持 Linux amd64 / arm64 CPU。宿主机只需 Docker 和 Compose，首次模型下载后复用持久化卷。完整部署、PowerShell 命令、无令牌中文示例、模型卷、更新与源码镜像构建见 [Docker 指南](docker.md)。
 
 ## 源码运行
 
-源码开发需要 Python 3.11+ 和 PATH 中的 FFmpeg：
+源码开发需要 Python 3.11+、Git 和 PATH 中支持字幕滤镜的 FFmpeg 6+。客户端用户不需要执行以下开发步骤。
+
+```bash
+git clone https://github.com/crazymsn/SubFlow.git
+cd SubFlow
+python -m venv .venv
+```
+
+Windows PowerShell 激活 `.\.venv\Scripts\Activate.ps1`；macOS / Linux 激活 `source .venv/bin/activate`。之后在仓库根目录执行：
 
 ```bash
 python -m pip install -e ".[gui,dev]"
@@ -90,10 +85,19 @@ python scripts/prepare-runtime.py gptsovits
 | SUBFLOW_TORCH_BACKEND | 原生 Apple Silicon 默认 mps，其余默认 cpu；可设 cpu 禁用自动 GPU，Win/Linux x64 可选 cuda |
 | SUBFLOW_GPTSOVITS_DEVICE | 可设 mps / cpu / cuda，默认跟随平台的推理后端 |
 | SUBFLOW_SOVITS_AUTOSTART=0 | 禁用桌面启动时配音预热；需要配音时仍会按需准备 |
+| SUBFLOW_GPTSOVITS_TIMEOUT | 配音请求超时秒数，默认 1800；使用正数 |
+| SUBFLOW_PYTHON / SUBFLOW_WHISPER_PYTHON | 显式选择识别解释器，前者非空时优先；无效路径会报错 |
+| SUBFLOW_GPTSOVITS_PYTHON | 显式选择配音解释器，适用于自行管理的环境 |
 
 安装日志位于 `SUBFLOW_RUNTIME_DIR` 下的 `install-*.log`。默认 Windows 依赖在 `%APPDATA%/SubFlow/managed`，GPT 模型在 `%LOCALAPPDATA%/SubFlow/GPT-SoVITS`；Mac 依赖在 `~/.config/subflow/managed`，GPT 模型在 `~/.local/share/subflow/GPT-SoVITS`。下载失败可重试，已完成的缓存会保留。
 
 ## 构建客户端
+
+构建在对应操作系统与目标架构上执行。先按源码步骤准备主环境与 FFmpeg，再安装打包依赖：
+
+```bash
+python -m pip install -e ".[gui,dev,packaging]"
+```
 
 ```powershell
 # Windows 社区包：用户首次自动安装
@@ -108,3 +112,7 @@ bash scripts/build-macos.sh
 ```
 
 推送 main 自动运行 Windows x64、macOS arm64/x64 的测试、对应 CPU/MPS 环境安装、打包与真实启动检查，以及 Docker 构建检查。Apple GPU 探测报告单独记录依赖是否支持 MPS、GPU 是否可分配内存以及计算检查结果；托管虚拟机不能使用 GPU 时不会标记为 GPU 验收通过。真实 Mac 的严格验收应运行 `python scripts/check-apple-gpu.py --require-gpu`，再进行实际视频识别和配音。推送 v* 标签且所有检查成功后自动上传 ZIP 到 Releases。社区包不携带用户配置、API Key、Cookie 或预下载的模型权重。
+
+## 开发与验收
+
+源码检查及 PR 流程见 [贡献指南](../CONTRIBUTING.md)。当前发布结果见 [1.3.46 验收](release-1.3.46.md)，真实 Apple GPU 检查按 [M1 清单](mac-self-test.md) 执行。仅文档更新不会改变既有客户端包或版本标签。

@@ -1,44 +1,37 @@
-# meding API 契约
+# meding 翻译 API 实现契约
 
-> Base URL 固定为 `https://api.meding.site`，不可配置。实现只允许出现在 `adapters/meding.py`。
+[返回文档索引](README.md) · 对应 **1.3.46** 源码行为
 
-翻译走该站点。配音不再走云端，只走内置 GPT-SoVITS。客户端「API 分发站」打开的就是这个地址。
+当前适配器使用 OpenAI 兼容协议，固定端点为 `https://api.meding.site`。端点常量集中在 [adapters/meding.py](../src/bilingual_sub/adapters/meding.py)，SDK 使用带 `/v1` 的地址。本文描述客户端实现，不承诺服务端模型、价格或可用性。
 
-## 端点（OpenAI 兼容）
+## 请求
 
-```
-POST https://api.meding.site/v1/chat/completions
-Authorization: Bearer {USER_API_KEY}
-```
-
-```json
-{
-  "model": "gpt-4o-mini",
-  "messages": [
-    {"role": "system", "content": "..."},
-    {"role": "user", "content": "中文句子"}
-  ]
-}
-```
-
-健康检查与模型列表：
-
-```
-GET https://api.meding.site/v1/models
-```
-
-保存令牌后，CLI `subflow models` 与桌面「获取模型」都打这一支。
-
-## 错误码
-
-| HTTP | 处理 |
+| 端点 | 用途 |
 | --- | --- |
-| 401 | 提示检查令牌，进程退出码 3 |
-| 429 | 指数退避 1s / 2s / 4s，最多 3 次 |
-| 5xx | 同上 |
+| `GET /v1/models` | 获取翻译模型列表及连通性检查 |
+| `POST /v1/chat/completions` | 翻译、润色和相关文本处理 |
 
-## 实现要点
+请求使用 HTTPS 和 `Authorization: Bearer {USER_API_KEY}`。原片不作为翻译附件上传；字幕、术语、提示词及润色上下文可能随请求发送。令牌实际存储与优先级见 [API 令牌](api-key.md)。
 
-- SDK `base_url=https://api.meding.site/v1`（常量 `MEDING_BASE_URL` 不含路径）
-- 翻译缓存：`~/.cache/bilingual-sub/translations.db`，key = sha256(model + 源文)
-- 请求体只有字幕文本，不含视频文件
+保存令牌和 `subflow models` 会尝试请求模型列表。适配器兼容多种列表结构，去重后过滤空 ID 以及 BAAI / 智源条目。模型 ID 应从当前账户返回列表选择，不应假定文档中的示例模型永久可用。
+
+## 错误与重试
+
+聊天请求关闭 SDK 自带重试，由适配器统一处理，单次请求超时配置为 60 秒。
+
+| 情况 | 当前处理 |
+| --- | --- |
+| HTTP 401 / 403 | 转为鉴权错误，由调用入口显示或映射退出码 |
+| HTTP 429、500、502、503、504 | 最多重试三次，等待 1 / 2 / 4 秒 |
+| 连接错误（含 SDK 连接超时类） | 同样进行有界重试 |
+| 其他 HTTP 错误 | 传给调用方处理，不统一按临时错误重试 |
+| JSON 格式请求遭 400 / 422 且错误明确指向格式不支持 | 去掉 JSON 模式后重试该请求 |
+| 返回字幕条数或内容无效 | 校验失败，不直接视为有效翻译 |
+
+暂停 / 取消通过 `JobControl` 接入重试等待。模型列表请求与健康检查不使用上述聊天重试循环；`doctor` 中的鉴权失败作为环境检查失败处理，不能把所有 API 错误都表述为同一退出码。
+
+## 翻译缓存
+
+默认 SQLite 数据库为 `~/.cache/bilingual-sub/translations.db`。常规翻译的缓存身份包含模型、源 / 目标语种、原文、术语和长度设置，并带缓存结构版本；具体组合由 [core/translate.py](../src/bilingual_sub/core/translate.py) 与适配器共同完成。
+
+缓存中含字幕和译文，属于本机用户数据。Docker 持久化于 `subflow-cache` 卷。对敏感媒体进行备份、分享或清理时，应一并考虑缓存和任务报告。

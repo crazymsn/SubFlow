@@ -1,5 +1,7 @@
 # 社区版本验收（2026-09-05）
 
+> 历史技术记录：下文描述当时的版本和验证范围，旧安装包及本地临时证据可能已清理。当前安装请使用 [1.3.46 指南](README.md)，最新发布检查见 [1.3.46 验收记录](release-1.3.46.md)。
+
 ## 分发方式
 
 SubFlow 1.3.0 桌面包自带 FFmpeg、uv 和 GPT-SoVITS 源码。用户首次运行时在私有目录安装 Python 3.11 与隔离的 CPU 推理环境并下载模型；后续复用缓存。Windows x64、Apple Silicon Mac、Intel Mac 分别构建。Docker Compose 从源码构建 CPU 镜像，模型以命名卷持久化。
@@ -43,4 +45,3 @@ SubFlow 1.3.0 桌面包自带 FFmpeg、uv 和 GPT-SoVITS 源码。用户首次�
 三份客户端的打包后检查均返回 `ok: true`，验证了内置 FFmpeg 9.0.1、ffprobe 和 uv 0.11.8。此轮产物位于 Actions（下载需登录 GitHub，按工件保留期提供），没有额外创建 Release 标签。CPU 音频生成的实测在 Windows 完成；Mac 和 Docker 本轮验证范围为测试、依赖安装与启动，不将其描述为已完成所有设备上的长视频性能验收。
 
 固定数值依赖后再次实测：CPU 中文识别成功，中文配音生成 4.48 秒音频。
-

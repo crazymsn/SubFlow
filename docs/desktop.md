@@ -1,119 +1,80 @@
-# 桌面客户端 — SubFlow 语幕
+# 桌面客户端
 
-构建文件：`SubFlow-Windows-x64.zip`、`SubFlow-macOS-arm64.zip`、`SubFlow-macOS-x64.zip`。正式版本从 [Releases](https://github.com/crazymsn/SubFlow/releases) 下载，开发构建从 [Actions](https://github.com/crazymsn/SubFlow/actions/workflows/release-clients.yml) 下载。
+[返回文档索引](README.md) · 适用于 **SubFlow 语幕 1.3.46**
 
-窗口标题为 **深度云创科技**，界面品牌为 **SubFlow 语幕**。
+## 下载与安装
 
-## 安装与启动
+从 [1.3.46 Release](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.46) 下载客户端，按处理器架构选择：
 
-1. 从 GitHub Releases 下载 zip，整夹解压。
-2. 目录里应同时有 `SubFlow.exe`、`_internal\`、`ffmpeg.exe`、`ffprobe.exe`。
-3. **在该文件夹内**双击 `SubFlow.exe`。不要把 exe 单独拷到桌面。
+| 平台 | 安装包 | 启动方式 |
+| --- | --- | --- |
+| Windows 10/11 x64 | `SubFlow-Windows-x64.zip` | 完整解压，运行 `SubFlow/SubFlow.exe` |
+| Apple M 系列，macOS 14+ | `SubFlow-macOS-arm64.zip` | 解压，将 `SubFlow.app` 放入「应用程序」 |
+| Intel Mac，macOS 15+ | `SubFlow-macOS-x64.zip` | 解压，将 `SubFlow.app` 放入「应用程序」 |
 
-客户端是 PyInstaller onedir 包，exe 只是入口。只拷 exe 会找不到 Qt 与运行库。
+Windows 包内的 `_internal/`、FFmpeg、ffprobe 和 GPT-SoVITS 文件必须一起保留，不能只复制 EXE。Mac 使用对应架构的包；M 系列不要选 Intel 包或通过 Rosetta 运行。
 
-macOS 发布包是 GitHub Actions 按同一套源码打出的 `SubFlow.app`（分别提供 Apple Silicon / Intel 架构）。解压 zip 后拖到「应用程序」。首次打开若被拦截，按住 Control 点击图标再选打开。
+Mac 当前发布包未做 Apple 开发者公证。首次打开被系统拦截时，确认下载来源为本仓库，再按系统提示在「系统设置 → 隐私与安全性」允许打开。不要通过关闭整个系统的安全检查解决安装问题。
 
-本机从源码构建：
-
-```bash
-bash scripts/build-macos.sh
-# 产物：dist/SubFlow.app
-```
+Release 附有 `SHA256SUMS`。可以计算下载 ZIP 的摘要，与文件中相同文件名的一行比较：
 
 ```powershell
-.\scripts\build-windows.ps1
-# 产物：dist\SubFlow\SubFlow.exe
+Get-FileHash .\SubFlow-Windows-x64.zip -Algorithm SHA256
 ```
 
-`dist/` 只在本机生成，不会提交到 Git。官方 Win / Mac 包由 `.github/workflows/release-clients.yml` 在打 `v*` 标签时上传到 Releases。
+```bash
+shasum -a 256 SubFlow-macOS-arm64.zip
+```
 
-## 第一次使用
+## 首次启动与环境准备
 
-启动后会自动安装隔离的 Python 3.11、推理依赖和 GPT-SoVITS 模型（Apple M 系列默认使用 MPS GPU），窗口底部显示进度。无需预装 Python、CUDA、Git 或编译器。首次需要联网及约 15–20 GB 磁盘空间，后续复用缓存。关闭客户端会停止当前安装，下次启动可重试。无显卡时建议选 tiny/base/small 识别模型先处理短片；CPU 配音可运行，但速度通常慢于显卡。
+客户端自带 FFmpeg、安装器及 GPT-SoVITS 适配源码。首次启动自动准备隔离的 Python 3.11、配音依赖和模型，识别时准备所选 Whisper 模型。首次需要联网，建议预留约 15–20 GB 磁盘空间；后续复用缓存，无需预装 Python、Git、CUDA 或编译器。
 
-中文原片输出中文单语字幕不需要翻译令牌。需要英文等翻译字幕时再配置以下 API 令牌。
+启动日志显示安装进度。关闭客户端会停止本次安装，下次启动可重试；不要在下载或推理期间删除环境目录。缓存位置与环境变量见 [安装指南](install.md)。
 
-1. 打开 [https://api.meding.site](https://api.meding.site) 领取 API 令牌。令牌只保存在本机，不要写进仓库。
-2. 在「API 令牌」粘贴后点「保存令牌」，再点「获取模型」，从列表选翻译模型（BAAI / 智源条目不会出现）。
-3. 左侧拖入 MP4 / MKV / MOV / WEBM，或右侧粘贴 YouTube / Bilibili 链接后点「下载」。
-4. 确认源语言、目标语言、字幕样式、识别引擎、识别模型。
-5. 需要烧录成片时勾选「烧录到视频」。
-6. 需要改字幕颜色时，打开「更多选项」，点中文 / 英文字幕色块。
-7. 填好输出路径，点「开始处理」。
+- Windows 和 Intel Mac 默认使用 CPU，无独立显卡可运行。先用短视频与 Whisper `tiny` / `base` 检查速度，再选择更大模型。
+- Apple M 系列默认尝试 MPS，使用原生 Whisper 引擎。GPU 不可用或受支持的回退路径触发时使用 CPU；实际设备以日志为准。
+- WhisperX 不支持 MPS，Apple GPU 验收使用默认 Whisper，见 [M1 实机清单](mac-self-test.md)。
 
-进度以整数百分比显示。处理日志在窗口底部。
+## 第一次处理
 
-## 三个语种控件
+1. 拖入本地 MP4 / MKV / MOV / WEBM，或粘贴视频链接并完成下载。
+2. 设置源语言、目标语言、字幕样式、识别引擎和模型。
+3. 中文原片只输出中文字幕时不需要翻译令牌；双语或跨语种翻译时，按 [API 指南](api-key.md) 保存令牌、获取并选择模型。
+4. 指定不同于原片的新输出路径。勾选「烧录到视频」生成带字幕视频；关闭时导出字幕。
+5. 按需在「更多选项」设置字幕颜色、翻译润色和跨语种配音。
+6. 点击「开始处理」，在窗口底部查看进度和日志；可暂停、继续或停止。
 
-| 控件 | 只管 |
+## 字幕与声音规则
+
+| 控件 | 作用 |
 | --- | --- |
-| 源语种 | 识别用的语言；`简体中文` / `繁體中文` 都走 Whisper 的 `zh` |
-| 目标语种 | 配音语种；中英画面里的中文轨跟它走简体或繁体 |
-| 字幕样式 | 画面布局：中英、英中、或单语 |
+| 源语言 | 识别语言；简体 / 繁体中文都属于中文语音 |
+| 目标语言 | 配音目标，以及双语字幕中文行的简繁 |
+| 字幕样式 | 画面上的语言和顺序：中英、英中或单语 |
 
-默认：源语种简体、目标语种简体、字幕样式中英。此时成片是 **中文原声 + 简体 1 行 + 英文 1 行**。
+默认源语言和目标语言为中文、字幕样式为中英，此时输出 **中文原声 + 中文一行 + 英文一行**。英文行仍需要翻译接口。
 
-Whisper 中文常输出繁体。目标为简体时，烧录前会把中文轨转成简体。
+中文源片选择简体或繁体中文目标时始终保留原声，残留的配音开关不会触发本次视频的合成配音。中文简繁仅改变字幕文字。客户端启动本地配音服务属于环境准备，与视频是否配音分开判断。
 
-下载链接时优先原声音轨。中文片不应下成英文自动配音；英语原声片仍下英语原声。
+跨语种目标（例如中文转 English）开启配音后使用本地 GPT-SoVITS。可提供清晰、文字对应的参考音频；未提供时程序尝试从原片提取参考片段。CPU 配音较慢，单次请求默认等待最多 1800 秒，调整方法见 [安装指南](install.md)。
 
-## 自定义字幕烧录颜色
+## 颜色、主题与缓存
 
-在「更多选项」里有两个色块：
+「更多选项」可修改中文字幕颜色（默认 `#FFFFFF`）和英文颜色（默认 `#F2F2F2`）。颜色保存到本机配置，下次启动沿用。
 
-| 控件 | 默认 | 作用 |
-| --- | --- | --- |
-| 中文字幕颜色 | `#FFFFFF` | 写入 ASS 的中文轨并烧进成片 |
-| 英文字幕颜色 | `#F2F2F2` | 写入 ASS 的英文轨并烧进成片 |
+满足输入和缓存校验时，只改颜色会重新生成 ASS 并烧录，只改输出路径会复用已有成品；视频、语言或其他处理设置变化可能使相应阶段重新运行。旧作业与当前处理修订不兼容时应重新处理。
 
-点击色块打开系统选色器。颜色保存在本机配置目录，下次启动沿用。
+界面可切换浅色 / 深色及八种语言。源文件、术语表和参考音频不要使用作业内部状态、识别日志或临时目录的保留名称，相关冲突会在处理前检查。Mac 上也避免仅大小写或 Unicode 组合形式不同的输出路径。
 
-- 只改颜色、不改视频：重渲 ASS 并重烧，**不重跑识别 / 翻译**
-- 命令行等价：`--zh-color "#FFD400" --en-color "#E8E8E8"`
+## 链接下载与本机数据
 
-## 主界面字段
+下载优先原声音轨。若站点要求登录，使用自己的 Netscape 格式 Cookie 文件：`youtube-cookies.txt` / `bilibili-cookies.txt`。下载器支持客户端附近的 `Cookies/` 与用户配置目录下的 `Cookies/`；Windows 用户目录为 `%APPDATA%/SubFlow/Cookies`。不要公开这些文件。
 
-| 区域 | 作用 |
-| --- | --- |
-| 上传视频 | 拖放或点击选择本地文件 |
-| 视频链接 | 远程地址入库，默认最高清 + 原声音轨 |
-| 源语言 / 目标语言 | 识别语言与配音 / 简繁 |
-| 字幕样式 | 中英、英中或单语 |
-| 识别引擎 | Whisper（默认）或 WhisperX（未就绪时自动回退） |
-| 识别模型 | `tiny` … `large` |
-| 烧录到视频 | 把字幕压进 MP4；关闭则只出 SRT / ASS |
-| 输出路径 | 成品文件或文件夹；自动文件名跟随字幕样式（中英字幕 / 英中字幕）；同片只改路径会拷贝已有成品 |
+API 凭据和字幕设置存于用户配置或系统凭据库，详见 [令牌存储](api-key.md)。社区 ZIP 首次联网安装依赖与模型；本机使用构建脚本生成的完整包可能另外携带 `GPT-SoVITS/runtime`，不应据此认为所有 GitHub 包都预装模型。
 
-「更多选项」在甲板内部展开，不会盖住开始栏：
+## 升级与反馈
 
-| 选项 | 作用 |
-| --- | --- |
-| 字幕颜色 | 勾选后出现中英字幕色块 |
-| 配音 | 跨语种目标使用 GPT-SoVITS；中文原片导出简体或繁体中文始终保留原声。启动客户端自动拉起本机服务，可自选参考音频，缺省从原片抽 3–8 秒 |
-| 电影级润色 | 翻译后走 reflect / adapt |
+退出旧客户端后，把新版本完整解压到单独目录，再启动验证。不要把新旧包的 `_internal`、Python 和 Qt 文件混在一起。正常升级可复用用户目录中的模型与配置。
 
-术语表不在桌面端暴露，命令行仍可用 `--glossary` / `--glossary-generate`。
-
-开始栏提供开始、暂停、继续、停止。
-
-## 主题与语言
-
-右上角可切换浅色 / 深色，以及八种界面语言。默认深色、简体中文。
-
-## 本机构件
-
-- API 令牌：Windows 凭据管理器，失败时写入 `%APPDATA%\SubFlow\`
-- 下载 Cookie：读 exe 同级、项目根（打包版会向上找）、`%APPDATA%\SubFlow\Cookies` 的 `youtube-cookies.txt` / `bilibili-cookies.txt`。YouTube 必须含 SID 登录态。仓库仅带格式示例，不携带登录 Cookie
-- 字幕颜色：`%APPDATA%\SubFlow\`（macOS / Linux 为用户配置目录）
-- Whisper 权重：本机缓存
-- Windows 完整构建包在 `GPT-SoVITS/runtime` 中携带独立 Python / PyTorch，模型保存在 `GPT-SoVITS/GPT_SoVITS` 中。请保留整个客户端文件夹。Whisper / WhisperX 仍使用各自的识别环境。
-- GPT-SoVITS 源码在仓库 `third_party/GPT-SoVITS`（[官方项目](https://github.com/RVC-Boss/GPT-SoVITS)）。启动 `SubFlow.exe` / `subflow gui` 自动运行 `api_v2.py`。GitHub 构建使用首次自动安装模式；`build-windows.ps1 -SourceOnly` 生成同类社区客户端。
-
-## 不要做
-
-- 不要只复制 `SubFlow.exe`
-- 不要把输出路径写成原片同一文件
-- 需要翻译时，不要在没保存令牌、没选模型时点开始。中文原片输出中文单行字幕保留原声，不需要翻译令牌
-- 不要提交 `.env`、Cookie、凭据文件
-- 不要复用已经下错过音轨的旧 `source.mp4`，应重新下载
+故障定位见 [排查指南](troubleshooting.md)。报告问题时提供版本、操作系统、设备、步骤和脱敏日志；源码打包见 [安装与构建](install.md)。

@@ -1,45 +1,89 @@
-# 故障排除 — SubFlow 语幕
+# 故障排除
 
-| 现象 | 原因 | 处理 |
-| --- | --- | --- |
-| 双击 exe 报找不到 Qt / DLL | 只复制了 exe，或缺少 VC++ 运行库 | 整夹启动；安装 [VC++ 2015–2022 x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) |
-| 启动即 WinError 127 | 包内误带了外来 ICU DLL | 官方构建脚本会删掉 `_internal/icu*.dll`；请用 Releases 包或重新 `build-windows.ps1` |
-| 点开始提示「请先选择视频」 | 未拖入文件且未完成链接下载 | 拖入视频，或粘贴链接后先点「下载」 |
-| 提示需要令牌 / 模型 | 未保存 Key 或未拉取列表 | 保存令牌后点「获取模型」并选中一项 |
-| 列表里没有 BAAI 模型 | 产品会屏蔽 BAAI / 智源条目 | 属预期，换其它翻译模型 |
-| YouTube 提示登录 / 不是机器人 | 游客被拦，或罐里只有 VISITOR/PREF | 从已登录浏览器重新导出 Netscape Cookie（`LOGIN_INFO` + `SID` 或 `__Secure-3PSID`）。也可放到 `%APPDATA%\SubFlow\Cookies`。Chrome 127+ 无法直接读 Cookie 库；可完全退出 Chrome 后再点下载 |
-| B 站 412 / 风控 | 访客请求被拦，或打包版没找到 Cookie | 把 `bilibili-cookies.txt` 放到项目 `Cookies\`、exe 同级或 `%APPDATA%\SubFlow\Cookies`；1.2.3 起会沿目录向上找 |
-| 输出路径不能和原片相同 | 会覆盖源文件 | 换一个文件名或文件夹 |
-| 改了颜色却重跑识别 | 同时还改了视频或其它会失效缓存的项 | 只改色块、不换片时才会从 render 续跑 |
-| 识别很慢 / 内存暴涨 | `large` 模型 + CPU | 改用 `small` / `medium`，或装 CUDA 后走源码 `[cuda]` |
-| 日志出现回退 Whisper | 本机没有可用的 WhisperX runtime | 属预期；要词级对齐需单独准备 WhisperX |
-| 字幕不显示 | fontsdir 错误或字体缺失 | 检查 `fonts/`；运行 `subflow doctor` |
-| 烧录失败（中文路径） | ffmpeg subtitles 滤镜怕非 ASCII | 工具会拷到 ASCII 工作目录再烧 |
-| 音画时长变短 | 误改帧率 | 本工具禁止改 fps，音频 `-c:a copy` |
-| 英文空白 | 翻译 API 失败 | 看作业 `report.json` 的 `missing_en_samples` |
-| 字幕太小 / 太大 | 超长句会缩放到一行内 | 属预期；中英各只占 1 行 |
-| 字幕出画 | 旧版写死坐标或多行溢出 | 1.2.2 起按安全框缩放，中英各 1 行 |
-| 中英字幕却是繁体 | Whisper 中文常出繁体，旧版未转写 | 目标选简体后会 t2s；用 1.2.2 重烧即可 |
-| 中文链接下成英配 | 旧版 `ba` 选了自动配音 | 1.2.2 优先原声；删掉旧 `source.mp4` 后重下 |
-| doctor 报 whisper 缺失 | 未装识别依赖 | `pip install -e ".[cuda]"` 或 `docker pull crazymsn/subflow:latest` |
-| 401 | Key 无效或未配置 | `subflow config set-api-key`；Docker 检查 `.env` |
-| 429 / 5xx | 配额或服务端抖动 | 客户端会按 1s / 2s / 4s 重试三次 |
-| 无音轨 | 视频没有音频 | 工具报错退出，需有语音轨 |
-| 无网不能翻译 | 翻译走 meding | 可对已译作业 `--resume-from render` |
-| 配音提示未开通 `tts-1` | 旧版还在走 OpenAI | 换用已去掉 OpenAI 的客户端；配音只走内置 GPT-SoVITS |
-| GPT-SoVITS 未检测到服务 | `api_v2.py` 没起来，或缺 FastAPI / 预训练权重 | 客户端会自动拉起；进程秒退看 `%APPDATA%\SubFlow\gptsovits.log`。源码运行执行 `python scripts/prepare-runtime.py gptsovits`；手动整合包需核对 `SUBFLOW_GPTSOVITS_HOME` / `SUBFLOW_GPTSOVITS_PYTHON` 覆盖 |
-| 配音时 WinError 206 | 长视频的片段路径和混音滤镜超过 Windows 命令长度 | 使用修复后的客户端；混音每批最多 24 段，滤镜写入文件。中文原片输出中文简繁字幕会跳过配音 |
-| GPT-SoVITS 要参考音频 | 官方 `/tts` 必填 `ref_audio_path` | 选 3–10 秒清晰人声 wav，并尽量填写参考文本 |
-| GPT-SoVITS 失败仍是原声 | 配音没合成成功，成片不会被覆盖 | 看状态栏；确认服务已起来且参考音频在本机路径可读 |
-| `docker compose` 仍本地构建 | 本机没有 `crazymsn/subflow:latest` | 先 `docker compose pull`，或保留 `pull_policy: missing` 后的首次构建 |
+[返回文档索引](README.md) · 适用于 **SubFlow 语幕 1.3.46**
 
-## 退出码
+先确认正在运行 [1.3.46 发布包](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.46)，使用完整解压目录。排查时保留原片和已有成品，每次用新的输出文件名。
 
-| Code | 含义 |
+## 安装与启动
+
+| 现象 | 排查与处理 |
 | --- | --- |
-| 0 | 成功 |
-| 1 | 输入错误 |
-| 2 | 环境不满足 |
-| 3 | API 令牌问题 |
-| 4 | 处理中断 |
-| 5 | 部分成功（存在 missing_en） |
+| Windows 找不到 Qt / DLL | 保留 EXE 同目录的全部文件，避免混用新旧包。缺少 VCRUNTIME 时安装 [Microsoft VC++ x64 运行库](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) |
+| WinError 127 | 先使用完整官方包，检查是否混入其他软件的 DLL；源码构建使用项目提供的脚本 |
+| Mac 提示开发者未验证 | 当前包未做 Apple 公证。确认来源后在「系统设置 → 隐私与安全性」按提示允许打开 |
+| Mac 无法启动或架构不匹配 | M 系列使用 arm64，Intel 使用 x64；分别要求 macOS 14+ / 15+ |
+| 首次启动长时间准备环境 | 需要下载独立 Python、依赖和模型。查看安装日志、网络及磁盘空间，关闭后可重新启动重试 |
+| 找不到内置安装器 | 重新完整下载客户端；不要从其他软件目录复制 uv 或覆盖环境 |
+
+## CPU、Apple GPU 与识别
+
+| 现象 | 排查与处理 |
+| --- | --- |
+| 没有显卡 | 默认 CPU 可运行；先选 Whisper tiny / base 和短视频，模型越大通常越慢 |
+| M 系列仍使用 CPU | 使用原生 arm64 包和默认 Whisper；检查是否设置了 CPU 覆盖、是否出现 MPS 回退日志，按 [M1 清单](mac-self-test.md) 核验实际设备 |
+| WhisperX 没有使用 Apple GPU | WhisperX / CTranslate2 不支持 MPS，使用 CPU；Apple GPU 识别选择 Whisper |
+| 日志显示回退 Whisper | WhisperX 环境不可用；需要它时通过 `python scripts/prepare-runtime.py whisperx` 准备源码环境 |
+| doctor 提示 Whisper 缺失 | 源码安装后执行 `python scripts/prepare-runtime.py asr`，再检查环境；无显卡不需要安装 CUDA |
+| 已安装环境却不能导入 Whisper | 检查 `SUBFLOW_PYTHON` / `SUBFLOW_WHISPER_PYTHON` 是否指向旧解释器；显式无效覆盖会报错，修正或移除后再启动 |
+| 识别内存不足 / 很慢 | 降低识别模型大小、缩短测试片、减少并行任务；CPU 与 GPU 速度和内存占用不能互相等同 |
+
+`subflow doctor` 会检查 FFmpeg、字体、识别环境等；某些环境会尝试加载 tiny 模型并触发下载。它不替代实际视频或 GPT-SoVITS 完整合成验收。未配置翻译令牌的提示不影响中文单语原声流程。
+
+## 字幕与配音
+
+| 现象 | 排查与处理 |
+| --- | --- |
+| 中文目标选简体 / 繁体却提示配音失败 | 1.3.46 同语种任务跳过合成配音。确认使用新版，对旧任务重新处理；仍出现时提供源 / 目标语言、字幕样式及脱敏日志 |
+| 保留原声仍要求翻译令牌 | 中英 / 英中样式需要英文翻译。只要中文字幕时改为中文单语样式 |
+| 中文显示为繁体 | 确认中文轨目标或单语样式选择简体；Whisper 原始转写可能是繁体，最终字幕会转换 |
+| 只改颜色却重新识别 | 确认没有同时修改视频、识别、语言等设置，旧缓存须通过内容和处理修订校验才能复用 |
+| 配音 WinError 206 | 新版按批混音并将滤镜写入文件，处理 Windows 命令长度问题；仍失败时提供步骤和错误，避免混用旧客户端 |
+| GPT-SoVITS 服务未就绪 | 查看环境安装日志和 `gptsovits.log`；源码可执行 `python scripts/prepare-runtime.py gptsovits`。检查自定义目录 / Python 是否覆盖自动环境 |
+| CPU 配音等待很久 | 默认单请求超时 1800 秒，可通过 `SUBFLOW_GPTSOVITS_TIMEOUT` 调整；检查服务日志判断是否仍在推理 |
+| 参考音频无效 / 合成失败 | 使用约 3–10 秒清晰、单人说话的音频并填写对应参考文本；保证配音服务能读取该路径 |
+| 配音失败但原声成品仍存在 | 失败时保留已有原声成品，不代表配音成功；检查报告与错误后重新处理 |
+| 超长字幕缩小 | 中英 / 英中每种语言限制为一行。检查切句和报告中的字幕适配提示，确认实际阅读效果 |
+
+本机服务日志默认 Windows 为 `%APPDATA%/SubFlow/gptsovits.log`，macOS 为 `~/.config/subflow/gptsovits.log`。依赖安装日志位置见 [安装指南](install.md)。
+
+## 链接、翻译和导出
+
+| 现象 | 排查与处理 |
+| --- | --- |
+| YouTube 要求登录 / Bilibili 风控 | 按站点提示使用本人有效登录态，导出 Netscape Cookie 后放到支持的 Cookie 目录；不要公开 Cookie |
+| 下载到错误音轨 | 确认来源本身的原声音轨。使用新版重新下载到新的任务目录，避免复用旧的错误下载 |
+| 401 / 403 | 检查令牌有效性和模型权限；环境变量优先于客户端保存值，见 [令牌指南](api-key.md) |
+| 429 / 500 / 502 / 503 / 504 | 翻译请求会按 1、2、4 秒退避重试，仍失败时检查额度和服务状态 |
+| 获取不到 BAAI / 智源模型 | 当前模型筛选规则会隐藏这些条目，不是安装错误 |
+| 输出路径与输入或其他任务冲突 | 使用独立输出名和工作目录；不要覆盖原片、术语表、参考音频、识别日志或其他任务正在读写的文件 |
+| 中文字幕烧录失败 | 检查完整 FFmpeg 与字体文件及日志；源码需支持字幕滤镜的 FFmpeg 6+。不要用不含字幕功能的精简版本替换 |
+| 字幕缺失 / 时长异常 | 查看工作目录的 `report.json`、识别日志和 FFmpeg 错误，记录出问题的具体时间段 |
+| 没有音轨 | 换用含有效语音音轨的视频 |
+| 断网不能翻译 | 云端翻译需要联网；仅在已有有效译文和缓存时才能恢复后续渲染 |
+
+## Docker
+
+| 现象 | 排查与处理 |
+| --- | --- |
+| 连接不到 Docker daemon | 启动 Docker Desktop / Docker 服务，再运行命令 |
+| 意外进入源码构建 | 正常部署只用主 `docker-compose.yml`；第二个 `docker-compose.build.yml` 专供源码构建 |
+| 提示找不到输入视频 | 把文件放宿主机 `data/`，命令使用容器路径 `/data/文件名` |
+| 更新后重新下载全部模型 | 检查是否变更部署目录 / Compose 项目名、是否删除了命名卷 |
+| 输出目录 permission denied | 检查绑定目录是否只读、宿主机 ACL、NAS / NFS 权限；使用当前 Compose 的能力设置 |
+| 容器运行后立即退出 | 不带子命令时显示帮助，任务完成后也会退出；本镜像是 CLI，不是常驻 Web 服务 |
+| 想使用 Apple GPU | Docker 内运行 Linux，使用 CPU；MPS 需原生 Mac 客户端 |
+
+完整命令及持久化说明见 [Docker 指南](docker.md)。
+
+## CLI 退出码与问题反馈
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 命令成功 |
+| 1 | 输入或参数错误 |
+| 2 | 环境检查 / 依赖不满足 |
+| 3 | 翻译鉴权或令牌配置问题 |
+| 4 | 流水线中断或执行失败，查看具体错误 |
+| 5 | 部分成功，存在缺失翻译 |
+
+提交 [GitHub Issue](https://github.com/crazymsn/SubFlow/issues) 时注明版本、系统、架构、内存、模型、源 / 目标语言、字幕样式、复现步骤和实际错误。日志分享前检查密钥、Cookie、路径及字幕内容；无需上传私人原片。

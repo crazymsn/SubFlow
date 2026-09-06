@@ -1,157 +1,122 @@
 # SubFlow 语幕
 
-**新一代 AI 视频语音识别、自动翻译、字幕生成工具**
+本地语音识别、字幕翻译、视频烧录与可选音色克隆配音。支持 Windows、macOS 和 Docker，无独立显卡也可运行。
 
-深度云创科技出品。本地识别语音，云端翻译成片。拖入视频或粘贴 YouTube / Bilibili 链接，即可得到双语字幕、烧录成片，以及可选配音。
-
-当前源码版本 **1.3.46**。[GitHub Releases](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Compose](#docker) · [API 分发站](https://api.meding.site)
-
-Apple Silicon 实机验收请参照 [M1 MacBook Air 测试清单](docs/mac-self-test.md)。
+**当前发布：1.3.46** · [下载客户端](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.46) · [Docker Hub](https://hub.docker.com/r/crazymsn/subflow) · [使用文档](docs/README.md) · [更新记录](CHANGELOG.md)
 
 ![SubFlow 语幕桌面客户端](docs/images/desktop-light.png)
 
-## 能做什么
+## 选择运行方式
 
-| 能力 | 说明 |
-| --- | --- |
-| 语音识别 | 本机 Whisper / WhisperX，不把原片上传到识别服务 |
-| 链接入库 | YouTube、Bilibili 一键下载最高清；优先原声音轨，避免英文自动配音 |
-| 自动翻译 | [meding](https://api.meding.site) OpenAI 兼容接口；获取模型时自动屏蔽 BAAI / 智源条目 |
-| 中英字幕 | 中英 / 英中各 **1 行**，居中叠在安全区内；超长句缩放，不出画 |
-| 简繁 | 目标语种为简体时，中文轨一律转为简体（Whisper 默认繁体也会转） |
-| 烧录颜色 | 中英字幕颜色可自选；只改颜色会重渲 ASS 并重烧，不重跑识别 |
-| 成片导出 | 烧录 MP4，同时写出 SRT / ASS |
-| 配音 | 内置 GPT-SoVITS 克隆音色；启动客户端自动拉起本机服务 |
-| 三种入口 | Windows / macOS 桌面客户端、Python CLI、Docker 镜像 |
+| 设备 / 场景 | 下载或部署 | 推理设备 |
+| --- | --- | --- |
+| Windows 10/11 x64 | [Windows 客户端](https://github.com/crazymsn/SubFlow/releases/download/v1.3.46/SubFlow-Windows-x64.zip) | 默认 CPU |
+| Apple M 系列，macOS 14+ | [Mac arm64 客户端](https://github.com/crazymsn/SubFlow/releases/download/v1.3.46/SubFlow-macOS-arm64.zip) | 默认尝试 Apple GPU（MPS），不可用时回退 CPU |
+| Intel Mac，macOS 15+ | [Mac x64 客户端](https://github.com/crazymsn/SubFlow/releases/download/v1.3.46/SubFlow-macOS-x64.zip) | CPU |
+| Linux / NAS / Docker Desktop | [Docker Compose 指南](docs/docker.md) | amd64 / arm64 CPU |
+| 源码开发 | [安装与构建](docs/install.md) | CPU；可按设备配置 MPS / CUDA |
 
-界面提供简体中文、繁体中文、English、日本語、Español、Русский、Français、Deutsch。默认界面为简体中文。
+GitHub 客户端附带 FFmpeg、uv 安装器与适配后的 GPT-SoVITS 源码。首次使用会联网准备独立 Python 3.11、推理依赖和模型，无需预装 Python、Git、CUDA 或编译器。建议预留约 15–20 GB 磁盘空间、16 GB 内存；资源占用随模型和视频长度变化。首次下载完成后复用缓存，云端翻译仍需联网。
+
+Apple GPU 仅用于原生 arm64 客户端。WhisperX 与 Mac 上的 Docker 使用 CPU。当前发布的构建和自动检查已通过，Apple GPU 完整实机验收仍待完成，见 [M1 测试清单](docs/mac-self-test.md) 和 [1.3.46 验收范围](docs/release-1.3.46.md)。
+
+## 第一次处理视频
+
+1. 下载对应架构的 ZIP 并完整解压。Windows 运行 `SubFlow/SubFlow.exe`，保留整个文件夹；Mac 将 `SubFlow.app` 放入「应用程序」。首次系统拦截的处理见 [桌面指南](docs/desktop.md)。
+2. 联网启动并等待环境准备完成。无显卡或内存较少时，先选 Whisper `tiny` / `base`，用短片确认运行速度。
+3. 拖入视频，或粘贴 YouTube / Bilibili 链接后下载。
+4. 设置源语言、目标语言和字幕样式。需要翻译时，在客户端保存自己的 [meding API 令牌](docs/api-key.md)，获取并选择可用模型。
+5. 指定新的输出路径，点击「开始处理」。可导出 SRT / ASS，或烧录成 MP4。
+
+**中文源视频 → 简体中文或繁体中文目标：始终保留原声，不进行本次视频的合成配音。** 简繁转换只改变字幕文字。后台配音服务随客户端启动属于环境准备，不代表视频一定会配音。
+
+| 想要的结果 | 目标语言 / 字幕样式 | 是否需要翻译令牌 | 声音 |
+| --- | --- | --- | --- |
+| 中文原片 + 简体字幕 | 简体中文 / 单语简体中文 | 否 | 中文原声 |
+| 中文原片 + 繁体字幕 | 繁体中文 / 单语繁体中文 | 否 | 中文原声 |
+| 中文原片 + 中英双语字幕 | 简体或繁体中文 / 中英或英中 | 是，英文行需要翻译 | 中文原声 |
+| 中文原片 + 英文配音 | English / 需要的字幕样式，并开启配音 | 是 | GPT-SoVITS 合成英文音轨 |
+
+字幕样式决定画面语言和顺序，源语言用于识别，目标语言用于配音及中文简繁选择。默认中英字幕仍需翻译英文行；“保留原声”不等于“不需要字幕翻译”。
+
+## 主要功能
+
+- **本地识别**：Whisper / 可选 WhisperX，语音识别无需把原片上传到翻译服务。
+- **链接下载**：支持 YouTube、Bilibili，优先选择原声音轨；受登录、地区和站点限制的链接可能需要自己的 Cookie。
+- **字幕处理**：翻译、可选润色、中文简繁、中英 / 英中 / 单语布局、字幕颜色和 ASS / SRT 导出。
+- **视频导出**：烧录字幕，支持任务暂停、继续、停止；满足缓存校验时复用已有结果。
+- **本地配音**：内置适配后的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，跨语种配音可使用自选参考音频。
+- **桌面界面**：浅色 / 深色主题，简体中文、繁体中文、English、日本語、Español、Русский、Français、Deutsch。
 
 ![更多选项与深色主题](docs/images/desktop-more.png)
 
-## 字幕怎么对应
+## Docker 快速开始
 
-三个控件职责分开，互不覆盖：
-
-| 控件 | 只管 |
-| --- | --- |
-| 源语种 | 识别 / Whisper 语言 |
-| 目标语种 | 配音语种，以及中文轨的简体 / 繁体 |
-| 字幕样式 | 画面上出现哪些语言、谁在上谁在下 |
-
-| 字幕样式 | 目标语种 | 画面 |
-| --- | --- | --- |
-| 中英字幕 | 简体中文 | 简体 1 行在上，英文 1 行在下 |
-| 中英字幕 | 繁體中文 | 繁体 1 行在上，英文 1 行在下 |
-| 英中字幕 | 简体中文 | 英文 1 行在上，简体 1 行在下 |
-| 单语「简体中文」 | — | 只烧简体 1 行 |
-| 单语 English | — | 只烧英文 1 行 |
-
-源语种和目标语种都选简体、字幕选中英：中文原声 + 简体/英文字幕，不会自动配成英文。
-
-中文原视频选择简体中文或繁體中文目标时始终保留原声，配音开关不会覆盖此规则。简繁转换只影响字幕；英文等跨语种目标才调用 GPT-SoVITS。
-
-CPU 配音可能较慢，单次请求默认等待最多 1800 秒；可通过环境变量 `SUBFLOW_GPTSOVITS_TIMEOUT` 调整为正数秒数。停止任务仍可中断客户端等待。服务在合成期间继续响应健康检查；正在运行的推理线程结束后才释放模型供下一请求使用。
-
-## 开始使用
-
-1. 打开 [Releases](https://github.com/crazymsn/SubFlow/releases/latest)，下载 对应架构的 `SubFlow-Windows-x64.zip`、`SubFlow-macOS-arm64.zip` 或 `SubFlow-macOS-x64.zip`（未发布的构建在 Actions 工件中）。
-2. Windows：**整夹解压**，进入 `SubFlow` 目录，双击 `SubFlow.exe`。不要只拷贝 exe。
-3. macOS：解压后把 `SubFlow.app` 拖到「应用程序」；若提示未验证开发者，按住 Control 点击后选择打开。
-4. 到 [API 分发站](https://api.meding.site) 领取令牌，在客户端保存，再点「获取模型」。
-5. 拖入视频，或粘贴链接后下载。
-6. 选好源语言、目标语言、字幕样式，点击「开始处理」。
-
-客户端自带 FFmpeg 和安装器，首次启动自动在用户目录准备 Python 3.11、推理依赖和 GPT-SoVITS 模型（Apple M 系列默认启用 MPS GPU，其余平台默认 CPU）；首次识别再下载所选 Whisper 权重。无需预装 Python、CUDA 或编译器。首次需要联网并预留约 15–20 GB 空间；后续复用缓存。Apple Silicon 客户端通过 PyTorch MPS 使用 Apple GPU；无需 CUDA。无显卡也能识别、配音和导出，CPU 上建议先用 tiny/base/small 测试短片，速度取决于设备。详细步骤见 [桌面客户端](docs/desktop.md)。
-
-## 从源码运行
-
-```bash
-# 建议 Python 3.11+
-pip install -e ".[gui,dev]"
-subflow doctor
-subflow config set-api-key
-subflow models
-subflow gui
-```
-
-命令行一次跑完：
-
-```bash
-subflow run demo.mp4 -o demo-中英字幕.mp4 --model gpt-4o-mini
-subflow run --url "https://www.bilibili.com/video/BVxxxx" -o out.mp4
-subflow run demo.mp4 -o out.mp4 --zh-color "#FFD400" --en-color "#F2F2F2"
-```
-
-兼容旧命令 `bilingual-sub`。
-
-分步命令 `extract`、`transcribe`、`build-cues`、`translate`、`render` 和 `burn` 的输出需与输入文件不同；包括翻译字幕时也请指定新的输出 JSON。命令会拒绝与正在运行的 SubFlow 任务冲突的文件。识别结果目录中的 `whisper.log` / `whisperx.log` 用作相应引擎日志，请勿将输入或结果指定为该日志文件。
-
-Mac 上请勿将同一批输出命名为仅大小写或 Unicode 组合形式不同的路径；输入保护和文件占用登记也按此检查。即使磁盘设置为区分大小写，SubFlow 仍保守拒绝这些可能混淆的输出组合。单个文件复制是否可省略，仍依据实际路径和文件身份判断。
-
-## Docker
-
-Compose 默认拉取 `crazymsn/subflow:1.3.46`，镜像内已安装 FFmpeg、识别和配音环境。宿主机仅需安装 Docker 和 Compose，无显卡可直接使用。镜像分别在 Linux amd64 / arm64 原生构建机上验证后发布。
+安装 Docker 与 Compose，将本仓库下载或克隆到本机，在仓库根目录执行：
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入 SUBFLOW_API_KEY（不要提交 .env）
+mkdir -p data
 docker compose pull
 docker compose run --rm subflow doctor
+```
+
+Windows PowerShell 用 `Copy-Item .env.example .env` 和 `New-Item -ItemType Directory -Force data` 代替前两行。已有 `.env` 时继续使用原文件。把中文视频放入 `data/input.mp4`，先运行无需翻译令牌的 CPU 示例：
+
+```bash
+docker compose run --rm subflow run /data/input.mp4 -o /data/output.mp4 --source-lang zh --target-lang zh --subtitle-mode single:zh --whisper-model base --device cpu
+```
+
+输出在宿主机 `data/`。需要双语翻译时先在 `.env` 配置 `SUBFLOW_API_KEY`，再查看模型并运行：
+
+```bash
 docker compose run --rm subflow models
-docker compose run --rm subflow run /data/demo.mp4 -o /data/demo-中英字幕.mp4
+docker compose run --rm subflow run /data/input.mp4 -o /data/output-bilingual.mp4 --whisper-model base
 ```
 
-输入输出位于 `./data`；识别 / 配音权重、语言数据、设置和下载缓存使用命名卷持久化。首次跨语种配音会自动下载模型，后续复用。`.env` 可设置 `SUBFLOW_CPU_THREADS`、配音超时及 `SUBFLOW_IMAGE` 来选择其他已发布版本。任务结束后容器正常退出，不需要常驻服务或对外开放配音端口。
+默认镜像为 `crazymsn/subflow:1.3.46`。任务完成后容器退出是正常行为，Docker 提供 CLI，不提供桌面或 Web 界面。模型和配置存入持久化卷；升级、目录映射、超时、源码构建见 [Docker 指南](docs/docker.md)。
 
-需要从当前源码构建时执行 `docker compose -f docker-compose.yml -f docker-compose.build.yml build`，随后使用同样的两个 `-f` 参数执行 `run`。Apple M 系列的 Docker 容器使用 arm64 CPU；Apple GPU 加速请使用原生 macOS 客户端。
+## 源码快速开始
 
-同一 Compose 项目的容器共用文件占用登记，避免两个任务同时写同一输出，或覆盖另一任务正在读取的文件。原生客户端默认使用当前用户的缓存目录。自定义多个部署共享输入输出时，应让它们使用同一 `SUBFLOW_LOCK_DIR`、相同的文件路径映射和支持文件锁的存储；不要把登记目录放进任务工作目录。
+开发机需 Python 3.11+、Git 和支持字幕滤镜的 FFmpeg。先使用独立虚拟环境：
 
-手动选择工作目录时，原片、术语表和参考音频可以使用其中的自定义文件名，但不能占用程序管理的状态文件、识别日志、缓存产物及 `tts` / `downloads` 临时目录。客户端在写入任务状态前检查冲突并给出提示。已有 `source.mp4` 仍可作为本地输入或恢复来源；下载会替换该文件，因此下载任务不能同时把它作为外部术语表或参考音频。
-
-## 流水线
-
-```
-视频 / 链接 → 抽音 → 静音切句 → Whisper / WhisperX
-    → 整理字幕 → 术语 → 翻译（可选润色）→ 简繁转换
-    → ASS / SRT（中英各 1 行）→ 烧录 MP4 → 可选配音
+```bash
+git clone https://github.com/crazymsn/SubFlow.git
+cd SubFlow
+python -m venv .venv
 ```
 
-暂停、继续、停止可在桌面客户端操作。同片只换输出路径或只改字幕颜色时，不会重跑识别。
+Windows PowerShell 执行 `.\.venv\Scripts\Activate.ps1`；macOS / Linux 执行 `source .venv/bin/activate`，然后：
 
-## 文档
+```bash
+python -m pip install -e ".[gui,dev]"
+subflow gui
+```
 
-| 文档 | 内容 |
+命令行中文单语示例：
+
+```bash
+subflow run input.mp4 -o output.mp4 --source-lang zh --target-lang zh --subtitle-mode single:zh --whisper-model base
+```
+
+自动环境配置、Apple MPS、可选 CUDA 及打包步骤见 [安装指南](docs/install.md)。旧入口 `bilingual-sub` 仍兼容。
+
+## 文档与反馈
+
+| 需要了解 | 文档 |
 | --- | --- |
-| [桌面客户端](docs/desktop.md) | 安装、启动、字幕颜色、界面字段 |
-| [安装](docs/install.md) | Docker Compose / Python / 从源码打包 |
-| [API 令牌](docs/api-key.md) | 本机存储、轮换、多用户隔离 |
-| [故障排除](docs/troubleshooting.md) | 识别、翻译、烧录、下载、客户端 |
-| [架构](docs/architecture.md) | 模块边界与 JobConfig |
-| [meding 契约](docs/api-meding.md) | 翻译 API 的固定地址与错误码 |
-| [社区版本验收](docs/community-qa-2026-09-05.md) | Windows / Mac / Docker 构建结果与首次安装验证 |
-| [Apple GPU 验证](docs/apple-gpu-qa-2026-09-05.md) | MPS 自动环境、兼容修复与实机验收范围 |
-| [全量代码审查进度](docs/code-audit-status.md) | 已修复问题、回归证据与尚未完成的审查范围 |
-| [贡献](CONTRIBUTING.md) | 分支、测试与约束 |
+| 安装客户端、界面设置与配音规则 | [桌面客户端](docs/desktop.md) |
+| Docker 部署、持久化与更新 | [Docker Compose](docs/docker.md) |
+| 源码运行、依赖目录与客户端构建 | [安装指南](docs/install.md) |
+| 令牌存储、删除和轮换 | [API 令牌](docs/api-key.md) |
+| 下载失败、CPU / MPS、配音与导出问题 | [故障排除](docs/troubleshooting.md) |
+| 发布检查结果与未完成的实机验证 | [1.3.46 验收记录](docs/release-1.3.46.md) |
+| 架构、贡献与历史技术记录 | [文档索引](docs/README.md) · [贡献指南](CONTRIBUTING.md) |
 
-## 系统要求
+反馈问题请提交 [GitHub Issue](https://github.com/crazymsn/SubFlow/issues)，提供版本、操作系统、芯片 / 内存、复现步骤和脱敏后的错误信息。不要提交 API 密钥、登录 Cookie、私有视频或完整凭据文件。
 
-- Windows 10/11 x64；macOS 14+（Apple Silicon）或 15+（Intel）；也支持 Python 3.11+ / Docker
-- 客户端内置 FFmpeg / ffprobe；源码运行需自行安装含字幕渲染支持的 FFmpeg
-- 建议 16 GB 内存；内存较少时先选 tiny/base 识别模型，避免同时处理多个任务
-- 可选 NVIDIA GPU（`cuda` 额外依赖，不打进官方客户端）
-- 需要翻译时，用户自备 meding API 令牌；中文单语保留原声不需要翻译令牌
+## 数据与许可
 
-若客户端提示缺少 Qt / VCRUNTIME DLL，安装 [Microsoft Visual C++ 2015–2022 Redistributable (x64)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。
+识别和默认内置配音在本机执行；翻译会通过 HTTPS 向 meding 发送字幕、提示词和所用术语，并携带令牌鉴权。密钥优先存入系统凭据库，不可用时回退本地受限权限的 JSON 文件，该文件不是加密保险库。详见 [API 与数据说明](docs/api-key.md)。
 
-## 安全
-
-- API 令牌只写本机凭据库，工具不上传、不汇聚、不共享
-- 仓库与发布包**不含** API Key、Cookie、`.env`
-- 日志自动脱敏，异常栈不含 Authorization
-- 识别在本机完成；翻译请求只发字幕文本，不发原片
-- Docker 镜像不含令牌；用 `.env` 注入
-
-## License
-
-MIT — 深度云创科技。字幕字体许可见 [LICENSE-fonts.txt](LICENSE-fonts.txt)。
+SubFlow 采用 [MIT License](LICENSE)。第三方组件和模型分别遵循各自许可，参见 [NOTICE](NOTICE)、[GPT-SoVITS 随附说明](third_party/GPT-SoVITS/README.md) 与 [字体许可](LICENSE-fonts.txt)。

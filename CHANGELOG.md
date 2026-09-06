@@ -1,4 +1,6 @@
-# Changelog
+# 更新记录
+
+当前正式发布为 [SubFlow 语幕 1.3.46](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.46)。GitHub Releases 和版本标签仅保留此版本；以下历史源码变更保留用于追溯，不表示旧安装包仍可下载。使用步骤见 [文档索引](docs/README.md)。
 
 ## 1.3.46 — 2026-09-06
 

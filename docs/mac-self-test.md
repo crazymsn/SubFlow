@@ -1,10 +1,12 @@
-# M1 MacBook Air 自行验收
+# M1 MacBook Air 实机验收
 
-最终实机测试由用户自行执行。代码和 CI 的检查不代表下面项目已经通过；请记录实际结果。当前 arm64 客户端构建面向 macOS 14 及以上，先在「关于本机」确认系统版本。
+[返回文档索引](README.md) · 适用于 **1.3.46**
+
+本清单用于自行执行最终实机测试。代码和 CI 的检查不代表下面项目已经通过；请记录实际结果。当前 arm64 客户端构建面向 macOS 14 及以上，先在「关于本机」确认系统版本。
 
 ## 安装与首次启动
 
-1. 从本次提交对应的 GitHub Actions 构建下载 `SubFlow-macOS-arm64`，解压其中客户端 ZIP，将 `SubFlow.app` 放到「应用程序」。M1 使用 arm64 包。
+1. 从 [1.3.46 Release](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.46) 下载 `SubFlow-macOS-arm64.zip` 并完整解压，将 `SubFlow.app` 放到「应用程序」。M1 使用 arm64 包。
 2. 打开应用。当前构建未做 Apple 公证，如系统拦截，在「系统设置 → 隐私与安全性」允许这次打开。
 3. 首次联网等待 Python、推理依赖和模型准备完成。无需预先安装 Python、Homebrew 或 CUDA。启动日志应说明准备进度；下载失败应显示原因，重新启动后可以重试。
 4. 记录 macOS 版本、内存容量、客户端版本。首次下载时间和后续推理时间分开记录。
