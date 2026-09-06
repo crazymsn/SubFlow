@@ -245,20 +245,35 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - uses: actions/download-artifact@v4
         with:
           pattern: SubFlow-*
           merge-multiple: true
-      - name: Calculate download checksums
-        run: sha256sum SubFlow-*.7z.* > SHA256SUMS
+      - name: Verify checksums and existing uploads
+        id: assets
+        run: |
+          python .github/scripts/verify-release.py preflight --tag "$GITHUB_REF_NAME" --assets .
+          python -c "import os,tomllib; v=tomllib.load(open('pyproject.toml','rb'))['project']['version']; open(os.environ['GITHUB_ENV'],'a').write('RELEASE_VERSION='+v+'\n')"
       - uses: softprops/action-gh-release@v2
+        if: steps.assets.outputs.already_published != 'true'
         with:
           name: SubFlow 语幕 ${{ github.ref_name }}
+          draft: true
+          overwrite_files: false
           files: |
             SubFlow-*.7z.*
             SHA256SUMS
-          body_path: docs/release-1.3.60.md
+          body_path: docs/release-${{ env.RELEASE_VERSION }}.md
           fail_on_unmatched_files: true
           preserve_order: true
+      - name: Verify complete uploads before publishing
+        run: |
+          python .github/scripts/verify-release.py verify --tag "$GITHUB_REF_NAME" --assets .
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

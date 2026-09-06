@@ -25,8 +25,8 @@
 
 ## 验证范围
 
-发布工作流要求三平台回归测试、客户端自检、三种内置配音模式的离线实际合成、分卷解压校验；Docker 两架构检查 CLI、依赖、音频和目录读写后发布多架构标签。具体结果以对应版本的 GitHub Actions 记录为准。
+三平台回归测试、客户端自检、三种内置配音模式的离线实际合成和分卷校验均已通过。Docker 两架构完成 CLI、依赖、音频和目录读写检查，多架构标签及代码修订已核对。正式发布的 16 个分卷 SHA-256 全部与校验文件一致，详见[发布验收记录](https://github.com/crazymsn/SubFlow/blob/main/docs/qa-1.3.60.md)。
 
-本地 Windows 已验证 RTX 3060 Laptop CUDA 识别与配音、原目录 1.3.60 客户端自检以及模型完整性。完整视频的语音听感、不同设备性能与 Apple M1 GPU 实机验收仍需实际检查，不能用 CI CPU 通过代替。Mac 用户按仓库 `docs/mac-self-test.md` 执行。
+本地 Windows 已验证 RTX 3060 Laptop CUDA 识别与配音、原目录 1.3.60 客户端自检以及模型完整性。完整视频的语音听感、不同设备性能与 Apple M1 GPU 实机验收仍需实际检查，不能用 CI CPU 通过代替。Mac 用户按 [Mac 实机验收手册](https://github.com/crazymsn/SubFlow/blob/main/docs/mac-self-test.md)执行。
 
-新版本全部附件发布成功后清理旧 Release 与旧版本标签；Git 提交历史保留。API 令牌不进入代码、客户端或 Docker 镜像。
+GitHub 现仅保留 `v1.3.60` Release 与版本标签，Git 提交历史保留。API 令牌不进入代码、客户端或 Docker 镜像。

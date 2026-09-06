@@ -19,7 +19,9 @@
 
 ## 发布工作流
 
-[最终工作流](https://github.com/crazymsn/SubFlow/actions/runs/34033971267)分别构建 Windows x64、Apple M arm64、Intel Mac x64，并构建 Linux amd64 / arm64 Docker 镜像。最终结果与下载附件以该工作流和 Release 为准。
+[构建与验收工作流](https://github.com/crazymsn/SubFlow/actions/runs/34033971267)的 Windows x64、Apple M arm64、Intel Mac x64 客户端及 Linux amd64 / arm64 Docker 检查全部通过。原工作流的 Release 并发上传两次收到构建机关闭信号而中断，因此该工作流整体显示失败；这两次都没有发布不完整客户端。
+
+随后通过[发布恢复工作流](https://github.com/crazymsn/SubFlow/actions/runs/34038877481)复用同一批已验收产物，保留哈希一致的四个附件，顺序补传其余十三个大分卷。远端全部文件的大小与 SHA-256 复核通过后公开 Release。新增发布恢复逻辑的 11 项测试通过，云端也实际执行了来源、版本、已有附件和最终上传校验。常规发布同样改为顺序上传、保留有效进度、校验完整后公开。
 
 客户端检查包括完整回归、静态检查、四套环境冷安装、启动自检、禁止外网下载的三种配音实际合成、分卷压缩与解压校验。离线检查使用空白用户目录，核实解释器和模型来自随包目录，并检查音频时长、格式与非静音输出。
 
@@ -33,13 +35,35 @@ Docker 检查包括 Compose 配置、CLI 启动、四套依赖、音频处理及
 | Apple M arm64 | 3.92 秒 | 3.44 秒 | 4.34 秒 |
 | Intel Mac x64 | 4.56 秒 | 4.48 秒 | 4.54 秒 |
 
-这张表表示合成输出的时长，不是生成速度。报告位于工作流的 `offline-qa-*` 附件中。Apple M 最终回归为 1,564 项通过、6 项跳过，覆盖率 91.50%；与 Windows 的差异包含平台专属用例。
+这张表表示合成输出的时长，不是生成速度。报告位于构建工作流的 `offline-qa-*` 附件中。
+
+| 构建平台 | 回归通过 | 跳过 | 核心覆盖率 |
+| --- | ---: | ---: | ---: |
+| Windows x64 | 1,567 | 3 | 92.23% |
+| Apple M arm64 | 1,564 | 6 | 91.50% |
+| Intel Mac x64 | 1,564 | 6 | 91.50% |
+
+数量差异包含平台专属用例。三个平台的 Ruff、启动自检和压缩包校验均通过；上述全量数字对应客户端构建提交，后补的发布恢复工具单独运行了 11 项测试。
 
 Docker `latest`、`1.3.60`、`sha-e448bb8197ea445c01a2861b8076fc1ef9413705` 已核对指向同一清单，均包含 `linux/amd64` 和 `linux/arm64`：
 
 ```text
 sha256:8f3685b20931baf5dc0644b3fbf611d169f789aa06716cc57e732e7e06606943
 ```
+
+直接读取 Docker Registry 的两个平台配置也确认版本均为 `1.3.60`、代码修订均为上述构建提交。
+
+## 已发布附件
+
+[正式 Release](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.60)包含 16 个分卷和 `SHA256SUMS`。独立检查确认分卷编号连续、单卷小于 2 GiB，所有分卷的校验文件摘要与 GitHub 返回的资产 SHA-256 一致。
+
+| 平台 | 分卷数量 | 压缩包合计 |
+| --- | ---: | ---: |
+| Windows x64 | 8 | 13.79 GiB |
+| Apple M arm64 | 4 | 6.39 GiB |
+| Intel Mac x64 | 4 | 6.80 GiB |
+
+下载对应平台全部分卷，从 `.001` 开始解压。旧 Release 和旧版本标签已清理，GitHub 仅保留 `v1.3.60`，Git 提交历史保留。完整包无需首次下载配音模型；识别 / 对齐模型和 Docker 模型的下载范围见[环境覆盖](runtime-coverage.md)。
 
 ## 验证边界
 
