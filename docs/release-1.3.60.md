@@ -27,6 +27,6 @@
 
 三平台回归测试、客户端自检、三种内置配音模式的离线实际合成和分卷校验均已通过。Docker 两架构完成 CLI、依赖、音频和目录读写检查，多架构标签及代码修订已核对。正式发布的 16 个分卷 SHA-256 全部与校验文件一致，详见[发布验收记录](https://github.com/crazymsn/SubFlow/blob/main/docs/qa-1.3.60.md)。
 
-本地 Windows 已验证 RTX 3060 Laptop CUDA 识别与配音、原目录 1.3.60 客户端自检以及模型完整性。完整视频的语音听感、不同设备性能与 Apple M1 GPU 实机验收仍需实际检查，不能用 CI CPU 通过代替。Mac 用户按 [Mac 实机验收手册](https://github.com/crazymsn/SubFlow/blob/main/docs/mac-self-test.md)执行。
+本机此前已验证 RTX 3060 Laptop CUDA 识别与配音，记录见 [Windows GPU 验收](https://github.com/crazymsn/SubFlow/blob/main/docs/qa-1.3.59.md)；本次发布包通过云端启动和 CPU 离线合成检查。完整视频的语音听感、不同设备性能与 Apple M1 GPU 实机验收仍需实际检查，不能用 CI CPU 通过代替。Mac 用户按 [Mac 实机验收手册](https://github.com/crazymsn/SubFlow/blob/main/docs/mac-self-test.md)执行。
 
 GitHub 现仅保留 `v1.3.60` Release 与版本标签，Git 提交历史保留。API 令牌不进入代码、客户端或 Docker 镜像。
