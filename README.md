@@ -1,6 +1,6 @@
 # SubFlow 语幕
 
-SubFlow 语幕 — 新一代 AI 视频语音识别、AI 配音、自动翻译、字幕生成工具
+SubFlow 语幕 — 深度云创科技公司开发的新一代 AI 视频语音识别、AI 配音、自动翻译、字幕生成工具
 
 采用本地语音识别、字幕翻译、视频烧录与多语种配音。支持 Windows、M 系列 / Intel Mac 以及 Docker 等多端设备使用。
 
@@ -8,7 +8,6 @@ SubFlow 语幕 — 新一代 AI 视频语音识别、AI 配音、自动翻译、
 
 ![SubFlow 1.3.60 深色界面](docs/images/workspace-dark.png)
 
-以上为 1.3.60 实际 Qt 界面，使用空白配置截图，未启动视频任务。顶栏中央的[深度云创科技](https://nav.meding.site)保留超链接；语音识别与翻译设置始终展开。浅色界面与操作说明见[工作区指南](docs/workspace.md)。
 
 ## 选择运行方式
 
@@ -98,3 +97,6 @@ Windows 已完成本地客户端自检、真实 CUDA 识别与配音验证；跨
 识别和内置配音在本机执行;
 
 SubFlow 采用 [MIT License](LICENSE)。请自觉遵循相应许可。
+
+## 联系我们
+
