@@ -61,7 +61,10 @@ def copy_file(source, target, *, hardlink=False):
         if source.samefile(target):
             return str(target)
         raise FileExistsError(f'Use an empty staging directory: {target}')
-    if hardlink and source.stat().st_size >= 1024 * 1024:
+    # NLTK's path security rejects multiply-linked corpus files, even inside the
+    # bundle. Keep dictionaries independent in both new and reused payloads.
+    corpus = any(part.casefold() == 'nltk_data' for part in target.parts)
+    if hardlink and not corpus and source.stat().st_size >= 1024 * 1024:
         try:
             os.link(source, target)
             return str(target)

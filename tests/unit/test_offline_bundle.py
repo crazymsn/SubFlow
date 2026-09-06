@@ -130,6 +130,28 @@ def test_nltk_archives_have_the_paths_checked_by_g2p_en(tmp_path):
         assert archive.read('cmudict/dictionary') == b'data'
 
 
+def test_hardlinked_bundles_keep_nltk_corpora_independent_even_when_reused(tmp_path):
+    import runpy
+    from pathlib import Path
+
+    build = runpy.run_path(str(Path(__file__).parents[2] / 'scripts/bundle-offline.py'))
+    source = tmp_path / 'source'
+    relative = Path('models/GPT-SoVITS/nltk_data/corpora/cmudict/cmudict')
+    dictionary = source / relative
+    dictionary.parent.mkdir(parents=True)
+    content = b'A 1 AH0\n' * 150000  # Exceeds the model hardlink threshold.
+    dictionary.write_bytes(content)
+    first, reused = tmp_path / 'first', tmp_path / 'reused'
+    build['copy_tree'](source, first, hardlink=True)
+    build['copy_tree'](first, reused, hardlink=True)
+    for root in (source, first, reused):
+        member = root / relative
+        assert member.stat().st_nlink == 1  # Required by NLTK's secure corpus reader.
+        assert member.read_bytes() == content
+    assert not dictionary.samefile(first / relative)
+    assert not (first / relative).samefile(reused / relative)
+
+
 @pytest.mark.parametrize('installed', [True, False])
 def test_korean_frontend_never_calls_upstream_installer(monkeypatch, installed):
     import ast
