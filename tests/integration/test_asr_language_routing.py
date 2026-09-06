@@ -241,3 +241,19 @@ def test_pipeline_keeps_screen_translation_separate_from_japanese_voice(
     resumed = p.run(cfg, AppSettings())
     assert spoken == [translations["ja"]]
     assert translations[screen] in resumed.output_srt.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("source", ["auto", "ja"])
+def test_japanese_kanji_only_transcript_preserves_japanese_voice(pipeline_job, monkeypatch, source):
+    cfg = pipeline_job
+    cfg.source_lang, cfg.target_lang, cfg.subtitle_mode = source, "ja", "single:ja"
+    original = "東京都交通局"
+    def recognize(wav, **kwargs):
+        segment = Segment(0.1, 1.8, original)
+        kwargs["out_json"].write_text(json.dumps({"language": "ja", "segments": [segment.__dict__]}), encoding="utf-8")
+        return [segment]
+    monkeypatch.setattr(p, "transcribe", recognize)
+    result = p.run(cfg, AppSettings())
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert report["detected_spoken"] == "ja" and not report["dubbed"] and not result.translated
+    assert original in result.output_srt.read_text(encoding="utf-8")

@@ -82,7 +82,7 @@ PAIR_MODES = frozenset({"bilingual", "enzh"})
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _KANA_RE = re.compile(r"[\u3040-\u30ff]")
 _HANGUL_RE = re.compile(r"[\uac00-\ud7af]")
-_LATIN_RE = re.compile(r"[A-Za-z]")
+_LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f]")
 _CYRILLIC_RE = re.compile(r"[\u0400-\u052f]")
 
 
@@ -189,6 +189,10 @@ def text_family(text: str) -> str:
 
 
 def _script_language(family: str, hint: str) -> str:
+    # Han characters are shared by Chinese and Japanese. ASR's Japanese
+    # language hint remains meaningful even when a cue has no kana.
+    if family == "zh" and hint == "ja":
+        return "ja"
     # Latin letters do not establish English. Prefer the audio language hint
     # unless its script conflicts with the observed transcript.
     if family == "en" and hint not in {"", "auto", "zh", "ja", "ko", "ru"}:
