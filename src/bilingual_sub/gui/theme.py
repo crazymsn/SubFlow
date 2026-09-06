@@ -157,6 +157,7 @@ def qss_selector_colors(qss: str, selector: str) -> list[str]:
 def app_qss(theme: str = "light") -> str:
     tokens = tokens_for(theme)
     mapping = {**asdict(tokens), **asdict(TYPE), **asdict(STACKS)}
+    mapping["counterInk"] = tokens.filament if theme == "dark" else tokens.ink
     qss = _QSS
     for key, value in sorted(mapping.items(), key=lambda item: len(item[0]), reverse=True):
         qss = qss.replace(f"${key}", str(value))
@@ -164,26 +165,55 @@ def app_qss(theme: str = "light") -> str:
 
 
 _QSS = """
+QWidget#workspace { background: transparent; }
+QLabel#sectionTitle {
+    font-family: $uiFamily; font-size: 15px; font-weight: 600; color: $ink;
+}
+QLabel#stepBadge {
+    background: $filamentWash; color: $ink; border: 1px solid $line;
+    border-radius: 8px; font-family: $uiFamily; font-size: 12px; font-weight: 600;
+}
+QLabel#voiceNote {
+    background: $paper; color: $muted; padding: 12px; border-radius: 8px;
+    font-family: $uiFamily; font-size: $body;
+}
+QLabel#serviceStatus {
+    color: $muted; font-family: $uiFamily; font-size: $body;
+}
+QFrame#urlCompose { background: transparent; border: none; }
+QLabel#drop:focus { border: 2px solid $filament; }
+QToolButton:focus { border: 1px solid $filament; }
+QLineEdit:disabled, QComboBox:disabled { color: $disabledFg; background: $disabledFill; }
+
 QMainWindow, QWidget#root {
     background: $paper;
     color: $ink;
     font-family: $uiFamily;
     font-size: $ui;
 }
-QWidget#formInner, QWidget#formViewport, QWidget#fieldCol, QWidget#headerTitles, QWidget#localeCluster, QWidget#moreBox, QWidget#sourceStrip, QWidget#sourceLink, QWidget#sourceStation, QWidget#moreTrack, QWidget#outCluster, QWidget#deck, QWidget#stage, QWidget#stageFoot {
+QWidget#formInner, QWidget#formViewport, QWidget#fieldCol, QWidget#headerTitles, QWidget#localeCluster, QWidget#moreBox, QWidget#sourceStrip, QWidget#sourceLink, QWidget#sourceStation, QWidget#moreTrack, QWidget#outCluster, QWidget#deck, QWidget#stage {
     background: transparent;
 }
 QLabel {
     color: $ink;
     background: transparent;
 }
-QLabel#brandTitle {
+QToolButton#brandTitle, QLabel#productTitle {
     font-family: $displayFamily;
     font-size: $title;
     font-weight: 600;
     letter-spacing: 0.3px;
     color: $ink;
     padding: 0;
+}
+QToolButton#brandTitle, QLabel#productTitle {
+    font-size: 24px;
+}
+QToolButton#brandTitle, QToolButton#brandTitle:hover, QToolButton#brandTitle:pressed, QToolButton#brandTitle:focus {
+    background: transparent;
+    border: none;
+    color: $ink;
+    text-decoration: none;
 }
 QLabel#section {
     color: $muted;
@@ -192,6 +222,13 @@ QLabel#section {
     font-weight: 600;
     letter-spacing: 0.4px;
     padding: 0;
+}
+QLabel#gpuStatus {
+    font-family: $uiFamily;
+    font-size: $ui;
+    color: $ink;
+    border: none;
+    padding: 8px;
 }
 QLabel#fieldLabel {
     color: $muted;
@@ -208,14 +245,6 @@ QLabel#outLabel {
     font-weight: 600;
     letter-spacing: 0.2px;
     padding: 0 4px 0 0;
-}
-QLabel#company {
-    color: $muted;
-    font-family: $uiFamily;
-    font-size: $caption;
-    font-weight: 500;
-    letter-spacing: 1.2px;
-    padding: 0;
 }
 QLabel#hint, QLabel#help {
     color: $muted;
@@ -244,20 +273,21 @@ QLabel#stageNow[failed="true"] {
 }
 QLabel#pct {
     font-family: $displayFamily;
-    color: $filament;
+    color: $counterInk;
     font-size: $counter;
     font-weight: 500;
     letter-spacing: 0.3px;
     padding: 0 2px 0 0;
 }
-QFrame#sourceStrip, QFrame#deck, QFrame#actionBar {
+QFrame#sourceStrip, QFrame#deck, QFrame#actionBar, QFrame#voiceCard, QFrame#settingsCard {
     background: $sheet;
     border: 1px solid $line;
-    border-radius: 6px;
+    border-radius: 12px;
 }
 QFrame#stage {
-    background: transparent;
-    border: none;
+    background: $sheet;
+    border: 1px solid $line;
+    border-radius: 12px;
 }
 QFrame#rule, QFrame#headerRule {
     background: $line;
@@ -283,7 +313,7 @@ QFrame#sourceLink {
     background: transparent;
     border: none;
 }
-QLabel#drop, QFrame#urlCompose {
+QLabel#drop {
     background: $paper;
     border: 1px dashed $filament;
     border-radius: 6px;
@@ -323,18 +353,17 @@ QFrame#urlCompose QLineEdit#urlEdit {
     font-size: $ui;
 }
 QFrame#urlCompose QPushButton#composeGo {
-    min-width: 124px;
-    max-width: 124px;
+    min-width: 80px;
+    max-width: 80px;
     min-height: 44px;
     max-height: 44px;
     padding: 0 18px;
 }
 QToolButton#githubBtn {
-    background: transparent;
-    border: none;
-    padding: 6px;
-    min-width: 40px;
-    min-height: 40px;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 6px;
+    padding: 0;
 }
 QToolButton#githubBtn:hover {
     border: 1px solid $filament;
@@ -346,7 +375,7 @@ QScrollArea#formScroll {
     border: none;
 }
 QLineEdit, QComboBox {
-    background: $sheet;
+    background: $paper;
     border: 1px solid $line;
     border-radius: 6px;
     padding: 8px 12px;
@@ -363,9 +392,11 @@ QComboBox {
     padding-right: 28px;
 }
 QComboBox#localeCombo, QComboBox#themeCombo {
-    min-width: 108px;
-    padding: 6px 12px;
-    font-size: $ui;
+    padding: 0 30px 0 12px;
+    font-size: 16px;
+}
+QComboBox#localeCombo QAbstractItemView, QComboBox#themeCombo QAbstractItemView {
+    font-size: 16px;
 }
 QLineEdit:hover, QComboBox:hover {
     border-color: $lineStrong;
@@ -418,22 +449,6 @@ QCheckBox::indicator {
 }
 QCheckBox::indicator:checked {
     image: url(":/brand/check-on.png");
-}
-QToolButton#moreToggle {
-    background: transparent;
-    color: $ink;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    font-family: $uiFamily;
-    font-size: $ui;
-    font-weight: 600;
-    letter-spacing: 0.2px;
-    padding: 8px 10px;
-}
-QToolButton#moreToggle:hover {
-    color: $ink;
-    background: $filamentWash;
-    border: 1px solid $filament;
 }
 QPushButton {
     border-radius: 6px;
@@ -575,7 +590,7 @@ QProgressBar::chunk {
     border-radius: 2px;
 }
 QPlainTextEdit {
-    background: $sheet;
+    background: $paper;
     border: 1px solid $line;
     border-radius: 6px;
     color: $logFg;
@@ -586,8 +601,8 @@ QPlainTextEdit {
 }
 QScrollBar:vertical {
     background: transparent;
-    width: 10px;
-    margin: 4px;
+    width: 12px;
+    margin: 2px;
 }
 QScrollBar::handle:vertical {
     background: $lineStrong;
@@ -613,4 +628,15 @@ QMessageBox QLabel {
     font-family: $uiFamily;
     font-size: $ui;
 }
+QMessageBox QPushButton {
+    color: $filamentInk;
+    background: $filament;
+    border: 1px solid $filamentLine;
+    border-radius: 6px;
+    min-width: 80px;
+    min-height: 32px;
+    padding: 4px 14px;
+}
+QMessageBox QPushButton:hover { background: $filamentHover; }
+QMessageBox QPushButton:focus { border: 2px solid $ink; }
 """

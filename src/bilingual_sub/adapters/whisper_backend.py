@@ -163,10 +163,10 @@ def _explicit_whisper_python() -> str | None:
     return None
 
 
-def _automatic_mps_asr() -> bool:
+def _automatic_gpu_asr() -> bool:
     from bilingual_sub.adapters.runtime_bootstrap import auto_install_enabled, torch_backend
 
-    return not _explicit_whisper_python() and auto_install_enabled() and torch_backend() == "mps"
+    return not _explicit_whisper_python() and auto_install_enabled() and torch_backend() in {"mps", "cuda"}
 
 
 def _python_candidates(control: JobControl | None = None) -> list[Path]:
@@ -239,13 +239,18 @@ def _python_has_module(python: Path, module: str, control: JobControl | None = N
     try:
         proc = _run_probe(
             [str(gui_python(python)), "-c", f"import {module}"],
-            timeout=12,
+            # Cold WhisperX imports also load pyannote, scipy and torch. On
+            # Windows this routinely exceeds 12 seconds, even on a healthy GPU.
+            timeout=90 if module in {"whisper", "whisperx"} else 30,
             control=control,
             env=inference_env(),
             cwd=worker_script().parent,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("ASR runtime probe failed: %s (%s): %s", python, module, exc)
         return False
+    if proc.returncode:
+        logger.warning("ASR runtime import failed: %s (%s): %s", python, module, (proc.stderr or "")[-2000:])
     return proc.returncode == 0
 
 
@@ -259,11 +264,18 @@ def find_whisper_python(control: JobControl | None = None) -> Path | None:
     if control:
         control.wait_if_paused()
     explicit = _explicit_whisper_python()
+    if not explicit:
+        from bilingual_sub.adapters.offline_bundle import runtime
+        from bilingual_sub.adapters.runtime_bootstrap import torch_backend
+
+        bundled = runtime("asr", torch_backend())
+        if bundled and _python_has_whisper(bundled[0], control=control):
+            return bundled[0]
     # An Intel interpreter cached by an older app can run under Rosetta but
     # cannot use Apple GPU. Prepare the native managed environment on upgrade.
     if explicit:
         candidates = [Path(explicit).expanduser().resolve()]
-    elif _automatic_mps_asr():
+    elif _automatic_gpu_asr():
         candidates = [managed_python("asr")]
     else:
         candidates = _python_candidates(control=control)
@@ -393,8 +405,8 @@ def transcribe(
     from bilingual_sub.adapters.runtime_bootstrap import auto_install_enabled, ensure_python_env
 
     explicit = _explicit_whisper_python()
-    managed_mps = _automatic_mps_asr()
-    if not explicit and not managed_mps:
+    managed_gpu = _automatic_gpu_asr()
+    if not explicit and not managed_gpu:
         try:
             import whisper  # noqa: F401
         except ImportError:
@@ -409,8 +421,8 @@ def transcribe(
             if control:
                 control.check()
             return result
-    # A native MPS cache needs the full architecture/build probe before each job.
-    python = None if managed_mps else find_whisper_python(control=control)
+    # Validate the GPU build; importable CPU/Rosetta runtimes cannot satisfy it.
+    python = None if managed_gpu else find_whisper_python(control=control)
     if python is None:
         if explicit:
             raise RuntimeError("指定的 Whisper 解释器不可用，请检查 SUBFLOW_PYTHON / SUBFLOW_WHISPER_PYTHON 及其 Whisper 依赖")

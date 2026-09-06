@@ -12,10 +12,12 @@ from pypinyin.contrib.tone_convert import to_tone
 from .onnx_api import G2PWOnnxConverter
 
 current_file_path = os.path.dirname(__file__)
-CACHE_PATH = os.path.join(current_file_path, "polyphonic.pickle")
+cache_dir = os.environ.get('SUBFLOW_GPTSOVITS_CACHE', current_file_path)
+os.makedirs(cache_dir, exist_ok=True)
+CACHE_PATH = os.path.join(cache_dir, "polyphonic.pickle")
 PP_DICT_PATH = os.path.join(current_file_path, "polyphonic.rep")
 PP_FIX_DICT_PATH = os.path.join(current_file_path, "polyphonic-fix.rep")
-MD5_PATH = os.path.join(current_file_path, "polyphonic.md5")
+MD5_PATH = os.path.join(cache_dir, "polyphonic.md5")
 
 def get_file_md5(file_path):
     if not os.path.exists(file_path):

@@ -1,6 +1,7 @@
 """User-local, cancellable installation; no system Python or administrator required."""
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import logging
 import os
@@ -10,6 +11,7 @@ import sys
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 
 from filelock import FileLock, Timeout
@@ -36,11 +38,33 @@ def bootstrap_assets() -> Path:
     return Path(__file__).resolve().parents[1] / "_data" / "bootstrap"
 
 
+@lru_cache(maxsize=1)
+def _cuda_driver_available() -> bool:
+    """Detect CUDA without importing the GUI's (possibly CPU-only) PyTorch."""
+    try:
+        driver = (ctypes.WinDLL("nvcuda.dll", winmode=0x800) if sys.platform == "win32"
+                  else ctypes.CDLL("libcuda.so.1"))
+        version, count = ctypes.c_int(), ctypes.c_int()
+        return (driver.cuInit(0) == 0
+                and driver.cuDriverGetVersion(ctypes.byref(version)) == 0
+                and version.value >= 12000
+                and driver.cuDeviceGetCount(ctypes.byref(count)) == 0
+                and count.value > 0)
+    except (OSError, AttributeError):
+        return False
+
+
 def torch_backend() -> str:
     apple = sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
-    backend = os.environ.get("SUBFLOW_TORCH_BACKEND", "mps" if apple else "cpu").strip().lower()
+    backend = os.environ.get("SUBFLOW_TORCH_BACKEND", "auto").strip().lower() or "auto"
+    if backend == "auto":
+        if apple:
+            return "mps"
+        cuda_platform = sys.platform in {"win32", "linux"} and platform.machine().lower() in {"amd64", "x86_64"}
+        hidden = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip() == "-1" or os.environ.get("CUDA_VISIBLE_DEVICES") == ""
+        return "cuda" if cuda_platform and not hidden and _cuda_driver_available() else "cpu"
     if backend not in {"cpu", "cuda", "mps"}:
-        raise ValueError("SUBFLOW_TORCH_BACKEND must be cpu, cuda or mps")
+        raise ValueError("SUBFLOW_TORCH_BACKEND must be auto, cpu, cuda or mps")
     if backend == "mps" and not apple:
         raise ValueError("MPS automatic installation requires a native Apple Silicon macOS client")
     if backend == "cuda" and (sys.platform == "darwin" or platform.machine().lower() not in {"amd64", "x86_64"}):
@@ -49,7 +73,7 @@ def torch_backend() -> str:
 
 
 def managed_env(kind: str) -> Path:
-    if kind not in {"asr", "gptsovits", "whisperx"}:
+    if kind not in {"asr", "gptsovits", "whisperx", "qwentts"}:
         raise ValueError(f"Unknown runtime: {kind}")
     return runtime_root() / f"{kind}-{torch_backend()}-py311-v1"
 
@@ -70,6 +94,10 @@ def install_env() -> dict[str, str]:
                UV_PYTHON_INSTALL_DIR=str(runtime_root() / "python"),
                UV_CACHE_DIR=str(runtime_root() / "download-cache"))
     env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    env.update(PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1',
+               SUBFLOW_GPTSOVITS_CACHE=str(runtime_root() / 'gptsovits-cache'),
+               NUMBA_CACHE_DIR=str(runtime_root() / 'numba-cache'),
+               MPLCONFIGDIR=str(runtime_root() / 'matplotlib-cache'))
     # Frozen Qt search paths must never shadow an external interpreter's DLLs.
     if getattr(sys, "frozen", False):
         frozen = str(Path(getattr(sys, "_MEIPASS", "")).resolve()).lower()
@@ -147,6 +175,7 @@ def _runtime_probe(kind: str, version: str, backend: str) -> str:
             "onnxruntime, transformers, pyopenjtalk, jieba"
         ),
         "whisperx": "torch, torchaudio, whisperx",
+        "qwentts": "torch, torchaudio, qwen_tts, fastapi, uvicorn, soundfile",
     }
     if kind not in modules:
         raise ValueError(f"Unknown runtime: {kind}")
@@ -193,6 +222,16 @@ def _ready_marker(marker: Path, stamp: str, control: JobControl | None) -> None:
 
 def ensure_python_env(kind: str, *, control: JobControl | None = None, progress: Progress = None) -> Path:
     backend = torch_backend()
+    from bilingual_sub.adapters.offline_bundle import runtime
+
+    bundled = runtime(kind, backend)
+    if bundled:
+        python, wheel, build = bundled
+        _progress(progress, '正在检查内置配音环境（无需下载）…')
+        _run([str(python), '-c', _runtime_probe(kind, wheel, build)],
+             runtime_root() / f'bundled-{kind}.log', control,
+             env={**inference_env(), 'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1'}, timeout=180)
+        return python
     version, wheel_version, backend_args = _torch_build(backend)
     probe = _runtime_probe(kind, wheel_version, backend)
     root = runtime_root()
@@ -251,6 +290,13 @@ def ensure_python_env(kind: str, *, control: JobControl | None = None, progress:
 
 def ensure_sovits_runtime(*, control: JobControl | None = None, progress: Progress = None,
                           models: bool = True) -> Path:
+    from bilingual_sub.adapters.offline_bundle import model_home
+
+    if not os.environ.get('SUBFLOW_GPTSOVITS_HOME', '').strip():
+        bundled = model_home('gptsovits', verify=models, progress=progress, control=control)
+        if bundled:
+            ensure_python_env('gptsovits', control=control, progress=progress)
+            return bundled
     from bilingual_sub.adapters.tts.gptsovits_runtime import (
         bundled_src,
         copy_runtime_tree,

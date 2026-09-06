@@ -33,7 +33,7 @@ class TranslateStats:
 
 def translation_cache_key(source_lang: str, target_lang: str, text: str, *,
                           glossary_block: str = "", max_en_chars: int = 120) -> str:
-    return json.dumps({"schema": "translate-v2", "source": source_lang, "target": target_lang,
+    return json.dumps({"schema": "translate-v3", "source": source_lang, "target": target_lang,
                        "text": text, "glossary": glossary_block, "max_chars": max_en_chars},
                       ensure_ascii=False, sort_keys=True)
 

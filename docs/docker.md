@@ -1,6 +1,6 @@
 # Docker Compose 部署
 
-[返回文档索引](README.md) · 适用于 **1.3.46**
+[返回文档索引](README.md) · 适用于 **1.3.60**
 
 官方镜像：[crazymsn/subflow](https://hub.docker.com/r/crazymsn/subflow)。支持 Linux `amd64` / `arm64`，均使用 CPU；无需显卡。Mac 的 Docker 运行 Linux 容器，Apple GPU 请使用原生 arm64 客户端。
 
@@ -38,7 +38,7 @@ docker compose pull
 docker compose run --rm subflow doctor
 ```
 
-Compose 固定使用 `crazymsn/subflow:1.3.46`，Docker 自动选择本机架构。镜像包含 FFmpeg 和推理依赖；首次使用对应识别或配音模型时仍需下载权重。`doctor` 检查环境，部分识别路径会尝试加载 tiny 模型并触发下载，但不代表已完成视频推理或配音验收。
+Compose 默认使用 `crazymsn/subflow:latest`，Docker 自动选择本机架构。镜像包含 FFmpeg，以及 Whisper、WhisperX、Qwen、GPT-SoVITS 四套推理依赖；首次使用对应识别或配音模型时仍需下载权重。`doctor` 检查环境，部分识别路径会尝试加载 tiny 模型并触发下载，但不代表已完成视频推理或配音验收。
 
 ## 3. 处理视频
 
@@ -61,7 +61,7 @@ docker compose run --rm subflow run /data/input.mp4 -o /data/output-bilingual.mp
 
 可在 `.env` 设置 `SUBFLOW_TRANSLATE_MODEL`，或传入 `--translate-model` 指定模型列表中的 ID。`--whisper-model` 选择本地识别模型，与翻译模型不同。
 
-需要跨语种配音时，例如中文转英文，增加 `--target-lang en --dub`。首轮需准备 GPT-SoVITS 模型，CPU 合成可能耗时较长。中文转简体或繁体始终保留原声，`--dub` 不覆盖此规则。
+需要跨语种配音时，例如中文转英文，增加 `--target-lang en --dub --tts-provider qwen3-native --tts-voice Aiden`。首轮需准备 Qwen 模型，CPU 合成可能耗时较长。中文转简体或繁体始终保留原声，`--dub` 不覆盖此规则。
 
 成品保存在宿主机 `data/`；输入输出必须使用不同文件名。每次命令创建一个任务容器，完成后自动删除容器，保留数据和命名卷。无需执行 `docker compose up -d`，也无需公开 9880 配音端口。
 
@@ -71,7 +71,7 @@ docker compose run --rm subflow run /data/input.mp4 -o /data/output-bilingual.mp
 
 | 变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `SUBFLOW_IMAGE` | `crazymsn/subflow:1.3.46` | 镜像标签；需要随最新发布更新时可选 `latest` |
+| `SUBFLOW_IMAGE` | `crazymsn/subflow:latest` | 默认跟随最新发布；稳定部署可固定为 `1.3.60` |
 | `SUBFLOW_API_KEY` | 空 | 翻译鉴权；不写入镜像 |
 | `SUBFLOW_TRANSLATE_MODEL` | 空 | 翻译模型 ID |
 | `SUBFLOW_CPU_THREADS` | `4` | OpenMP / MKL 线程数，并非容器 CPU 硬配额 |
@@ -91,17 +91,18 @@ docker compose run --rm subflow run /data/input.mp4 -o /data/output-bilingual.mp
 | `/opt/GPT-SoVITS/GPT_SoVITS/pretrained_models` | `sovits-models` | 配音模型 |
 | `/opt/GPT-SoVITS/GPT_SoVITS/text/G2PWModel` | `sovits-g2pw` | 中文语言模型 |
 | `/opt/GPT-SoVITS/nltk_data`、`/opt/GPT-SoVITS/TEMP` | `sovits-nltk`、`sovits-language-cache` | 语言资源及词典 |
+| `/opt/subflow/runtime/qwen3-native-0.6b`、`/opt/subflow/runtime/qwen3-tts-0.6b` | `qwen-native-models`、`qwen-models` | Qwen 标准音色和克隆权重 |
 | `/root/.config/subflow` | `subflow-config` | 用户配置和交互保存的凭据 |
 
 卷名实际带 Compose 项目前缀。更换部署目录或项目名可能创建另一套卷，从而重新下载模型。正常升级保留这些卷；`docker compose down -v` 会删除命名卷，不能作为日常更新命令。
 
-若需要断点恢复，使用 `--work-dir /data/work-job1` 为任务保留独立工作目录；容器临时文件系统会随 `--rm` 删除。同一项目共用文件占用登记，多个任务不要写同一输出。自定义跨项目共享数据时，还需共享 `SUBFLOW_LOCK_DIR`、保持相同容器路径映射，并使用支持文件锁的存储。
+若翻译失败，保留工作目录并在修复配置后增加 `--resume-from translate` 重跑同一任务，缓存有效时复用识别。若需要断点恢复，使用 `--work-dir /data/work-job1` 为任务保留独立工作目录；容器临时文件系统会随 `--rm` 删除。同一项目共用文件占用登记，多个任务不要写同一输出。自定义跨项目共享数据时，还需共享 `SUBFLOW_LOCK_DIR`、保持相同容器路径映射，并使用支持文件锁的存储。
 
 默认启用进程回收、60 秒退出宽限、1 GB 共享内存和日志轮转。容器以 root 运行，去掉默认能力后仅保留写入宿主机绑定目录所需的 `DAC_OVERRIDE`；NAS 的只读挂载、ACL 或 NFS root squash 仍可能阻止写入。处理权限问题应检查该数据目录和存储配置。
 
 ## 更新与源码构建
 
-更新时修改 `.env` 中的镜像标签，再执行 `docker compose pull`。正在运行的任务继续使用原镜像，新任务使用拉取后的镜像。当前版本验收信息见 [发布记录](release-1.3.46.md)。
+更新时修改 `.env` 中的镜像标签，再执行 `docker compose pull`。正在运行的任务继续使用原镜像，新任务使用拉取后的镜像。当前版本验收信息见 [发布记录](release-1.3.60.md)。
 
 从源码构建需要完整仓库，使用额外的覆盖文件：
 

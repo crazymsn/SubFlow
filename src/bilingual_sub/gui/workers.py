@@ -18,10 +18,14 @@ class PipelineWorker(QThread):
     finished_ok = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, config: JobConfig, control) -> None:
-        super().__init__()
+    def __init__(self, config: JobConfig, control, parent=None) -> None:
+        super().__init__(parent)
         self.config = config
         self.control = control
+        self.work_dir: Path | None = None
+
+    def _work_ready(self, path: Path) -> None:
+        self.work_dir = path
 
     def run(self) -> None:
         try:
@@ -31,6 +35,7 @@ class PipelineWorker(QThread):
                 self.config,
                 on_progress=lambda s, p: self.progress.emit(s, p),
                 control=self.control,
+                on_work_ready=self._work_ready,
             )
             self.finished_ok.emit(result)
         except JobStopped:
@@ -40,6 +45,16 @@ class PipelineWorker(QThread):
                 self.failed.emit(tr("stop"))
             else:
                 self.failed.emit(str(exc))
+
+
+class DeviceProbeWorker(QThread):
+    result = Signal(str, str)
+
+    def run(self) -> None:
+        from bilingual_sub.gui.hardware import detect_hardware
+
+        key, name = detect_hardware()
+        self.result.emit(key, name)
 
 
 class ModelsWorker(QThread):
@@ -63,6 +78,7 @@ class ModelsWorker(QThread):
 class VoicePreviewWorker(QThread):
     ok = Signal(str)
     fail = Signal(str)
+    progress = Signal(str, float)
 
     def __init__(
         self,
@@ -74,6 +90,7 @@ class VoicePreviewWorker(QThread):
         prompt_text: str = "",
         prompt_lang: str = "",
         video: Path | None = None,
+        sample_text: str = "",
     ) -> None:
         super().__init__()
         self.provider = provider
@@ -84,6 +101,7 @@ class VoicePreviewWorker(QThread):
         self.prompt_text = prompt_text
         self.prompt_lang = prompt_lang
         self.video = video
+        self.sample_text = sample_text
         self.control = JobControl()
 
     def run(self) -> None:
@@ -92,7 +110,7 @@ class VoicePreviewWorker(QThread):
             from bilingual_sub.core.voice_preview import synth_voice_preview
 
             ref_audio = self.ref_audio
-            if not ref_audio and self.video is not None:
+            if not ref_audio and self.video is not None and self.provider != 'qwen3-native':
                 import hashlib
 
                 from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_ref_audio
@@ -115,11 +133,14 @@ class VoicePreviewWorker(QThread):
                 lang=self.lang,
                 endpoint=self.endpoint,
                 ref_audio=ref_audio,
-                prompt_text=self.prompt_text,
+                # Automatically extracted speech has no user-verified transcript.
+                prompt_text=self.prompt_text if self.ref_audio else "",
                 prompt_lang=self.prompt_lang,
+                sample_text=self.sample_text,
                 control=self.control,
+                on_progress=self.progress.emit,
             )
-            if not self.ref_audio and self.video is not None:
+            if not self.ref_audio and self.video is not None and self.provider != 'qwen3-native':
                 if file_digest(self.video, checkpoint=self.control.wait_if_paused) != source_digest:
                     raise RuntimeError("试听合成期间源视频发生变化，请重试")
             self.ok.emit(str(path))
@@ -134,16 +155,17 @@ class SovitsBootWorker(QThread):
     fail = Signal(str)
     progress = Signal(str)
 
-    def __init__(self, endpoint: str = "") -> None:
+    def __init__(self, endpoint: str = "", provider: str = "gptsovits") -> None:
         super().__init__()
         self.endpoint = endpoint
+        self.provider = provider
         self.control = JobControl()
 
     def run(self) -> None:
         try:
-            from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
+            from bilingual_sub.adapters.tts.routing import ensure_running
 
-            self.ok.emit(ensure_running(self.endpoint, wait_sec=300, control=self.control, progress=self.progress.emit))
+            self.ok.emit(ensure_running(self.provider, self.endpoint, wait_sec=300, control=self.control, progress=self.progress.emit))
         except Exception as exc:
             self.fail.emit(str(exc))
 
@@ -151,14 +173,22 @@ class SovitsBootWorker(QThread):
 class SovitsProbeWorker(QThread):
     result = Signal(bool, str)
 
-    def __init__(self, endpoint: str) -> None:
+    def __init__(self, endpoint: str, provider: str = "gptsovits") -> None:
         super().__init__()
         self.endpoint = endpoint
+        self.provider = provider
 
     def run(self) -> None:
         from bilingual_sub.adapters.tts.gptsovits_runtime import diagnose_runtime, probe_endpoint
 
         try:
+            if self.provider.startswith("qwen3"):
+                from bilingual_sub.adapters.tts.qwen_runtime import probe_endpoint as qwen_probe
+                from bilingual_sub.adapters.tts.qwen_runtime import runtime_device
+
+                ready = qwen_probe(self.endpoint, native=self.provider == 'qwen3-native')
+                self.result.emit(ready, runtime_device(self.endpoint) if ready else '')
+                return
             ready = probe_endpoint(self.endpoint)
             self.result.emit(ready, "" if ready else diagnose_runtime() or "")
         except Exception as exc:

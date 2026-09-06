@@ -20,7 +20,7 @@ class FilamentButton(QPushButton):
         self.setAutoDefault(False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFont(type_font(size=14, weight=QFont.Weight.DemiBold))
 
     def apply_theme(self, theme: str) -> None:

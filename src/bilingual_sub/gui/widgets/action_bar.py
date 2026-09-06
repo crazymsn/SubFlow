@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -20,8 +21,10 @@ def build_action_bar(win) -> QWidget:
     dock = QFrame()
     dock.setObjectName("actionBar")
     dock.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    row = QHBoxLayout(dock)
-    row.setContentsMargins(18, 10, 18, 10)
+    shell = QVBoxLayout(dock)
+    shell.setContentsMargins(18, 12, 18, 12)
+    shell.setSpacing(10)
+    row = QHBoxLayout()
     row.setSpacing(8)
 
     win.run_btn = FilamentButton(tr("start"), object_name="primary")
@@ -51,6 +54,7 @@ def build_action_bar(win) -> QWidget:
     win._section_labels["out"] = win.lbl_out
     win.out_edit = QLineEdit()
     win.out_edit.setObjectName("outEdit")
+    win.out_edit.setAccessibleName(tr("out"))
     win.out_edit.setReadOnly(False)
     win.out_edit.setEnabled(True)
     win.out_edit.setClearButtonEnabled(True)
@@ -84,10 +88,11 @@ def build_action_bar(win) -> QWidget:
     path.addWidget(win.browse_out_btn, 0, Qt.AlignmentFlag.AlignVCenter)
     path.addWidget(win.open_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
-    row.addWidget(win.run_btn)
+    shell.addWidget(cluster)
+    shell.addLayout(row)
     row.addWidget(win.pause_btn)
     row.addWidget(win.resume_btn)
     row.addWidget(win.stop_btn)
-    row.addSpacing(12)
-    row.addWidget(cluster, 1)
+    row.addStretch(1)
+    row.addWidget(win.run_btn)
     return dock

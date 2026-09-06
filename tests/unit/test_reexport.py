@@ -447,6 +447,21 @@ def test_changed_processing_settings_invalidates_reexport_and_resume(tmp_path, v
     assert not _resume_dir_matches(cfg, work, settings)
 
 
+def test_old_truncated_translation_report_is_not_reused(tmp_path, video):
+    from bilingual_sub.pipeline import _can_reexport
+
+    cfg = JobConfig(video, tmp_path / 'old.mp4', tmp_path / 'out.srt', Path('auto'))
+    work = tmp_path / 'cache'
+    _plant_job(work, video, cfg.output_video, whisper=cfg.whisper_model,
+               translate=cfg.translate_model, cfg=cfg)
+    assert _can_reexport(cfg, work, AppSettings())
+    path = work / 'report.json'
+    report = json.loads(path.read_text(encoding='utf-8'))
+    report['processing_profile']['processing_revision'] = 'standard-voices-balanced-captions-v24'
+    path.write_text(json.dumps(report), encoding='utf-8')
+    assert not _can_reexport(cfg, work, AppSettings())
+
+
 def test_changed_burn_quality_reencodes_without_recognition(tmp_path, video, monkeypatch):
     monkeypatch.setattr("bilingual_sub.pipeline.tempfile.gettempdir", lambda: str(tmp_path))
     cfg = JobConfig(video, tmp_path / "new.mp4", tmp_path / "new.srt", Path("auto"))

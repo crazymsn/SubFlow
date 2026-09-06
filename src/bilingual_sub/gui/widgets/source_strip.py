@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from bilingual_sub.gui.widgets.drop_card import RAIL_H, DropCard
 from bilingual_sub.gui.widgets.filament_btn import FilamentButton
+from bilingual_sub.gui.widgets.section import section_head
 from bilingual_sub.i18n import tr
 
 
@@ -32,8 +33,9 @@ def build_source(win) -> QWidget:
     strip = QFrame()
     strip.setObjectName("sourceStrip")
     shell = QVBoxLayout(strip)
-    shell.setContentsMargins(18, 16, 18, 16)
+    shell.setContentsMargins(16, 14, 16, 14)
     shell.setSpacing(8)
+    shell.addWidget(section_head(win, "ui_source", "01"))
 
     rail = QHBoxLayout()
     rail.setContentsMargins(0, 0, 0, 0)
@@ -53,7 +55,7 @@ def build_source(win) -> QWidget:
     compose.setMaximumHeight(RAIL_H)
     compose.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     well = QVBoxLayout(compose)
-    well.setContentsMargins(18, 0, 18, 0)
+    well.setContentsMargins(10, 0, 10, 0)
     well.setSpacing(0)
 
     row = QHBoxLayout()
@@ -62,6 +64,7 @@ def build_source(win) -> QWidget:
 
     win.url_edit = QLineEdit()
     win.url_edit.setObjectName("urlEdit")
+    win.url_edit.setAccessibleName(tr("source_url"))
     win.url_edit.setPlaceholderText(tr("url_ph"))
     win.url_edit.setFixedHeight(44)
     win.url_edit.setMaximumHeight(44)
@@ -71,7 +74,7 @@ def build_source(win) -> QWidget:
     row.addWidget(win.url_edit, 1)
 
     win.download_btn = FilamentButton(tr("download"), object_name="composeGo")
-    win.download_btn.setFixedSize(124, 44)
+    win.download_btn.setFixedSize(80, 44)
     win.download_btn.setEnabled(False)
     win.download_btn.clicked.connect(win._download)
     row.addWidget(win.download_btn, 0)

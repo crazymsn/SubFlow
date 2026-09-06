@@ -2,7 +2,6 @@ name: Release clients
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
     tags: ['v*']
 permissions:
   contents: read
@@ -17,7 +16,7 @@ jobs:
         include:
           - os: windows-latest
             label: Windows-x64
-            backend: cpu
+            backend: cuda
           - os: macos-14
             label: macOS-arm64
             backend: mps
@@ -25,17 +24,24 @@ jobs:
             label: macOS-x64
             backend: cpu
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 240
     env:
       QT_QPA_PLATFORM: offscreen
       SUBFLOW_TORCH_BACKEND: ${{ matrix.backend }}
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
+      SUBFLOW_BUNDLE_HARDLINK: '1'
+      UV_NO_CACHE: '1'
+      PIP_NO_CACHE_DIR: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Verify release version
+        shell: bash
+        run: |
+          python -c "import os,tomllib; v=tomllib.load(open('pyproject.toml','rb'))['project']['version']; ref=os.environ['GITHUB_REF']; assert not ref.startswith('refs/tags/') or ref == 'refs/tags/v'+v, 'Tag and package version differ'"
       - name: Install Windows FFmpeg
         if: runner.os == 'Windows'
         shell: pwsh
@@ -44,7 +50,7 @@ jobs:
       - name: Install macOS FFmpeg
         if: runner.os == 'macOS'
         run: |
-          brew install ffmpeg-full
+          brew install ffmpeg-full sevenzip
           echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - name: Install build and test tools
         run: python -m pip install -e '.[gui,dev,packaging]'
@@ -54,6 +60,8 @@ jobs:
         run: ruff check src tests scripts
       - name: Prepare recognition runtime from scratch
         run: python scripts/prepare-runtime.py asr
+      - name: Prepare WhisperX runtime from scratch
+        run: python scripts/prepare-runtime.py whisperx
       - name: Prepare dubbing dependencies from scratch
         run: python scripts/prepare-runtime.py gptsovits --skip-models
       - name: Verify audio postprocessing and codecs
@@ -73,11 +81,11 @@ jobs:
           name: apple-gpu-report
           path: apple-gpu-report.json
           if-no-files-found: ignore
-      - name: Build Windows client with automatic installer
+      - name: Build Windows client with all offline voice engines
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/build-windows.ps1 -SourceOnly -SkipInstall
-      - name: Build macOS client with automatic installer
+        run: ./scripts/build-windows.ps1 -SkipInstall -HardlinkModels
+      - name: Build macOS client with all offline voice engines
         if: runner.os == 'macOS'
         run: bash scripts/build-macos.sh
       - name: Smoke test Windows launcher
@@ -86,17 +94,39 @@ jobs:
       - name: Smoke test macOS launcher
         if: runner.os == 'macOS'
         run: python scripts/smoke-client.py dist/SubFlow.app/Contents/MacOS/SubFlow
+      - name: Verify all bundled voices on Windows without downloads
+        if: runner.os == 'Windows'
+        run: python scripts/check-offline-voices.py dist/SubFlow/offline --backend cpu --output offline-qa
+      - name: Verify all bundled voices on macOS without downloads
+        if: runner.os == 'macOS'
+        run: python scripts/check-offline-voices.py dist/SubFlow.app/Contents/Resources/offline --backend cpu --output offline-qa
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: offline-qa-${{ matrix.label }}
+          path: |
+            offline-qa/report.json
+            offline-qa/*.log
+          if-no-files-found: ignore
       - name: Archive Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist/SubFlow -DestinationPath SubFlow-${{ matrix.label }}.zip
+        run: |
+          7z a -t7z -mx=1 -ms=off -mmt=2 -v1900m SubFlow-${{ matrix.label }}.7z ./dist/SubFlow
+          if ($LASTEXITCODE -ne 0) { throw "Archive failed" }
+          7z t SubFlow-${{ matrix.label }}.7z.001
+          if ($LASTEXITCODE -ne 0) { throw "Archive verification failed" }
       - name: Archive macOS
         if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent dist/SubFlow.app SubFlow-${{ matrix.label }}.zip
+        run: |
+          7zz a -t7z -mx=1 -ms=off -mmt=2 -v1900m SubFlow-${{ matrix.label }}.7z ./dist/SubFlow.app
+          7zz t SubFlow-${{ matrix.label }}.7z.001
       - uses: actions/upload-artifact@v4
         with:
           name: SubFlow-${{ matrix.label }}
-          path: SubFlow-${{ matrix.label }}.zip
+          path: SubFlow-${{ matrix.label }}.7z.*
+          compression-level: 0
+          retention-days: 3
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -138,12 +168,13 @@ jobs:
           - os: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
-    env:
-      SUBFLOW_IMAGE: subflow:local
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - name: Read image version
+        id: version
+        run: python3 -c "import os,tomllib; v=tomllib.load(open('pyproject.toml','rb'))['project']['version']; open(os.environ['GITHUB_OUTPUT'],'a').write('value='+v+'\n')"
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -151,16 +182,21 @@ jobs:
           tags: subflow:local
           platforms: linux/${{ matrix.arch }}
           build-args: |
+            VERSION=${{ steps.version.outputs.value }}
             REVISION=${{ github.sha }}
           cache-from: type=gha,scope=subflow-${{ matrix.arch }}
           cache-to: type=gha,scope=subflow-${{ matrix.arch }},mode=max
       - name: Compose CPU smoke
         run: |
+          printf 'services:\n  subflow:\n    image: subflow:local\n    pull_policy: never\n' > compose.ci.yaml
+          export COMPOSE_FILE=docker-compose.yml:compose.ci.yaml
           docker compose config --quiet
           docker compose run --rm subflow --help
           printf 'host-owned input' > data/.compose-write-check
           docker compose run --rm --entrypoint python subflow -c "from pathlib import Path; p=Path('/data/.compose-write-check'); assert p.read_text() == 'host-owned input'; p.write_text('container write'); p.unlink()"
           docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py asr
+          docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py whisperx
+          docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py qwentts
           docker compose run --rm --entrypoint python subflow /app/scripts/prepare-runtime.py gptsovits --skip-models
           docker compose run --rm --entrypoint python subflow /app/scripts/check-sovits-audio.py
       - name: Log in to Docker Hub
@@ -176,7 +212,7 @@ jobs:
           docker push crazymsn/subflow:sha-${{ github.sha }}-${{ matrix.arch }}
   docker-publish:
     if: github.repository == 'crazymsn/SubFlow'
-    needs: [clients, docker, linux-process-lifecycle]
+    needs: [docker, linux-process-lifecycle]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -201,16 +237,23 @@ jobs:
           docker buildx imagetools inspect crazymsn/subflow:"$VERSION"
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [clients, docker-publish, linux-process-lifecycle]
+    needs: [clients, linux-process-lifecycle]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: SubFlow-*
           merge-multiple: true
+      - name: Calculate download checksums
+        run: sha256sum SubFlow-*.7z.* > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
-          files: SubFlow-*.zip
-          generate_release_notes: true
+          name: SubFlow 语幕 ${{ github.ref_name }}
+          files: |
+            SubFlow-*.7z.*
+            SHA256SUMS
+          body_path: docs/release-1.3.60.md
+          fail_on_unmatched_files: true

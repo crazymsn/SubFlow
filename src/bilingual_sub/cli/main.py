@@ -307,10 +307,10 @@ def run_cmd(
         enable_dub=enable_dub,
         tts_provider=tts_provider,
     )
-    if tts_provider not in ("none", "gptsovits"):
-        console.print("[red]--tts-provider must be none or gptsovits[/red]")
+    if tts_provider not in ("none", "gptsovits", "qwen3", "qwen3-native"):
+        console.print("[red]--tts-provider must be none, qwen3-native, qwen3 or gptsovits[/red]")
         _exit(1)
-    if tts_provider == "gptsovits":
+    if tts_provider in {"gptsovits", "qwen3", "qwen3-native"}:
         enable_dub = True
     if device not in ("auto", "cuda", "mps", "cpu"):
         console.print("[red]--device must be auto, cuda, mps, or cpu[/red]")

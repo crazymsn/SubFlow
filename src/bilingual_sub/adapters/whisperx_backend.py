@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -35,10 +34,27 @@ def worker_script() -> Path:
 
 
 def find_whisperx_python(control: JobControl | None = None) -> Path | None:
-    from bilingual_sub.adapters.runtime_bootstrap import managed_python
+    from bilingual_sub.adapters.runtime_bootstrap import (
+        auto_install_enabled,
+        managed_python,
+        torch_backend,
+    )
+    from bilingual_sub.adapters.whisper_backend import _explicit_whisper_python
 
     if control:
         control.wait_if_paused()
+    explicit = _explicit_whisper_python()
+    if explicit:
+        python = Path(explicit).expanduser().resolve()
+        return python if python.is_file() and _python_has_module(python, "whisperx", control=control) else None
+    from bilingual_sub.adapters.offline_bundle import runtime
+
+    bundled = runtime("whisperx", torch_backend())
+    if bundled and _python_has_module(bundled[0], "whisperx", control=control):
+        return bundled[0]
+    if not _explicit_whisper_python() and auto_install_enabled() and torch_backend() == "cuda":
+        gpu = managed_python("whisperx")
+        return gpu if gpu.is_file() and _python_has_module(gpu, "whisperx", control=control) else None
     for cand in [managed_python("whisperx"), *_python_candidates(control=control)]:
         if not cand.is_file():
             continue
@@ -54,15 +70,6 @@ def should_provision_whisperx() -> bool:
     if flag == "1":
         return True
     return bool(getattr(sys, "frozen", False))
-
-
-def _host_python() -> list[str] | None:
-    if os.name == "nt":
-        launcher = shutil.which("py")
-        if launcher:
-            return [launcher, "-3"]
-    host = shutil.which("python") or shutil.which("python3")
-    return [host] if host else None
 
 
 def ensure_whisperx_runtime(control: JobControl | None = None) -> Path | None:
@@ -94,8 +101,15 @@ def whisperx_available(python: Path | None = None, control: JobControl | None = 
 class WhisperXBackend:
     name = "whisperx"
 
+    def __init__(self) -> None:
+        self.python: Path | None = None
+
     def available(self, control: JobControl | None = None) -> bool:
-        return whisperx_available(control=control)
+        if control:
+            control.wait_if_paused()
+        if self.python is None:
+            self.python = find_whisperx_python(control=control)
+        return self.python is not None
 
     def transcribe(
         self,
@@ -109,9 +123,9 @@ class WhisperXBackend:
         control: JobControl | None = None,
     ) -> AsrResult:
         validate_outputs(asr_output_paths(out_json, "whisperx"), [wav])
-        python = find_whisperx_python(control=control)
+        python = self.python or find_whisperx_python(control=control)
         if python is None:
-            raise RuntimeError("WhisperX 不可用")
+            raise RuntimeError("WhisperX 识别环境无法导入，请检查识别运行环境；此问题与配音音色无关")
         data = run_asr_worker(python, worker_script(), wav, model_name=model_name,
             language=whisper_language(language), device=device, out_json=out_json,
             backend="whisperx", on_progress=on_progress, control=control)

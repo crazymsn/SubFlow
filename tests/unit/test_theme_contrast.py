@@ -28,6 +28,12 @@ def test_token_pairs_meet_aa():
         assert contrast_ratio(theme.logFg, theme.sheet) >= 4.5
 
 
+def test_progress_counter_meets_large_text_contrast_in_both_themes():
+    for name in ("light", "dark"):
+        colors = qss_selector_colors(app_qss(name), "QLabel#pct")
+        assert colors and contrast_ratio(colors[0], tokens_for(name).sheet) >= 3
+
+
 def test_filament_is_not_label_or_help_ink():
     for name in ("light", "dark"):
         tokens = tokens_for(name)
@@ -66,7 +72,6 @@ def test_brand_ghost_hover_matches_check_wash():
         "QPushButton#brandGhost:hover",
         "QPushButton#ghost:hover, QPushButton#quiet:hover",
         "QPushButton#danger:hover",
-        "QToolButton#moreToggle:hover",
         "QToolButton#githubBtn:hover",
     ):
         assert selector in qss

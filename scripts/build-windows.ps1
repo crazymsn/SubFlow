@@ -1,5 +1,6 @@
 #Requires -Version 5.1
-param([switch]$SourceOnly, [switch]$SkipInstall, [string]$DistPath = "dist")
+param([switch]$SourceOnly, [switch]$SkipInstall, [string]$DistPath = "dist",
+      [string]$OfflinePayload = "", [switch]$HardlinkModels)
 # 构建语幕 SubFlow Windows 客户端（onedir）
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -54,7 +55,15 @@ $readme = Join-Path $dist "请先读我.txt"
 
 $sovits = Join-Path $Root "third_party\GPT-SoVITS"
 $sovitsOut = Join-Path $dist "GPT-SoVITS"
-if (Test-Path (Join-Path $sovits "api_v2.py")) {
+if (-not $SourceOnly) {
+    $bundleArgs = @("$Root\scripts\bundle-offline.py", (Join-Path $dist "offline"), "--backend", "cuda")
+    if ($OfflinePayload) { $bundleArgs += @("--copy-bundle", $OfflinePayload) }
+    if ($HardlinkModels) { $bundleArgs += "--hardlink" }
+    python @bundleArgs
+    if ($LASTEXITCODE -ne 0) { throw "Complete offline voice bundling failed" }
+    [System.IO.File]::WriteAllText((Join-Path $dist "offline-required.json"), '{"schema":1}')
+    [System.IO.File]::AppendAllText($readme, "`r`n已内置 Qwen 标准音色、Qwen 原声克隆、GPT-SoVITS 模型与 Python 环境。配音无需首次下载。`r`n优先使用 NVIDIA GPU；无可用 GPU 时使用 CPU。请勿删除 offline 文件夹。`r`n")
+} elseif (Test-Path (Join-Path $sovits "api_v2.py")) {
     $bundleArgs = @("$Root\scripts\bundle-gptsovits.py", $sovits, $sovitsOut)
     if ($SourceOnly) { $bundleArgs += "--source-only" }
     python @bundleArgs

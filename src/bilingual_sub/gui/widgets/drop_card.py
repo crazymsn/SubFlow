@@ -11,7 +11,7 @@ from bilingual_sub.gui.theme import STACKS, TYPE, tokens_for
 from bilingual_sub.i18n import tr
 
 VIDEO_FILTER = "Video (*.mp4 *.mkv *.mov *.avi *.webm *.m4v)"
-RAIL_H = 128
+RAIL_H = 72
 
 
 class DropCard(QLabel):
@@ -22,11 +22,12 @@ class DropCard(QLabel):
         self.setObjectName("drop")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWordWrap(True)
-        self.setMinimumWidth(280)
+        self.setMinimumWidth(180)
         self.setFixedHeight(RAIL_H)
         self.setMaximumHeight(RAIL_H)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setAcceptDrops(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setProperty("active", False)
         self.setAccessibleName(tr("drop"))
@@ -34,6 +35,8 @@ class DropCard(QLabel):
         self.set_prompt(tr("drop"), title_color=tones.ink, hint_color=tones.muted)
 
     def set_prompt(self, title: str, hint: str = "", *, title_color: str, hint_color: str) -> None:
+        self._full_title = title
+        self.setToolTip(title)
         if hint:
             self.setTextFormat(Qt.TextFormat.RichText)
             self.setText(
@@ -44,13 +47,32 @@ class DropCard(QLabel):
             )
         else:
             self.setTextFormat(Qt.TextFormat.PlainText)
-            self.setText(title)
+            self._fit_title()
+
+    def _fit_title(self) -> None:
+        self.setText(self.fontMetrics().elidedText(self._full_title, Qt.TextElideMode.ElideMiddle,
+                                                  max(40, self.width() - 44)))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "_full_title") and self.textFormat() == Qt.TextFormat.PlainText:
+            self._fit_title()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
-            path, _ = QFileDialog.getOpenFileName(self, tr("select_video"), "", VIDEO_FILTER)
-            if path:
-                self.file_dropped.emit(Path(path))
+            self._choose_file()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self._choose_file()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def _choose_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, tr("select_video"), "", VIDEO_FILTER)
+        if path:
+            self.file_dropped.emit(Path(path))
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
         if event.mimeData().hasUrls():

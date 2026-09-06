@@ -60,7 +60,7 @@ def test_brand_files_exist():
     assert mark_path().is_file()
     assert icon_path().is_file()
     assert mark_path().name == "subflow-mark.png"
-    assert WINDOW_TITLE == "深度云创科技"
+    assert WINDOW_TITLE == "SubFlow 语幕"
     assert (brand_dir() / "check-on.png").is_file()
     assert (brand_dir() / "check-off.png").is_file()
     assert (brand_dir() / "subflow-icon.png").is_file()
@@ -158,9 +158,13 @@ def test_brand_check_label_optically_centers():
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QApplication
 
+    from bilingual_sub.gui.styles import app_qss
     from bilingual_sub.gui.widgets.brand_check import CAPTION_SETTLE, BrandCheck
 
     app = QApplication.instance() or QApplication([])
+    # Pixel classification below assumes dark glyphs on a light background;
+    # previous GUI tests may have selected the dark theme.
+    app.setStyleSheet(app_qss("light"))
     for label in ("烧录到视频", "电影级润色", "字幕颜色", "配音"):
         box = BrandCheck(label)
         box.resize(box.sizeHint())
@@ -206,7 +210,7 @@ def test_brand_check_label_optically_centers():
 def test_window_chrome():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QLabel
+    from PySide6.QtWidgets import QApplication
 
     from bilingual_sub.gui.app import MainWindow
     from bilingual_sub.gui.styles import app_qss
@@ -216,10 +220,8 @@ def test_window_chrome():
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(app_qss())
     win = MainWindow()
-    assert win.windowTitle() == "深度云创科技"
-    labels = win.findChildren(QLabel)
-    assert any(lbl.text() == "SubFlow 语幕" for lbl in labels)
-    assert win.company_lbl.objectName() == "company"
+    assert win.windowTitle() == "SubFlow 语幕"
+    assert win.company_lbl.objectName() == "brandTitle"
     assert win.company_lbl.text() == "深度云创科技"
     assert win.burn_check.text() == "烧录到视频"
     from bilingual_sub.gui.widgets.brand_check import BrandCheck
@@ -264,12 +266,13 @@ def test_window_chrome():
     assert win.asr_backend_combo.currentData() == "whisper"
     assert not win.asr_backend_combo.isHidden()
     assert win.tts_combo.findData("azure") < 0
-    assert {win.tts_combo.itemData(i) for i in range(win.tts_combo.count())} == {"gptsovits"}
+    assert {win.tts_combo.itemData(i) for i in range(win.tts_combo.count())} == {"gptsovits", "qwen3", "qwen3-native"}
+    assert win.tts_combo.currentData() == 'qwen3-native'
     assert win.tts_combo.findData("openai") < 0
     assert not win.windowIcon().isNull()
     assert win.refine_check.isChecked() is False
     assert win.dub_check.isChecked() is False
-    assert win.more_box.isHidden()
+    assert not win.more_box.isHidden()
     assert win.theme_combo.currentData() in {"light", "dark"}
     assert win.lbl_source_file.text() == "上传视频"
     assert win.lbl_source_url.text() == "视频链接"
@@ -301,6 +304,9 @@ def test_window_chrome():
     win.setWindowState(Qt.WindowState.WindowNoState)
     win.resize(1440, 900)
     win.show()
+    app.processEvents()
+    app.processEvents()
+    win.form_scroll.ensureWidgetVisible(win.model_combo)
     app.processEvents()
     model_bottom = win.model_combo.mapTo(win, win.model_combo.rect().bottomLeft()).y()
     run_top = win.run_btn.mapTo(win, win.run_btn.rect().topLeft()).y()
@@ -471,153 +477,43 @@ def test_subtitle_style_does_not_change_target_lang():
     _ = app
 
 
-def test_empty_counter_download_gate_and_more_overlay():
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication, QWidget
+def test_download_gate_voice_and_settings_are_independent():
+    from PySide6.QtWidgets import QApplication
 
     from bilingual_sub.gui.app import MainWindow
-    from bilingual_sub.gui.styles import app_qss
-    from bilingual_sub.i18n import set_locale
-
-    set_locale("zh-Hans")
     app = QApplication.instance() or QApplication([])
-    app.setStyleSheet(app_qss())
     win = MainWindow()
-    assert win.pct_label.text() == "0%"
-    assert win.download_btn.isEnabled() is False
-    win.url_edit.setText("https://www.bilibili.com/video/BV1")
-    assert win.download_btn.isEnabled() is True
-    win.url_edit.clear()
-    assert win.download_btn.isEnabled() is False
-    from PySide6.QtCore import Qt
-
-    win.setWindowState(Qt.WindowState.WindowNoState)
-    win.resize(1200, 800)
+    win.resize(1280, 860)
     win.show()
     app.processEvents()
-    for label in (win.lbl_source, win.lbl_target, win.lbl_mode):
-        assert label.sizeHint().width() <= label.width()
-    compose = win.url_edit.parent()
-    assert abs(win.drop.height() - compose.height()) <= 2
-    assert win.drop.height() in range(126, 132)
-    assert abs(win.drop.width() - compose.width()) < 80
-    assert abs(win.url_edit.height() - win.download_btn.height()) <= 4
-    assert 40 <= win.url_edit.height() <= 52
-    assert 110 <= win.download_btn.width() <= 170
-    assert win.url_edit.width() > win.download_btn.width() + 80
-    assert win.download_btn.objectName() == "composeGo"
-    assert win.api_portal_btn.text() == "API 分发站"
-    assert win.clear_key_btn.text() == "清除令牌"
-    assert win.github_btn.objectName() == "githubBtn"
-    assert win.github_btn.width() >= 36
-    assert win.github_btn.height() >= 36
-    theme_c = win.theme_combo.mapTo(win, win.theme_combo.rect().center())
-    locale_c = win.locale_combo.mapTo(win, win.locale_combo.rect().center())
-    github_c = win.github_btn.mapTo(win, win.github_btn.rect().center())
-    assert theme_c.x() < locale_c.x() < github_c.x()
-    assert github_c.y() < 80
-    assert github_c.x() >= win.width() - 80
-    assert abs(github_c.y() - locale_c.y()) <= 8
-    assert win.company_lbl.text() == "深度云创科技"
-    company_c = win.company_lbl.mapTo(win, win.company_lbl.rect().center())
-    assert abs(company_c.x() - win.width() / 2) <= 8
-    assert company_c.y() >= win.height() - 80
-    assert company_c.y() > github_c.y() + 200
-    assert win.asr_help.isHidden()
-    assert win.tts_help.isHidden()
-    assert not hasattr(win, "video_name")
-    assert win.lbl_source_file.text() == "上传视频"
-    assert win.lbl_source_url.text() == "视频链接"
-    win.more_btn.setChecked(True)
+    assert win.pct_label.text() == "0%"
+    assert not win.download_btn.isEnabled()
+    win.url_edit.setText("https://www.bilibili.com/video/BV1")
+    assert win.download_btn.isEnabled()
+    win.url_edit.clear()
+    assert not win.download_btn.isEnabled()
+    assert win.voice_note.isVisible()
+    assert not win.dub_box.isVisible()
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
-    win.dub_check.setChecked(True)
     app.processEvents()
+    assert not win.more_box.isHidden()
+    assert win.dub_box.isVisible() and win.tts_preview_btn.isVisible()
+    assert not win.voice_note.isVisible()
     win.tts_combo.setCurrentIndex(win.tts_combo.findData("gptsovits"))
-    app.processEvents()
     assert win._slot_voice.isHidden()
-    assert win._slot_endpoint.isVisible()
-    assert win.sovits_box.isVisible()
-    assert win.tts_preview_btn.objectName() == "ttsPreviewBtn"
-    assert win.tts_preview_btn.text() == "试听"
-    assert win.tts_preview_btn.isVisible()
-    assert win.tts_ref_edit.objectName() == "ttsRefEdit"
-    assert win.tts_preview_btn.isEnabled()
-    win.dub_check.setChecked(False)
-    win.more_btn.setChecked(False)
+    assert win._slot_endpoint.isVisible() and win._slot_ref.isVisible()
     app.processEvents()
-    assert win.out_edit.isVisible()
-    assert win.browse_out_btn.isVisible()
-    assert win.out_edit.height() >= 32
-    assert abs(win.out_edit.height() - win.browse_out_btn.height()) <= 1
-    assert abs(
-        win.out_edit.mapTo(win, win.out_edit.rect().topLeft()).y()
-        - win.browse_out_btn.mapTo(win, win.browse_out_btn.rect().topLeft()).y()
-    ) <= 1
-    assert win.save_btn.objectName() == "brandGhost"
-    assert win.clear_key_btn.objectName() == "brandGhost"
-    assert win.api_portal_btn.objectName() == "brandGhost"
-    before_bar = win.run_btn.mapTo(win, win.run_btn.rect().topLeft()).y()
-    win.more_btn.setChecked(True)
+    win.form_scroll.ensureWidgetVisible(win.model_combo)
     app.processEvents()
-    after_bar = win.run_btn.mapTo(win, win.run_btn.rect().topLeft()).y()
-    more_bottom = win.more_box.mapTo(win, win.more_box.rect().bottomLeft()).y()
-    more_top = win.more_btn.mapTo(win, win.more_btn.rect().topLeft()).y()
-    key_bottom = win.key_edit.mapTo(win, win.key_edit.rect().bottomLeft()).y()
-    bar_bottom = win.run_btn.mapTo(win, win.run_btn.rect().bottomLeft()).y()
-    assert win.more_box.isVisible()
-    assert win.more_box.height() >= 36
-    assert win.color_check.isVisible()
-    assert win.dub_check.isVisible()
-    assert win.refine_check.isVisible()
-    assert win.color_box.isHidden()
-    assert win.color_check.mapTo(win, win.color_check.rect().topLeft()).x() < win.dub_check.mapTo(
-        win, win.dub_check.rect().topLeft()
-    ).x()
-    assert win.dub_check.mapTo(win, win.dub_check.rect().topLeft()).x() < win.refine_check.mapTo(
-        win, win.refine_check.rect().topLeft()
-    ).x()
-    assert not win.key_edit.visibleRegion().isEmpty()
     assert not win.model_combo.visibleRegion().isEmpty()
-    assert not win.source_lang_combo.visibleRegion().isEmpty()
-    assert key_bottom <= more_top + 2
-    assert win.out_edit.isVisible()
-    assert win.out_edit.height() >= 32
-    assert after_bar >= before_bar
-    deck = win.findChild(QWidget, "deck")
-    assert deck is not None
-    deck_bottom = deck.mapTo(win, deck.rect().bottomLeft()).y()
-    assert deck_bottom <= after_bar + 8
-    assert more_bottom <= deck_bottom + 8 or win.form_scroll.widget().isAncestorOf(win.more_box)
-    assert bar_bottom < win.height()
+    assert not win.run_btn.visibleRegion().isEmpty()
+    assert win.dub_box.isVisible()
+    win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("zh-Hant"))
+    assert not win.dub_check.isChecked()
+    assert win.voice_note.isVisible()
     win.color_check.setChecked(True)
-    app.processEvents()
     assert win.color_box.isVisible()
-    assert win.zh_color_btn.isVisible()
-    assert win.en_color_btn.isVisible()
-    assert not win.key_edit.visibleRegion().isEmpty()
-    assert not win.model_combo.visibleRegion().isEmpty()
-    win.dub_check.setChecked(True)
-    app.processEvents()
-    after_bar = win.run_btn.mapTo(win, win.run_btn.rect().topLeft()).y()
-    bar_bottom = win.run_btn.mapTo(win, win.run_btn.rect().bottomLeft()).y()
-    deck_bottom = deck.mapTo(win, deck.rect().bottomLeft()).y()
-    assert deck_bottom <= after_bar + 8
-    assert win.run_btn.isVisible()
-    assert not win.run_btn.visibleRegion().isEmpty()
-    assert bar_bottom < win.height()
-    assert win.out_edit.isVisible() and win.out_edit.height() >= 32
-    assert not win.key_edit.visibleRegion().isEmpty()
-    win.resize(1200, 760)
-    app.processEvents()
-    after_bar = win.run_btn.mapTo(win, win.run_btn.rect().topLeft()).y()
-    bar_bottom = win.run_btn.mapTo(win, win.run_btn.rect().bottomLeft()).y()
-    deck_bottom = deck.mapTo(win, deck.rect().bottomLeft()).y()
-    assert win.more_box.isVisible()
-    assert deck_bottom <= after_bar + 8
-    assert not win.run_btn.visibleRegion().isEmpty()
-    assert bar_bottom < win.height()
     win.close()
-    _ = app
 
 
 def test_same_video_new_path_copies_without_worker(tmp_path):
@@ -696,7 +592,7 @@ def test_single_zh_dub_does_not_require_token(tmp_path, monkeypatch):
             return None
 
     class FakePipe:
-        def __init__(self, cfg, control):
+        def __init__(self, cfg, control, **kwargs):
             started.append(cfg)
             self.progress = _Sig()
             self.finished_ok = _Sig()
@@ -749,7 +645,7 @@ def test_gui_auto_source_leaves_prompt_lang_blank_for_detection(tmp_path, monkey
             return None
 
     class FakePipe:
-        def __init__(self, cfg, control):
+        def __init__(self, cfg, control, **kwargs):
             started.append(cfg)
             self.progress = _Sig()
             self.finished_ok = _Sig()

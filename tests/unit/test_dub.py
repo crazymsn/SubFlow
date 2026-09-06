@@ -1,16 +1,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from bilingual_sub.core.dub import clamp_rate, dub_cues, mix_timeline
+from bilingual_sub.core.dub import dub_cues, mix_timeline
 from bilingual_sub.models import Cue
-
-
-def test_clamp_rate_bounds():
-    assert clamp_rate(1.0, 1.0) == 1.0
-    assert clamp_rate(2.0, 1.0) == 2.0
-    assert clamp_rate(0.5, 1.0) == 0.5
-    assert clamp_rate(4.0, 1.0) == 2.0
-    assert clamp_rate(0.1, 1.0) == 0.5
 
 
 def test_atempo_chain_covers_long_lines():

@@ -19,7 +19,9 @@ current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
 CMU_DICT_FAST_PATH = os.path.join(current_file_path, "cmudict-fast.rep")
 CMU_DICT_HOT_PATH = os.path.join(current_file_path, "engdict-hot.rep")
-CACHE_PATH = os.path.join(current_file_path, "engdict_cache.pickle")
+cache_dir = os.environ.get('SUBFLOW_GPTSOVITS_CACHE', current_file_path)
+os.makedirs(cache_dir, exist_ok=True)
+CACHE_PATH = os.path.join(cache_dir, "engdict_cache.pickle")
 NAMECACHE_PATH = os.path.join(current_file_path, "namedict_cache.pickle")
 
 

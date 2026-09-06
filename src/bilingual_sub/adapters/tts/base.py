@@ -39,6 +39,14 @@ def select_tts(
     name = (provider or "none").lower()
     if name in {"openai", "azure"}:
         name = "gptsovits"
+    if name == "qwen3":
+        from bilingual_sub.adapters.tts.qwen import QwenTts
+
+        return QwenTts(endpoint or None, ref_audio=ref_audio, prompt_text=prompt_text, prompt_lang=prompt_lang)
+    if name == 'qwen3-native':
+        from bilingual_sub.adapters.tts.qwen import QwenNativeTts
+
+        return QwenNativeTts(endpoint or None)
     if name == "gptsovits":
         from bilingual_sub.adapters.tts.gptsovits import GptSovitsTts
 

@@ -146,7 +146,7 @@ class JobConfig:
     source_url: str | None = None
     glossary_generate: bool = False
     enable_dub: bool = False
-    tts_provider: Literal["none", "openai", "azure", "gptsovits"] = "none"
+    tts_provider: Literal["none", "openai", "azure", "gptsovits", "qwen3", "qwen3-native"] = "none"
     tts_voice: str = ""
     tts_endpoint: str = ""
     tts_ref_audio: str = ""

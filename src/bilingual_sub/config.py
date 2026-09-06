@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +113,10 @@ def load_gptsovits_settings() -> dict[str, str]:
     data = _load_yaml(_user_config_path())
     block = _mapping(data.get("tts"))
     sovits = _mapping(block.get("gptsovits"))
+    # Older GUI tests could persist this fixed temporary fixture in a real profile.
+    # Ignore only that known missing/corrupt fixture, never a user's custom reference.
+    if obsolete_test_reference(str(sovits.get("ref_audio") or "")):
+        sovits = {**sovits, "ref_audio": "", "prompt_text": "", "prompt_lang": ""}
     endpoint = str(sovits.get("endpoint") or os.environ.get("SUBFLOW_GPTSOVITS_URL") or "").strip()
     return {
         "endpoint": endpoint,
@@ -119,6 +124,20 @@ def load_gptsovits_settings() -> dict[str, str]:
         "prompt_text": str(sovits.get("prompt_text") or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT") or ""),
         "prompt_lang": str(sovits.get("prompt_lang") or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT_LANG") or "").strip(),
     }
+
+
+def obsolete_test_reference(value: str) -> bool:
+    if not value.strip():
+        return False
+    try:
+        path = Path(value).expanduser()
+        if path.resolve() != (Path(tempfile.gettempdir()) / "subflow-sovits-ref.wav").resolve():
+            return False
+        if not path.exists():
+            return True
+        return path.is_file() and path.stat().st_size == 16 and path.read_bytes() == b"RIFF....WAVE...."
+    except OSError:
+        return False
 
 
 def save_gptsovits_settings(

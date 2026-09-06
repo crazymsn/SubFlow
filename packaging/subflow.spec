@@ -172,6 +172,10 @@ def _is_icu(dest: str) -> bool:
 
 
 a.binaries = [item for item in a.binaries if not _is_icu(item[0])]
+# Bootstrap scripts run in the bundled interpreters. Developer bytecode caches
+# are unnecessary data and may have been created by another Python version.
+a.datas = [item for item in a.datas if not str(item[0]).replace('\\', '/').startswith(
+    'bilingual_sub/_data/bootstrap/__pycache__/')]
 
 pyz = PYZ(a.pure)
 

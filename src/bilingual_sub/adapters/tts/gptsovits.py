@@ -72,6 +72,9 @@ def _error_detail(resp: httpx.Response) -> str:
         if isinstance(data, dict):
             msg = data.get("message")
             exc = data.get("Exception") or data.get("detail")
+            if str(msg or "").strip().lower() == "tts failed" and not exc:
+                kind = str(data.get("error_type") or "").strip()
+                return f"{kind + ': ' if kind else ''}配音服务未返回具体原因，请检查参考音频并查看 gptsovits.log"
             if exc and (not msg or str(msg) in {"tts failed", "set refer audio failed", "change gpt weight failed", "change sovits weight failed"}):
                 return f"{msg}: {exc}" if msg else str(exc)
             return str(msg or exc or text)
@@ -111,18 +114,24 @@ async def _post_audio(url: str, payload: dict, control: JobControl | None) -> ht
 
 class GptSovitsTts:
     name = "gptsovits"
+    display_name = "GPT-SoVITS"
+    language = staticmethod(to_sovits_lang)
+    supports_phrase_context = True
+    requires_reference = True
 
     def __init__(
         self,
         endpoint: str | None = None,
         *,
         ref_audio: str | Path | None = None,
-        prompt_text: str = "",
+        prompt_text: str | None = None,
         prompt_lang: str = "",
     ) -> None:
         self.endpoint = (endpoint or default_endpoint()).rstrip("/")
         self.ref_audio = str(ref_audio or os.environ.get("SUBFLOW_GPTSOVITS_REF") or "").strip()
-        self.prompt_text = str(prompt_text or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT") or "")
+        # An explicit empty transcript means reference-free text conditioning.
+        # Never replace it with an unrelated saved/environment prompt.
+        self.prompt_text = str(os.environ.get("SUBFLOW_GPTSOVITS_PROMPT", "") if prompt_text is None else prompt_text)
         self.prompt_lang = str(prompt_lang or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT_LANG") or "").strip()
 
     def available(self) -> bool:
@@ -130,9 +139,11 @@ class GptSovitsTts:
 
         return probe_endpoint(self.endpoint)
 
-    def _ref_path(self) -> Path:
+    def _ref_path(self) -> Path | None:
+        if not self.requires_reference:
+            return None
         if not self.ref_audio:
-            raise TtsUnavailable("请先选择 GPT-SoVITS 参考音频（3–10 秒清晰人声）")
+            raise TtsUnavailable(f"请先选择 {self.display_name} 参考音频（3–10 秒清晰人声）")
         path = Path(self.ref_audio).expanduser()
         if not path.is_file():
             raise TtsUnavailable(f"参考音频不存在：{path}")
@@ -142,25 +153,32 @@ class GptSovitsTts:
         if control:
             control.check()
         ref = self._ref_path()
-        validate_outputs({"配音": req.dest}, [ref])
+        validate_outputs({"配音": req.dest}, [ref] if ref else [])
         if not req.text.strip():
             raise TtsUnavailable("配音文本不能为空")
-        text_lang = to_sovits_lang(req.lang)
+        text_lang = self.language(req.lang)
         # Ref audio is source speech — never fall back to the dub target language.
-        prompt_lang = to_sovits_lang(self.prompt_lang) if self.prompt_lang else "auto"
+        prompt_lang = self.language(self.prompt_lang) if self.prompt_lang else "auto"
         url = f"{self.endpoint}/tts"
         payload = {
             "text": req.text,
             "text_lang": text_lang,
-            "ref_audio_path": str(ref),
+            "ref_audio_path": str(ref) if ref else "",
             "prompt_text": self.prompt_text,
             "prompt_lang": prompt_lang,
-            "text_split_method": "cut5",
+            "text_split_method": "cut0",
             "media_type": "wav",
             "streaming_mode": False,
             "batch_size": 1,
             "speed_factor": 1.0,
+            "seed": 42,
+            "temperature": 0.7,
+            "fragment_interval": 0.15,
         }
+        if not self.requires_reference:
+            from bilingual_sub.adapters.tts.qwen import native_speaker
+
+            payload['speaker'] = req.voice or native_speaker(req.lang)
         if req.model_revision:
             payload["model_revision"] = req.model_revision
         try:
@@ -173,9 +191,9 @@ class GptSovitsTts:
             finally:
                 _synthesis_lock.release()
         except httpx.ReadTimeout as exc:
-            raise TtsUnavailable("GPT-SoVITS 合成等待超时；CPU 推理较慢，可增加 SUBFLOW_GPTSOVITS_TIMEOUT 秒数后重试") from exc
+            raise TtsUnavailable(f"{self.display_name} 合成等待超时；请检查设备状态或增加 SUBFLOW_GPTSOVITS_TIMEOUT 秒数后重试") from exc
         except httpx.HTTPError as exc:
-            raise TtsUnavailable(f"请先启动 GPT-SoVITS 服务（{self.endpoint}）：{exc}") from exc
+            raise TtsUnavailable(f"请先启动 {self.display_name} 服务（{self.endpoint}）：{exc}") from exc
         body = resp.content or b""
         if req.model_revision and (resp.status_code == 409 or
                 (resp.is_success and resp.headers.get("X-SubFlow-Model-Revision") != req.model_revision)):
@@ -186,8 +204,8 @@ class GptSovitsTts:
         audio_ok = _is_audio(body)
         if resp.status_code >= 400 or not audio_ok:
             if body.lstrip().startswith(b"{") or "json" in ctype:
-                raise TtsUnavailable(f"GPT-SoVITS 失败：{_error_detail(resp)}")
-            raise TtsUnavailable(f"GPT-SoVITS 失败：{resp.status_code} {_error_detail(resp)}")
+                raise TtsUnavailable(f"{self.display_name} 失败：{_error_detail(resp)}")
+            raise TtsUnavailable(f"{self.display_name} 失败：{resp.status_code} {_error_detail(resp)}")
         req.dest.parent.mkdir(parents=True, exist_ok=True)
         if control:
             control.check()
@@ -211,18 +229,26 @@ def tts_job_fingerprint(
     name = (provider or "none").strip().lower() or "none"
     if name in {"", "none"}:
         return "none"
-    if name == "gptsovits":
-        endpoint = endpoint or default_endpoint()
-        ref_audio = ref_audio or os.environ.get("SUBFLOW_GPTSOVITS_REF", "")
-        prompt_text = prompt_text or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT", "")
-        prompt_lang = prompt_lang or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT_LANG", "")
+    if name in {"gptsovits", "qwen3", "qwen3-native"}:
+        if name.startswith("qwen3"):
+            from bilingual_sub.adapters.tts.routing import provider_endpoint
+
+            endpoint = endpoint or provider_endpoint(name)
+        else:
+            endpoint = endpoint or default_endpoint()
+        if name == 'qwen3-native':
+            ref_audio = prompt_text = prompt_lang = ''
+        else:
+            ref_audio = ref_audio or os.environ.get("SUBFLOW_GPTSOVITS_REF", "")
+            prompt_text = prompt_text or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT", "")
+            prompt_lang = prompt_lang or os.environ.get("SUBFLOW_GPTSOVITS_PROMPT_LANG", "")
     ref_digest = ""
     if ref_audio and Path(ref_audio).expanduser().is_file():
         with Path(ref_audio).expanduser().open("rb") as stream:
             ref_digest = hashlib.file_digest(stream, "sha256").hexdigest()
     return hashlib.sha256(json.dumps(
         [
-            "saturated-pcm-v5",
+              "standard-voice-prosody-v7",
             name,
             voice or "",
             (endpoint or "").rstrip("/"),

@@ -377,18 +377,20 @@ def effective_tts_provider(
     ):
         return "none"
     engine = (tts_provider or "").strip().lower()
-    if engine in {"", "none", "openai", "azure"}:
+    if engine in {'', 'none'}:
+        return 'qwen3-native'
+    if engine in {"openai", "azure"}:
         return "gptsovits"
     return engine
 
 
 def coerce_requested_tts(tts_provider: str, *, enable_dub: bool = False) -> str:
-    """Map leftover cloud names and an explicit --dub flag onto GPT-SoVITS."""
+    """Default new dubbing to standard voices; keep explicit legacy engines."""
     name = (tts_provider or "").strip().lower() or "none"
     if name in {"openai", "azure"}:
         name = "gptsovits"
     if enable_dub and name in {"", "none"}:
-        name = "gptsovits"
+        name = "qwen3-native"
     return name
 
 

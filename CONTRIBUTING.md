@@ -1,6 +1,6 @@
 # 贡献 SubFlow 语幕
 
-感谢帮助改进字幕、配音和跨平台体验。当前发布为 **1.3.46**；先阅读 [架构](docs/architecture.md) 和 [已知验收边界](docs/release-1.3.46.md)，问题反馈使用 [Issues](https://github.com/crazymsn/SubFlow/issues)。
+感谢帮助改进字幕、配音和跨平台体验。当前发布为 **1.3.60**；先阅读 [架构](docs/architecture.md) 和 [已知验收边界](docs/release-1.3.60.md)，问题反馈使用 [Issues](https://github.com/crazymsn/SubFlow/issues)。
 
 ## 开发环境
 
@@ -23,7 +23,7 @@ pytest 默认检查 `bilingual_sub.core` 覆盖率，门槛为 80%。不要通�
 - 语种规则：中文原片输出简体 / 繁体目标应保留原声；中英字幕仍需翻译英文行。
 - 路径与缓存：验证输入不会被覆盖，取消或异常不会提交不完整结果，并考虑多任务占用。
 - 外部进程：复用已有生命周期、取消和输出捕获机制，不能遗留测试启动的服务。
-- UI：检查窗口初始化、开始栏、更多选项和任务控制；需要真实交互时补充实机检查。
+- UI：检查窗口初始化、常驻的语音识别与翻译设置、配音和任务控制；需要真实交互时补充实机检查。
 - Apple GPU：区分 MPS 编译支持、实际计算、CPU 回退和完整视频验收。
 - GPT-SoVITS：按变更范围运行 `python scripts/check-sovits-audio.py`，需要实际模型时说明设备和权重准备情况。
 
@@ -41,11 +41,11 @@ API Key、Cookie、`.env` 和凭据文件不得出现在提交、测试样本、
 
 1. Windows x64、Mac arm64 / x64 分别运行测试、准备推理环境、构建并检查客户端。
 2. Linux amd64 / arm64 原生构建 Docker，检查 CLI、运行环境、音频及宿主机绑定目录读写。
-3. 所需检查通过后合并并发布 Docker 多架构标签；版本标签构建可发布客户端 ZIP。
+3. 所需检查通过后合并并发布 Docker 多架构标签；版本标签构建可发布客户端 `.7z.*` 分卷。
 
 Docker Hub 凭据通过 GitHub Actions Secrets 提供：`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。密钥不写入工作流或文档。
 
-社区 Windows 包使用 `scripts/build-windows.ps1 -SourceOnly`，Mac 使用 `scripts/build-macos.sh`。包内包含 FFmpeg、安装器和 GPT-SoVITS 适配源码；Torch、识别与配音依赖在独立环境运行，社区包首次安装模型。不要把机器上的整个推理环境混进 Qt 的 `_internal`。
+完整 Windows 包使用 `scripts/build-windows.ps1`，Mac 使用 `scripts/build-macos.sh`。完整包内置三种配音模式的模型，以及四套可迁移的识别/配音环境；所选识别模型按需下载。`-SourceOnly` 仅构建需要首次联网安装环境的 Windows 开发包。推理环境放在独立的 `offline` 目录，不混入 Qt 的 `_internal`。Mac 构建成功后按 [实机验收手册](docs/mac-self-test.md) 检查真实设备与完整视频流程。
 
 仅改文档且无需构建时，可在提交信息中使用 `[skip ci]` 避免重复客户端和镜像发布；先检查 Markdown 链接、示例参数、版本和事实。不要移动已发布的版本标签来覆盖相同版本的二进制内容。
 

@@ -26,10 +26,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=cache,target=/opt/subflow/runtime/download-cache \
     pip install --no-deps . \
     && python scripts/prepare-runtime.py asr \
-    && python scripts/prepare-runtime.py gptsovits --skip-models
+    && python scripts/prepare-runtime.py whisperx \
+    && python scripts/prepare-runtime.py gptsovits --skip-models \
+    && python scripts/prepare-runtime.py qwentts
 
 FROM base AS final
-ARG VERSION=1.3.46
+ARG VERSION=1.3.60
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="SubFlow" \
       org.opencontainers.image.source="https://github.com/crazymsn/SubFlow" \

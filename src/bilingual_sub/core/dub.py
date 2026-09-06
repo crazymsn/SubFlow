@@ -12,18 +12,14 @@ from bilingual_sub.adapters.tts.base import TtsProvider, TtsRequest
 from bilingual_sub.adapters.tts.model_identity import ModelSnapshot, retry_model_change
 from bilingual_sub.core.audio_cache import cache_digest, pcm_duration, produce_audio
 from bilingual_sub.core.control import JobControl
+from bilingual_sub.core.dub_progress import DubProgress, Progress
+from bilingual_sub.core.dub_timing import plan_speech
 from bilingual_sub.core.file_io import file_digest, staged_path
 from bilingual_sub.core.output_guard import validate_outputs
 from bilingual_sub.models import Cue
 
 logger = logging.getLogger(__name__)
-
-
-def clamp_rate(audio_sec: float, target_sec: float) -> float:
-    """Single-stage atempo factor (ffmpeg allows 0.5–2.0 per filter)."""
-    if target_sec <= 0:
-        return 1.0
-    return max(0.5, min(2.0, audio_sec / target_sec))
+MAX_TEMPO = 1.25
 
 
 def atempo_chain(rate: float) -> str:
@@ -53,8 +49,10 @@ def fit_clip(src: Path, dest: Path, target_sec: float, control: JobControl | Non
     if not math.isfinite(target_sec) or target_sec <= 0:
         raise ValueError("target audio duration must be positive and finite")
     audio_sec = _audio_duration(src, control=control)
-    target = max(0.4, target_sec)
-    rate = (audio_sec / target) if target > 0 else 1.0
+    target = target_sec
+    rate = max(1.0, audio_sec / target)
+    if rate > MAX_TEMPO + 1e-6:
+        logger.warning("Narration requires %.2fx tempo after pause allocation (preferred <= %.2fx)", rate, MAX_TEMPO)
     with staged_path(dest, suffix=".wav") as part:
         _fit_clip(src, part, target, rate, control)
         pcm_duration(part, control)
@@ -71,7 +69,7 @@ def _fit_clip(src, dest, target, rate, control):
             "-i",
             str(src),
             "-filter:a",
-            atempo_chain(rate),
+            atempo_chain(math.ceil(rate * 10000) / 10000),
             "-t",
             f"{target:.3f}",
             str(dest),
@@ -188,9 +186,21 @@ def dub_cues(
     voice: str,
     duration: float,
     control: JobControl | None = None,
+    on_progress: Progress = None,
 ) -> Path:
+    with DubProgress(on_progress) as progress:
+        return _dub_cues(cues, video=video, work=work, output=output, provider=provider,
+                         lang=lang, voice=voice, duration=duration, control=control, progress=progress)
+
+
+def _dub_cues(cues: list[Cue], *, video: Path, work: Path, output: Path, provider: TtsProvider,
+              lang: str, voice: str, duration: float, control: JobControl | None, progress: DubProgress) -> Path:
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("video duration must be positive and finite")
+    if getattr(provider, 'supports_phrase_context', False):
+        from bilingual_sub.core.speech import speech_phrases
+
+        cues = speech_phrases(cues, lang)
     reference = str(getattr(provider, "ref_audio", "") or "")
     validate_outputs({"配音视频": output}, [video, *([Path(reference).expanduser()] if reference else [])])
     tts_dir = work / "tts"
@@ -199,14 +209,17 @@ def dub_cues(
     model = ModelSnapshot(getattr(provider, "name", ""), getattr(provider, "endpoint", ""))
     clips: list[tuple[float, Path]] = []
     clip_keys: list[tuple[Path, str]] = []
+    synthesized = []
+    from bilingual_sub.core.langs import spoken_line
+
+    total = sum(bool(spoken_line(cue, lang)) for cue in cues)
     for i, cue in enumerate(cues):
         if control:
             control.wait_if_paused()
-        from bilingual_sub.core.langs import spoken_line
-
         text = spoken_line(cue, lang)
         if not text:
             continue
+        progress.set("synth", len(synthesized) + 1, total, 0.75 * len(synthesized) / max(1, total))
         if not all(math.isfinite(t) for t in (cue.start, cue.end)) or cue.start < 0 or cue.end <= cue.start:
             raise ValueError("dub cue must have finite, nonnegative start and positive duration")
         request_key = hashlib.sha256(
@@ -227,7 +240,6 @@ def dub_cues(
         ).hexdigest()
         digest = request_key[:16]
         raw = tts_dir / f"{i:04d}-{digest}.wav"
-        target = max(0.4, cue.end - cue.start)
         raw_digest = cache_digest(raw, request_key, control)
         if raw_digest is None:
             def synth_raw(pending):
@@ -238,7 +250,14 @@ def dub_cues(
                 if _provider_identity(provider, voice) != identity:
                     raise RuntimeError("合成期间参考音频或配音设置发生变化，请重试")
             raw_digest = produce_audio(raw, request_key, synth_raw, control)
-        fit_key = hashlib.sha256(json.dumps(["fit-v2", request_key, raw_digest, target]).encode()).hexdigest()
+        synthesized.append((i, cue, raw, request_key, raw_digest, _audio_duration(raw, control)))
+    plan = plan_speech([(cue.start, cue.end, seconds) for _, cue, _, _, _, seconds in synthesized], duration)
+    for (i, cue, raw, request_key, raw_digest, _seconds), (start, target) in zip(synthesized, plan):
+        if control:
+            control.wait_if_paused()
+        progress.set("align", len(clips) + 1, total, 0.75 + 0.15 * len(clips) / max(1, total))
+        fit_key = hashlib.sha256(json.dumps(["natural-fit-v4", request_key, raw_digest,
+                                            cue.start, cue.end, start, target]).encode()).hexdigest()
         fitted = tts_dir / f"{i:04d}-{fit_key[:16]}.fit.wav"
         if cache_digest(fitted, fit_key, control) is None:
             def produce_fit(pending):
@@ -246,8 +265,9 @@ def dub_cues(
                 if file_digest(raw, checkpoint=control.wait_if_paused if control else None) != raw_digest:
                     raise RuntimeError("拟合期间原始配音音频发生变化，请重试")
             produce_audio(fitted, fit_key, produce_fit, control)
-        clips.append((cue.start, fitted))
+        clips.append((start, fitted))
         clip_keys.append((fitted, fit_key))
+    progress.set("verify", len(clips), total, 0.9)
     for path, key in clip_keys:
         if cache_digest(path, key, control) is None:
             raise RuntimeError("混音前配音音频发生变化，请重试")
@@ -257,9 +277,11 @@ def dub_cues(
     model.check()
     validate_outputs({"配音视频": output}, [video, *(path for _, path in clips)])
     with staged_path(output, suffix=output.suffix or ".mp4") as pending:
+        progress.set("mix", len(clips), total, 0.95)
         mix_timeline(video, clips, pending, duration, control=control)
         model.check()
         pending.replace(output)
+    progress.set("complete", len(clips), total, 1.0)
     if model.enabled:
         setattr(provider, "cache_model_revision", model.revision)
     return output

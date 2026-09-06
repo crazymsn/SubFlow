@@ -122,7 +122,7 @@ import uvicorn
 from io import BytesIO
 from tools.i18n.i18n import I18nAuto
 from tools.subflow_concurrency import ModelStreamingResponse, SerializedModel
-from tools.subflow_validation import validate_request
+from tools.subflow_validation import accelerator_error, validate_request
 from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 from GPT_SoVITS.TTS_infer_pack.text_segmentation_method import get_method_names as get_cut_method_names
 from pydantic import BaseModel
@@ -152,9 +152,9 @@ print(tts_config)
 try:
     tts_pipeline = TTS(tts_config)
 except (RuntimeError, NotImplementedError):
-    if str(tts_config.device) != "mps":
+    if str(tts_config.device).split(":")[0] not in {"mps", "cuda"}:
         raise
-    print("Apple GPU model loading failed; starting CPU fallback.")
+    print(f"GPU ({tts_config.device}) model loading failed; starting CPU fallback.")
     tts_config.device = torch.device("cpu")
     tts_config.is_half = False
     tts_pipeline = TTS(tts_config)
@@ -383,6 +383,19 @@ def check_params(req: dict):
     return None
 
 
+def synthesis_error(exc):
+    # Some decoders raise exceptions with an empty str(), previously hiding the cause.
+    traceback.print_exception(type(exc), exc, exc.__traceback__)
+    detail = str(exc).strip()
+    if not detail and type(exc).__name__ == "NoBackendError":
+        detail = "Reference audio could not be decoded. Choose a valid 3–10 second audio file."
+    detail = detail or "No error message was provided; inspect the service log"
+    return JSONResponse(status_code=400, content={
+        "message": "tts failed", "Exception": f"{type(exc).__name__}: {detail}",
+        "error_type": type(exc).__name__,
+    })
+
+
 async def tts_handle(req: dict):
     """
     Text to speech handler.
@@ -480,7 +493,7 @@ async def tts_handle(req: dict):
         try:
             stream = await model_operations.open_stream(streaming_generator)
         except Exception as exc:
-            return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(exc)})
+            return synthesis_error(exc)
         return ModelStreamingResponse(
             stream,
             media_type=f"audio/{media_type}",
@@ -490,7 +503,10 @@ async def tts_handle(req: dict):
     def synthesize_response():
         tts_generator = tts_pipeline.run(req)
         try:
-            sr, audio_data = next(tts_generator)
+            try:
+                sr, audio_data = next(tts_generator)
+            except StopIteration as exc:
+                raise RuntimeError("Synthesis produced no audio; check reference audio and input text") from exc
             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
             return Response(audio_data, media_type=f"audio/{media_type}",
                             headers={"X-SubFlow-Model-Revision": tts_pipeline.model_revision})
@@ -508,16 +524,16 @@ async def tts_handle(req: dict):
             return synthesize_response()
         except Exception as e:
             # Reference preprocessing can fail before TTS.run's synthesis guard.
-            # Recover those MPS errors too, but never restart a partly streamed reply.
-            if (not streaming_mode and str(tts_pipeline.configs.device) == "mps"
-                    and isinstance(e, (RuntimeError, NotImplementedError))):
-                print(f"Apple GPU preprocessing failed ({e}); retrying once on CPU.")
+            # Recover GPU errors too, but never restart a partly streamed reply.
+            if (not streaming_mode and str(tts_pipeline.configs.device).split(":")[0] in {"mps", "cuda"}
+                    and accelerator_error(e)):
+                print(f"GPU preprocessing failed ({e}); retrying once on CPU.")
                 try:
                     tts_pipeline.reset_models(device="cpu", is_half=False)
                     return synthesize_response()
                 except Exception as retry_error:
-                    return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(retry_error)})
-            return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
+                    return synthesis_error(retry_error)
+            return synthesis_error(e)
 
     return await model_operations.call(synthesize_with_recovery)
 

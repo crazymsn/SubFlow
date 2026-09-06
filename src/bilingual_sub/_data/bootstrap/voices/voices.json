@@ -1,0 +1,162 @@
+{
+  "schema": 1,
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+  "description": "Synthetic voices designed for SubFlow; not official named Qwen speaker presets.",
+  "voices": [
+    {
+      "id": "SubFlow_zh_female",
+      "gender": "female",
+      "language": "zh",
+      "text": "您好，欢迎来到这里。请告诉我您的想法，我们一起寻找合适的方法。",
+      "file": "SubFlow_zh_female.wav",
+      "sha256": "2534a2949e6b13fe67d353115d259d12292c860a66cf80e8872ab18ed231c887",
+      "seconds": 6.08,
+      "seed": 1000,
+      "instruction": "A native standard Mandarin Chinese speaker, adult female voice. Clear warm mid-high register, smooth resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_zh_male",
+      "gender": "male",
+      "language": "zh",
+      "text": "您好，欢迎来到这里。请告诉我您的想法，我们一起寻找合适的方法。",
+      "file": "SubFlow_zh_male.wav",
+      "sha256": "a7f6aadf6cf06be97ee286d7d34b16f53eb7a9712e60b8ebe8ea426e4263a0c0",
+      "seconds": 5.68,
+      "seed": 1001,
+      "instruction": "A native standard Mandarin Chinese speaker, adult male voice. Warm medium-low register, calm resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_en_female",
+      "gender": "female",
+      "language": "en",
+      "text": "Hello, welcome. Please tell me what you have in mind, and we can find a helpful way forward together.",
+      "file": "SubFlow_en_female.wav",
+      "sha256": "c16bff16f6cece64fb668c593df2b5a11e0ccbb4b17416873cb6eadcdb1342b4",
+      "seconds": 6.08,
+      "seed": 1002,
+      "instruction": "A native General American English speaker, adult female voice. Clear warm mid-high register, smooth resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_en_male",
+      "gender": "male",
+      "language": "en",
+      "text": "Hello, welcome. Please tell me what you have in mind, and we can find a helpful way forward together.",
+      "file": "SubFlow_en_male.wav",
+      "sha256": "1f9af9fcdac0585b255c5e2c4ffbfa3e137aa4619677095b8407954ef92a8704",
+      "seconds": 5.36,
+      "seed": 1003,
+      "instruction": "A native General American English speaker, adult male voice. Warm medium-low register, calm resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_ja_female",
+      "gender": "female",
+      "language": "ja",
+      "text": "こんにちは。今日はどのようなご用件でしょうか。ゆっくりお話しいただければ、一緒に考えます。",
+      "file": "SubFlow_ja_female.wav",
+      "sha256": "d809543b557f5add45697dca254ed834f4b870c87049500d8c1affed8ab4634c",
+      "seconds": 7.76,
+      "seed": 1004,
+      "instruction": "A native standard Tokyo Japanese speaker, adult female voice. Clear warm mid-high register, smooth resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_ja_male",
+      "gender": "male",
+      "language": "ja",
+      "text": "こんにちは。今日はどのようなご用件でしょうか。ゆっくりお話しいただければ、一緒に考えます。",
+      "file": "SubFlow_ja_male.wav",
+      "sha256": "4bb92e146d8438985b6b9db60bdb1e809e1434fc979d0742efaaa163e8c1bcc6",
+      "seconds": 6.32,
+      "seed": 1005,
+      "instruction": "A native standard Tokyo Japanese speaker, adult male voice. Warm medium-low register, calm resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_es_female",
+      "gender": "female",
+      "language": "es",
+      "text": "Hola, bienvenido. Cuénteme lo que necesita y encontraremos juntos una buena manera de ayudarle.",
+      "file": "SubFlow_es_female.wav",
+      "sha256": "78b90f777609ec1a4b479f918c5722598ea2a007ee31b3bb5b2dabf2120e20f1",
+      "seconds": 6.56,
+      "seed": 1006,
+      "instruction": "A native neutral European Spanish speaker, adult female voice. Clear warm mid-high register, smooth resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_es_male",
+      "gender": "male",
+      "language": "es",
+      "text": "Hola, bienvenido. Cuénteme lo que necesita y encontraremos juntos una buena manera de ayudarle.",
+      "file": "SubFlow_es_male.wav",
+      "sha256": "afb2d1afd2af477d4fddf84c1900311128e75a1f9acfddd12ce1c13dd4a86c71",
+      "seconds": 5.92,
+      "seed": 1007,
+      "instruction": "A native neutral European Spanish speaker, adult male voice. Warm medium-low register, calm resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_fr_female",
+      "gender": "female",
+      "language": "fr",
+      "text": "Bonjour et bienvenue. Dites-moi ce dont vous avez besoin, et nous trouverons ensemble une solution adaptée.",
+      "file": "SubFlow_fr_female.wav",
+      "sha256": "434cf85f421868813c0df8302ea39adcb9ad5005d99bbade8b54491f1c5bfcfa",
+      "seconds": 5.84,
+      "seed": 1008,
+      "instruction": "A native standard metropolitan French speaker, adult female voice. Clear warm mid-high register, smooth resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_fr_male",
+      "gender": "male",
+      "language": "fr",
+      "text": "Bonjour et bienvenue. Dites-moi ce dont vous avez besoin, et nous trouverons ensemble une solution adaptée.",
+      "file": "SubFlow_fr_male.wav",
+      "sha256": "07e38e0816b2476982b5d387e1ebbd155eae38a664c627bfb1b52408073d1bd7",
+      "seconds": 8.08,
+      "seed": 1009,
+      "instruction": "A native standard metropolitan French speaker, adult male voice. Warm medium-low register, calm resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_de_female",
+      "gender": "female",
+      "language": "de",
+      "text": "Guten Tag und herzlich willkommen. Erzählen Sie mir, was Sie brauchen, und wir finden gemeinsam eine passende Lösung.",
+      "file": "SubFlow_de_female.wav",
+      "sha256": "e5da4f77086a0e4fe3b2b00796540182d5104acf40901bba86b77c1e5ca6466b",
+      "seconds": 7.12,
+      "seed": 1010,
+      "instruction": "A native standard German Hochdeutsch speaker, adult female voice. Clear warm mid-high register, smooth resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_de_male",
+      "gender": "male",
+      "language": "de",
+      "text": "Guten Tag und herzlich willkommen. Erzählen Sie mir, was Sie brauchen, und wir finden gemeinsam eine passende Lösung.",
+      "file": "SubFlow_de_male.wav",
+      "sha256": "5d1ade4d623e50a24ee1be354849697a68c1de6f41f70c99fa92968cf0ab6e8e",
+      "seconds": 7.28,
+      "seed": 1011,
+      "instruction": "A native standard German Hochdeutsch speaker, adult male voice. Warm medium-low register, calm resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_ru_female",
+      "gender": "female",
+      "language": "ru",
+      "text": "Здравствуйте, добро пожаловать. Расскажите, что вам нужно, и мы вместе найдём подходящее решение.",
+      "file": "SubFlow_ru_female.wav",
+      "sha256": "fda4a950bf4337817c9fde27d5e8592844ec887e41f37436aed6875b0e2a4521",
+      "seconds": 6.32,
+      "seed": 1012,
+      "instruction": "A native standard Russian speaker, adult female voice. Clear warm mid-high register, smooth resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    },
+    {
+      "id": "SubFlow_ru_male",
+      "gender": "male",
+      "language": "ru",
+      "text": "Здравствуйте, добро пожаловать. Расскажите, что вам нужно, и мы вместе найдём подходящее решение.",
+      "file": "SubFlow_ru_male.wav",
+      "sha256": "7f4f93bce5288c55805dff763664377d1ea7664aec73b5b8f76417bd142d67f5",
+      "seconds": 6.88,
+      "seed": 1013,
+      "instruction": "A native standard Russian speaker, adult male voice. Warm medium-low register, calm resonant tone. Natural conversational delivery with native pronunciation and sentence intonation, moderate speaking pace, clear articulation. A friendly professional narrator. Clean dry studio speech, no music, no exaggerated emotion."
+    }
+  ]
+}

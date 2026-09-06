@@ -43,3 +43,10 @@ def validate_request(request):
 def require_speech_segments(segments):
     if not segments:
         raise NoSpeechError("Text preprocessing produced no speakable segments")
+
+def accelerator_error(error):
+    """Only accelerator failures justify reloading models onto CPU."""
+    return isinstance(error, (RuntimeError, NotImplementedError)) and any(
+        token in str(error).lower()
+        for token in ('cuda', 'cublas', 'cudnn', 'mps', 'metal', 'gpu', 'out of memory', 'not implemented')
+    )

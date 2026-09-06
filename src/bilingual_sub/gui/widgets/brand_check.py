@@ -108,7 +108,7 @@ class BrandCheck(QCheckBox):
         self._theme = "light"
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(ROW)
         self.setFont(_typeface())
@@ -203,7 +203,7 @@ class BrandCheck(QCheckBox):
             fill = tones.filamentPressed if pressed else tones.filamentHover if hover else tones.filament
             stroke = fill
             mark = tones.filamentInk
-        elif hover:
+        elif hover or self.hasFocus():
             fill = tones.filamentWash
             stroke = tones.filament
             mark = tones.filamentInk

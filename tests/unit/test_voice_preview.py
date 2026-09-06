@@ -1,16 +1,15 @@
-from pathlib import Path
-
 import pytest
 
 from bilingual_sub.core.voice_preview import preview_cache_path, preview_sample, synth_voice_preview
 
 
 def test_preview_sample_follows_target_language():
-    assert preview_sample("zh") == "你好，这是配音音色试听。"
-    assert preview_sample("zh-Hans") == "你好，这是配音音色试听。"
-    assert preview_sample("zh-Hant") == "你好，這是配音音色試聽。"
+    assert preview_sample("zh") == "您好，请问有什么能帮您？"
+    assert preview_sample("zh-Hans") == "您好，请问有什么能帮您？"
+    assert preview_sample("zh-Hant") == "您好，請問有什麼能幫您？"
     assert preview_sample("en").startswith("Hello")
-    assert "試聴" in preview_sample("ja")
+    assert "お手伝い" in preview_sample("ja")
+    assert preview_sample("ZH_tw") == preview_sample("zh-Hant")
     assert preview_sample("unknown-xx").startswith("Hello")
 
 
@@ -89,7 +88,7 @@ def test_preview_request_uses_target_not_subtitle_style():
     win.mode_combo.setCurrentIndex(win.mode_combo.findData("single:en"))
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("zh"))
     req = win._preview_request()
-    assert req.provider == "gptsovits"
+    assert req.provider == "qwen3-native"
     assert req.voice == ""
     assert req.lang == "zh"
     assert req.prompt_lang == "zh"
@@ -106,7 +105,7 @@ def test_preview_request_uses_target_not_subtitle_style():
     _ = app
 
 
-@pytest.mark.parametrize("field", ["endpoint", "ref_audio", "prompt_text", "prompt_lang", "video"])
+@pytest.mark.parametrize("field", ["endpoint", "ref_audio", "prompt_text", "prompt_lang", "sample_text", "video"])
 def test_ready_preview_from_stale_settings_is_not_played(tmp_path, monkeypatch, field):
     from PySide6.QtWidgets import QApplication
 
@@ -116,7 +115,7 @@ def test_ready_preview_from_stale_settings_is_not_played(tmp_path, monkeypatch, 
     win = MainWindow()
     req = win._preview_request()
     args = {key: getattr(req, key) for key in
-            ("provider", "voice", "lang", "endpoint", "ref_audio", "prompt_text", "prompt_lang")}
+            ("provider", "voice", "lang", "endpoint", "ref_audio", "prompt_text", "prompt_lang", "sample_text")}
     if field == "video":
         win.tts_ref_edit.clear()
         args["ref_audio"] = ""
@@ -195,8 +194,8 @@ def test_preview_without_ref_asks_for_clip(monkeypatch):
     app.setStyleSheet(app_qss())
     win = MainWindow()
     win.tts_ref_edit.clear()
+    win.tts_combo.setCurrentIndex(win.tts_combo.findData('qwen3'))
     win._video = None
-    win.more_btn.setChecked(True)
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
     win.dub_check.setChecked(True)
     app.processEvents()
@@ -231,7 +230,7 @@ def test_preview_fail_keeps_token_error_separate():
     _ = app
 
 
-def test_preview_click_starts_worker_with_current_voice(monkeypatch):
+def test_preview_click_starts_worker_with_current_voice(monkeypatch, tmp_path, pcm_wav):
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -251,7 +250,7 @@ def test_preview_click_starts_worker_with_current_voice(monkeypatch):
     started: list = []
 
     class FakeWorker:
-        def __init__(self, provider, voice, lang, endpoint="", ref_audio="", prompt_text="", prompt_lang=""):
+        def __init__(self, provider, voice, lang, endpoint="", ref_audio="", prompt_text="", prompt_lang="", sample_text=""):
             self.provider = provider
             self.voice = voice
             self.lang = lang
@@ -259,8 +258,10 @@ def test_preview_click_starts_worker_with_current_voice(monkeypatch):
             self.ref_audio = ref_audio
             self.prompt_text = prompt_text
             self.prompt_lang = prompt_lang
+            self.sample_text = sample_text
             self.ok = _FakeSignal()
             self.fail = _FakeSignal()
+            self.progress = _FakeSignal()
 
         def start(self):
             started.append((self.provider, self.voice, self.lang, self.endpoint))
@@ -279,19 +280,17 @@ def test_preview_click_starts_worker_with_current_voice(monkeypatch):
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(app_qss())
     win = MainWindow()
-    win.more_btn.setChecked(True)
     win.dub_check.setChecked(True)
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("en"))
-    ref = Path(win.tts_ref_edit.placeholderText() or "ref.wav")
-    clip = Path(os.environ.get("TEMP", ".")) / "subflow-sovits-ref.wav"
-    clip.write_bytes(b"RIFF....WAVE....")
+    clip = tmp_path / "reference.wav"
+    clip.write_bytes(pcm_wav(4))
     win.tts_ref_edit.setText(str(clip))
     app.processEvents()
     win.tts_preview_btn.click()
     app.processEvents()
-    assert started[0][0] == "gptsovits"
+    assert started[0][0] == "qwen3-native"
     assert started[0][1] == ""
     assert started[0][2] == "en"
-    _ = ref
+    assert started[0][3].endswith(':19882')
     win.close()
     _ = app

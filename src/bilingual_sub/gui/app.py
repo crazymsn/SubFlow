@@ -8,14 +8,19 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QBoxLayout,
     QFileDialog,
+    QFrame,
     QLabel,
+    QLayout,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -58,6 +63,7 @@ from bilingual_sub.gui.assets import (
     load_github_mark,
 )
 from bilingual_sub.gui.audio_player import PreviewPlayer
+from bilingual_sub.gui.error_dialog import show_error
 from bilingual_sub.gui.model_choice import merge_model_list, preferred_model
 from bilingual_sub.gui.output_path import (
     copy_finished_outputs,
@@ -71,12 +77,13 @@ from bilingual_sub.gui.progress import format_pct, should_log_stage, stage_text
 from bilingual_sub.gui.styles import app_qss
 from bilingual_sub.gui.theme import tokens_for, type_font
 from bilingual_sub.gui.widgets.action_bar import build_action_bar
-from bilingual_sub.gui.widgets.deck import apply_deck_width, build_deck, fill_voice_combo
-from bilingual_sub.gui.widgets.field import SCROLL_FLOOR, hairline
+from bilingual_sub.gui.widgets.deck import build_deck
+from bilingual_sub.gui.widgets.field import WorkspaceScroll, hairline
 from bilingual_sub.gui.widgets.header import build_header
 from bilingual_sub.gui.widgets.source_strip import build_source
 from bilingual_sub.gui.widgets.stage import build_stage
 from bilingual_sub.gui.workers import (
+    DeviceProbeWorker,
     DownloadWorker,
     ModelsWorker,
     PipelineWorker,
@@ -104,7 +111,6 @@ if TYPE_CHECKING:
     from bilingual_sub.gui.widgets.brand_check import BrandCheck
     from bilingual_sub.gui.widgets.color_chip import ColorChip
     from bilingual_sub.gui.widgets.drop_card import DropCard
-    from bilingual_sub.gui.widgets.field import FitScroll
     from bilingual_sub.gui.widgets.filament_btn import FilamentButton
 
 
@@ -116,6 +122,7 @@ class PreviewRequest(NamedTuple):
     ref_audio: str = ""
     prompt_text: str = ""
     prompt_lang: str = ""
+    sample_text: str = ""
 
 
 class MainWindow(QMainWindow):
@@ -162,6 +169,8 @@ class MainWindow(QMainWindow):
     tts_endpoint_edit: QLineEdit
     tts_ref_edit: QLineEdit
     tts_prompt_edit: QLineEdit
+    tts_sample_edit: QLineEdit
+    lbl_sample: QLabel
     pause_btn: QPushButton
     resume_btn: QPushButton
     stop_btn: QPushButton
@@ -175,7 +184,6 @@ class MainWindow(QMainWindow):
     tts_ref_btn: QPushButton
     tts_sovits_probe_btn: QPushButton
     tts_sovits_start_btn: QPushButton
-    more_btn: QToolButton
     github_btn: QToolButton
     burn_check: BrandCheck
     color_check: BrandCheck
@@ -186,7 +194,6 @@ class MainWindow(QMainWindow):
     _slot_mode: QWidget
     _slot_asr: QWidget
     _slot_model: QWidget
-    _slot_burn: QWidget
     color_box: QWidget
     dub_box: QWidget
     _slot_tts: QWidget
@@ -204,18 +211,22 @@ class MainWindow(QMainWindow):
     progress: QProgressBar
     log: QPlainTextEdit
     drop: DropCard
-    form_scroll: FitScroll
+    form_scroll: QScrollArea
     more_box: QFrame
     deck_grid: QGridLayout
-    _deck_slots: list[QWidget]
-    _deck_wide: bool
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(WINDOW_TITLE)
         self.resize(1280, 860)
-        self.setMinimumSize(1200, 760)
+        self.setMinimumSize(960, 640)
         self._worker: PipelineWorker | None = None
+        self._resume_config: JobConfig | None = None
+        self._retry_translation = False
+        self._gpu_key = "gpu_checking"
+        self._gpu_name = ""
+        self._task_started = False
+        self._device_worker = DeviceProbeWorker(self)
         self._models_worker: ModelsWorker | None = None
         self._preview_worker: VoicePreviewWorker | None = None
         self._sovits_worker: SovitsBootWorker | None = None
@@ -232,6 +243,9 @@ class MainWindow(QMainWindow):
         self._running_signature: tuple | None = None
         self._last_log_stage: str | None = None
         self._bar_floor = 0
+        self._stage_key = "waiting"
+        self._stage_values: dict[str, object] = {}
+        self._progress_stage = ""
         self._video: Path | None = None
         self._control: JobControl | None = None
         self._section_labels: dict[str, QLabel] = {}
@@ -242,25 +256,80 @@ class MainWindow(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(24, 16, 24, 16)
-        outer.setSpacing(8)
+        outer.setContentsMargins(20, 16, 20, 16)
+        outer.setSpacing(14)
         outer.addLayout(build_header(self))
         outer.addWidget(hairline("headerRule"))
-        outer.addWidget(build_source(self))
-        outer.addWidget(build_deck(self))
+        self.workspace_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.workspace_layout.setSpacing(14)
+        self.form_scroll = WorkspaceScroll()
+        self.form_scroll.setObjectName("formScroll")
+        self.form_scroll.setWidgetResizable(True)
+        self.form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.form_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.form_scroll.viewport().setObjectName("formViewport")
+        workspace = QWidget()
+        workspace.setObjectName("workspace")
+        flow = QVBoxLayout(workspace)
+        flow.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        flow.setContentsMargins(0, 0, 8, 0)
+        flow.setSpacing(12)
+        flow.addWidget(build_source(self))
+        flow.addWidget(build_deck(self))
+        flow.addWidget(self.voice_card)
+        flow.addWidget(self.settings_card)
+        flow.addStretch(1)
+        self.form_scroll.setWidget(workspace)
+        self.workspace_layout.addWidget(self.form_scroll, 3)
+        self.task_panel = build_stage(self)
+        self.workspace_layout.addWidget(self.task_panel, 1)
+        outer.addLayout(self.workspace_layout, 1)
         outer.addWidget(build_action_bar(self))
-        outer.addWidget(hairline("stageRule", 2))
-        outer.addWidget(build_stage(self), 1)
 
         icon = load_app_icon(self)
         if not icon.isNull():
             self.setWindowIcon(icon)
         self.source_lang_combo.currentIndexChanged.connect(self._sync_dub_default)
         self.target_lang_combo.currentIndexChanged.connect(self._sync_dub_default)
+        self.target_lang_combo.currentIndexChanged.connect(self._sync_preview_text)
         self.mode_combo.currentIndexChanged.connect(self._sync_output_name)
         self._apply_theme(persist=False)
         self._hydrate()
+        self._sync_preview_text()
         self.retranslateUi()
+        self._device_worker.result.connect(self._on_device_detected)
+        self._device_worker.start()
+        self._relayout_deck()
+        from bilingual_sub.gui.widgets.field import protect_combo_scroll
+        protect_combo_scroll(self)
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._keep_focus_visible)
+
+    def _keep_focus_visible(self, old, current) -> None:
+        if current is not None and self.form_scroll.widget().isAncestorOf(current):
+            self.form_scroll.ensureWidgetVisible(current)
+
+    def _show_stage(self, key: str, **values: object) -> None:
+        if key != "waiting":
+            self._show_task_activity()
+        self._stage_key, self._stage_values, self._progress_stage = key, values, ""
+        self.stage_label.setText(tr(key).format(**values))
+
+    def _show_task_activity(self) -> None:
+        self._task_started = True
+        self.gpu_status.hide()
+        self.log.setPlaceholderText(tr("log_ph"))
+        self.task_activity.show()
+
+    def _on_device_detected(self, key: str, name: str = "") -> None:
+        from bilingual_sub.gui.hardware import short_device_name
+
+        self._gpu_key = key
+        self._gpu_name = name
+        detail = short_device_name(name) or (tr("gpu_model_unknown") if key in {"gpu_apple", "gpu_cuda"} else "")
+        self.gpu_status.setText(tr(key) + ("\n" + detail if detail else ""))
 
     def _field_label(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -269,64 +338,31 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        apply_deck_width(self, self.width() >= 1200)
         self._relayout_deck()
 
-    def _chrome_except_deck(self, layout, deck: QWidget, *, stage_floor: int) -> int:
-        margins = layout.contentsMargins()
-        used = margins.top() + margins.bottom()
-        for index in range(layout.count()):
-            item = layout.itemAt(index)
-            widget = item.widget() if item is not None else None
-            if widget is deck:
-                used += layout.spacing()
-                continue
-            used += self._chrome_item_height(item, widget, stage_floor=stage_floor) + layout.spacing()
-        return used
-
-    def _chrome_item_height(self, item, widget: QWidget | None, *, stage_floor: int) -> int:
-        if widget is None:
-            return max(item.sizeHint().height(), 0)
-        if widget.objectName() == "stage":
-            return stage_floor
-        if 0 < widget.maximumHeight() <= 4:
-            return max(widget.minimumHeight(), widget.height(), 1)
-        hint = widget.sizeHint().height()
-        if hint < 0:
-            return max(widget.height(), widget.minimumHeight(), 0)
-        return max(hint, 0)
-
     def _relayout_deck(self) -> None:
-        scroll = getattr(self, "form_scroll", None)
-        if scroll is not None:
-            scroll.set_floor(SCROLL_FLOOR)
-            scroll.updateGeometry()
-        deck = self.findChild(QWidget, "deck")
-        stage = self.findChild(QWidget, "stage")
-        root = self.centralWidget()
-        layout = root.layout() if root is not None else None
-        if deck is None or root is None or layout is None:
+        if not hasattr(self, "task_panel"):
             return
-        if stage is not None:
-            stage.setMinimumHeight(96)
-        chrome = self._chrome_except_deck(layout, deck, stage_floor=96)
-        room = max(SCROLL_FLOOR, root.height() - chrome)
-        deck.setMinimumHeight(SCROLL_FLOOR)
-        deck.setMaximumHeight(room)
-        deck.updateGeometry()
-        layout.invalidate()
-        layout.activate()
-        bar = getattr(self, "run_btn", None)
-        if bar is None:
-            return
-        gap = bar.mapTo(root, bar.rect().topLeft()).y() - deck.mapTo(root, deck.rect().bottomLeft()).y()
-        if gap < 4:
-            deck.setMaximumHeight(max(SCROLL_FLOOR, deck.height() + gap - 4))
-            layout.activate()
+        wide = self.width() >= 1180
+        direction = QBoxLayout.Direction.LeftToRight if wide else QBoxLayout.Direction.TopToBottom
+        if self.workspace_layout.direction() != direction:
+            self.workspace_layout.setDirection(direction)
+        self.task_panel.setMinimumWidth(300 if wide else 0)
+        self.task_panel.setMaximumWidth(380 if wide else 16777215)
+        self.task_panel.setMinimumHeight(0 if wide else 228)
+        self.task_panel.setMaximumHeight(16777215 if wide else 228)
+        self.form_scroll.widget().updateGeometry()
 
     def _set_key_status(self, text: str) -> None:
         self.key_status.setText(text)
         self.key_status.setVisible(bool(text))
+
+    def _reveal_settings(self, field: QWidget) -> None:
+        # Scroll the always-visible settings card into view before focusing.
+        def reveal() -> None:
+            self.form_scroll.ensureWidgetVisible(field, 16, 24)
+            field.setFocus(Qt.FocusReason.OtherFocusReason)
+        QTimer.singleShot(0, reveal)
 
     def _hydrate(self) -> None:
         if get_api_key():
@@ -415,16 +451,15 @@ class MainWindow(QMainWindow):
             source_lang = str(self.source_lang_combo.currentData() or "zh")
             target_lang = str(self.target_lang_combo.currentData() or "zh")
             self.dub_check.setChecked(wants_spoken_target(source_lang, target_lang))
-
-    def _toggle_more(self, checked: bool) -> None:
-        self.more_box.setVisible(checked)
-        self.more_btn.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
-        self._relayout_deck()
+        # Changing between two dubbed languages need not toggle the checkbox.
+        # Refresh engine name and endpoint visibility even when it stays checked.
+        self._sync_tts_fields()
 
     def _refresh_drop(self) -> None:
         tones = tokens_for(self._theme)
         if self._video:
             self.drop.set_prompt(self._video.name, title_color=tones.ink, hint_color=tones.muted)
+            self.drop.setToolTip(str(self._video))
         else:
             self.drop.set_prompt(tr("drop"), title_color=tones.ink, hint_color=tones.muted)
 
@@ -456,7 +491,7 @@ class MainWindow(QMainWindow):
             return
         dest = download_folder(url)
         self.download_btn.setEnabled(False)
-        self.stage_label.setText(tr("ingest"))
+        self._show_stage("ingest")
         self.progress.setValue(0)
         self.pct_label.setText(format_pct(0))
         self._bar_floor = 0
@@ -486,7 +521,7 @@ class MainWindow(QMainWindow):
         self._set_video(Path(path))
         self.progress.setValue(100)
         self.pct_label.setText(format_pct(100))
-        self.stage_label.setText(tr("ingest"))
+        self._show_stage("ingest")
         self._log_line(f"{tr('ingest')}  {path}")
 
     def _on_download_fail(self, msg: str) -> None:
@@ -497,7 +532,7 @@ class MainWindow(QMainWindow):
         self.pct_label.setText(format_pct(0))
         self._bar_floor = 0
         stopped = bool(self._control and self._control.is_stopped()) or msg in {tr("stop"), "job stopped"}
-        self.stage_label.setText(tr("stop") if stopped else tr("waiting"))
+        self._show_stage("stop" if stopped else "waiting")
         if not stopped and not self._closing:
             QMessageBox.warning(self, PRODUCT_ZH, redact_api_key(msg, get_api_key()))
 
@@ -603,8 +638,8 @@ class MainWindow(QMainWindow):
         self.open_btn.setEnabled(True)
         self.out_edit.setText(str(dest_mp4))
         if log and self._last_result is not None:
+            self._show_stage("done_stage", n=self._last_result.cue_count)
             self._log_line(tr("reused_log").format(n=self._last_result.cue_count))
-            self.stage_label.setText(tr("done_stage").format(n=self._last_result.cue_count))
             self.progress.setValue(100)
             self.pct_label.setText(format_pct(100))
             self._set_stage_failed(False)
@@ -699,10 +734,13 @@ class MainWindow(QMainWindow):
         self.retranslateUi()
 
     def retranslateUi(self) -> None:
+        self._on_device_detected(self._gpu_key, self._gpu_name)
         self.locale_combo.setAccessibleName(tr("ui_lang"))
         self.theme_combo.setItemText(0, tr("theme_light"))
         self.theme_combo.setItemText(1, tr("theme_dark"))
-        self.more_btn.setText(tr("more"))
+        for key, label in self._section_labels.items():
+            label.setText(tr(key))
+        self.voice_note.setText(tr("ui_original_voice"))
         self.lbl_api.setText(tr("api"))
         self.asr_help.setText(tr("asr_help"))
         self.tts_help.setText(tr("tts_help"))
@@ -757,8 +795,10 @@ class MainWindow(QMainWindow):
         self.lbl_endpoint.setText(tr("tts_endpoint"))
         self.lbl_ref.setText(tr("tts_ref_audio"))
         self.lbl_prompt.setText(tr("tts_prompt"))
+        self.lbl_sample.setText(tr("tts_sample"))
+        self.tts_sample_edit.setToolTip(tr("tts_sample_tip"))
         self.lbl_preview.setText(tr("tts_preview"))
-        fill_voice_combo(self.tts_voice_edit)
+        self._sync_tts_fields()
         if not self._preview_busy():
             self.tts_preview_btn.setText(tr("tts_preview"))
         self.tts_ref_btn.setText(tr("browse"))
@@ -773,10 +813,17 @@ class MainWindow(QMainWindow):
         self.resume_btn.setText(tr("resume"))
         self.stop_btn.setText(tr("stop"))
         self.open_btn.setText(tr("open"))
-        if self._worker is None or not self._worker.isRunning():
-            self.stage_label.setText(tr("waiting"))
-        self.log.setPlaceholderText(tr("log_ph"))
+        self.stage_label.setText(stage_text(self._progress_stage) if self._progress_stage else
+                                 tr(self._stage_key).format(**self._stage_values))
+        self.log.setPlaceholderText(tr("log_ph") if self._task_started else "")
         self.drop.setAccessibleName(tr("drop"))
+        self.url_edit.setAccessibleName(tr("source_url"))
+        self.out_edit.setAccessibleName(tr("out"))
+        self.progress.setAccessibleName(tr("ui_task"))
+        self.log.setAccessibleName(tr("ui_log"))
+        for label in self.findChildren(QLabel, "fieldLabel"):
+            if label.buddy() is not None:
+                label.buddy().setAccessibleName(label.text())
 
     def _toggle_color(self, checked: bool) -> None:
         self.color_box.setVisible(checked)
@@ -791,35 +838,69 @@ class MainWindow(QMainWindow):
             self.dub_check.blockSignals(False)
             checked = required
         self.dub_box.setVisible(checked)
+        self.voice_note.setVisible(not checked)
         self._sync_tts_fields()
 
     def _sync_tts_fields(self) -> None:
+        engine = self._tts_engine()
+        if engine != getattr(self, "_displayed_tts_engine", engine):
+            self.tts_sovits_status.clear()
+            self._stop_voice_preview()
+        self._displayed_tts_engine = engine
         on = self.dub_check.isChecked() or self._target_requires_dub()
+        self.dub_box.setVisible(on)
+        self.voice_note.setVisible(not on)
         self.tts_combo.setEnabled(on)
-        if self.tts_combo.findData("gptsovits") >= 0:
-            self.tts_combo.setCurrentIndex(self.tts_combo.findData("gptsovits"))
-        self.tts_voice_edit.setEnabled(False)
+        native = self._tts_engine() == 'qwen3-native'
+        previous_voice = self.tts_voice_edit.currentData()
+        self.tts_voice_edit.blockSignals(True)
+        self.tts_voice_edit.clear()
+        self.tts_voice_edit.addItem(tr('tts_auto_voice'), '')
+        from bilingual_sub.adapters.tts.qwen import standard_voices
+
+        for voice in standard_voices(str(self.target_lang_combo.currentData() or 'zh')):
+            origin = tr('tts_origin_' + voice.origin)
+            label = f"{voice.name} · {tr('tts_' + voice.gender)} · {origin}"
+            if voice.designed:
+                label = f"SubFlow · {origin} · {tr('tts_' + voice.gender)} · {tr('tts_designed')}"
+            self.tts_voice_edit.addItem(label, voice.name)
+            self.tts_voice_edit.setItemData(self.tts_voice_edit.count() - 1,
+                tr('tts_designed_tip' if voice.designed else 'tts_voice_origin_tip').format(language=origin), Qt.ItemDataRole.ToolTipRole)
+        self.tts_voice_edit.setCurrentIndex(max(0, self.tts_voice_edit.findData(previous_voice)))
+        self.tts_voice_edit.blockSignals(False)
+        self.tts_combo.setItemText(self.tts_combo.findData('qwen3-native'), tr('tts_standard'))
+        self.tts_combo.setItemText(self.tts_combo.findData('qwen3'), tr('tts_clone'))
+        self.tts_voice_edit.setEnabled(on and native)
         self.tts_endpoint_edit.setEnabled(on)
-        self._slot_voice.setVisible(False)
-        self._slot_endpoint.setVisible(on)
+        self._slot_voice.setVisible(on and native)
+        self._slot_endpoint.setVisible(on and self._tts_engine() == "gptsovits")
+        self._slot_ref.setVisible(on and not native)
+        self._slot_prompt.setVisible(on and not native)
         self._slot_preview.setVisible(on)
         self.sovits_box.setVisible(on)
         self.tts_preview_btn.setEnabled(on and not self._preview_busy())
-        if self.more_box.isVisible():
-            self._toggle_more(True)
+        self._relayout_deck()
+
+    def _sync_preview_text(self) -> None:
+        from bilingual_sub.core.voice_preview import preview_sample
+
+        self.tts_sample_edit.setText(preview_sample(str(self.target_lang_combo.currentData() or "zh")))
+        self._stop_voice_preview()
+        self._set_preview_busy(False)
 
     def _preview_request(self) -> PreviewRequest:
         lang = str(self.target_lang_combo.currentData() or "zh")
         source = str(self.source_lang_combo.currentData() or "")
         prompt_lang = "" if source in {"", "auto"} else source
         return PreviewRequest(
-            "gptsovits",
-            "",
+            self._tts_engine(),
+            str(self.tts_voice_edit.currentData() or '') if self._tts_engine() == 'qwen3-native' else '',
             lang,
-            self.tts_endpoint_edit.text().strip(),
-            self.tts_ref_edit.text().strip(),
-            self.tts_prompt_edit.text().strip(),
+            self._sovits_endpoint(),
+            '' if self._tts_engine() == 'qwen3-native' else self.tts_ref_edit.text().strip(),
+            '' if self._tts_engine() == 'qwen3-native' else self.tts_prompt_edit.text().strip(),
             prompt_lang,
+            self.tts_sample_edit.text().strip(),
         )
 
     def _persist_sovits(self) -> None:
@@ -850,21 +931,38 @@ class MainWindow(QMainWindow):
         self._persist_sovits()
 
     def _sovits_endpoint(self) -> str:
-        return self.tts_endpoint_edit.text().strip() or DEFAULT_ENDPOINT
+        from bilingual_sub.adapters.tts.routing import provider_endpoint
+
+        return provider_endpoint(self._tts_engine(), self.tts_endpoint_edit.text().strip())
+
+    def _tts_engine(self) -> str:
+        from bilingual_sub.adapters.tts.routing import resolve_provider
+
+        return resolve_provider(str(self.tts_combo.currentData() or 'qwen3-native'), str(self.target_lang_combo.currentData() or "zh"),
+                                str(self.source_lang_combo.currentData() or "auto"))
 
     def _probe_sovits(self) -> None:
         if self._closing or (self._sovits_probe_worker and self._sovits_probe_worker.isRunning()):
             return
-        self._sovits_probe_worker = SovitsProbeWorker(self._sovits_endpoint())
+        self._sovits_probe_worker = SovitsProbeWorker(self._sovits_endpoint(), self._tts_engine())
         self._sovits_probe_worker.result.connect(self._on_sovits_probe)
         self._sovits_probe_worker.start()
 
+    def _tts_status_text(self, key: str) -> str:
+        return tr(key).format(engine=self.tts_combo.currentText())
+
     def _on_sovits_probe(self, ready: bool, detail: str) -> None:
-        if ready:
-            self.tts_sovits_status.setText(tr("tts_sovits_ready"))
-            self._log_line(tr("tts_sovits_ready"))
+        worker = self.sender()
+        if worker is not None and getattr(worker, "provider", self._tts_engine()) != self._tts_engine():
             return
-        self.tts_sovits_status.setText(detail or tr("tts_sovits_down"))
+        if ready:
+            status = self._tts_status_text("tts_sovits_ready")
+            device = ('NVIDIA GPU (CUDA)' if detail.startswith('cuda') else
+                      'Apple GPU (MPS)' if detail == 'mps' else 'CPU' if detail == 'cpu' else '')
+            self.tts_sovits_status.setText(status + (f' · {device}' if device else ''))
+            self._log_line(self.tts_sovits_status.text())
+            return
+        self.tts_sovits_status.setText(detail or self._tts_status_text("tts_sovits_down"))
 
     def _start_sovits(self, *args, announce: bool = True) -> None:
         if self._closing:
@@ -872,23 +970,35 @@ class MainWindow(QMainWindow):
         if self._sovits_worker is not None and self._sovits_worker.isRunning():
             return
         self._sovits_announce = announce
-        self.tts_sovits_status.setText(tr("tts_sovits_starting"))
-        self._sovits_worker = SovitsBootWorker(self._sovits_endpoint())
-        self._sovits_worker.progress.connect(self.tts_sovits_status.setText)
+        self.tts_sovits_status.setText(self._tts_status_text("tts_sovits_starting"))
+        self._sovits_worker = SovitsBootWorker(self._sovits_endpoint(), self._tts_engine())
+        self._sovits_worker.progress.connect(self._on_sovits_boot_progress)
         self._sovits_worker.progress.connect(self._log_line)
         self._sovits_worker.ok.connect(self._on_sovits_boot)
         self._sovits_worker.fail.connect(self._on_sovits_boot_fail)
         self._sovits_worker.start()
 
+    def _on_sovits_boot_progress(self, message: str) -> None:
+        worker = self.sender()
+        if worker is None or getattr(worker, "provider", self._tts_engine()) == self._tts_engine():
+            self.tts_sovits_status.setText(message)
+
     def _on_sovits_boot(self, kind: str) -> None:
+        worker = self.sender()
+        if worker is not None and getattr(worker, "provider", self._tts_engine()) != self._tts_engine():
+            return
         if kind == "ready":
-            self.tts_sovits_status.setText(tr("tts_sovits_ready"))
+            self.tts_sovits_status.setText(self._tts_status_text("tts_sovits_ready"))
         else:
-            self.tts_sovits_status.setText(tr("tts_sovits_started"))
+            self.tts_sovits_status.setText(self._tts_status_text("tts_sovits_started"))
         if getattr(self, "_sovits_announce", True):
             self._log_line(self.tts_sovits_status.text())
+        self._probe_sovits()
 
     def _on_sovits_boot_fail(self, msg: str) -> None:
+        worker = self.sender()
+        if worker is not None and getattr(worker, "provider", self._tts_engine()) != self._tts_engine():
+            return
         self.tts_sovits_status.setText(msg)
         self._set_key_status(tr("tts_preview_fail").format(msg=msg))
         if getattr(self, "_sovits_announce", True):
@@ -920,8 +1030,9 @@ class MainWindow(QMainWindow):
         req = self._preview_request()
         ref = req.ref_audio
         video = self._video if self._video and self._video.is_file() else None
-        if (ref and not Path(ref).expanduser().is_file()) or (not ref and video is None):
+        if req.provider != 'qwen3-native' and ((ref and not Path(ref).expanduser().is_file()) or (not ref and video is None)):
             self._set_key_status(tr("tts_sovits_need_ref"))
+            show_error(self, f"参考音频不存在：{ref}" if ref else tr("tts_sovits_need_ref"), preview=True)
             return
         self._persist_sovits()
         if self.key_edit.text().strip():
@@ -938,11 +1049,21 @@ class MainWindow(QMainWindow):
             req.ref_audio,
             req.prompt_text,
             req.prompt_lang,
-            **({"video": video} if not ref else {}),
+            sample_text=req.sample_text,
+              **({"video": video} if not ref and req.provider != 'qwen3-native' else {}),
         )
         self._preview_worker.ok.connect(self._on_preview_ready)
         self._preview_worker.fail.connect(self._on_preview_fail)
+        self._preview_worker.progress.connect(self._on_preview_progress)
         self._preview_worker.start()
+
+    def _on_preview_progress(self, stage: str, pct: float) -> None:
+        worker = self._preview_worker
+        if (self._closing or self.sender() is not worker or worker is None
+                or worker.control.is_stopped()
+                or worker.lang != str(self.target_lang_combo.currentData() or "zh")):
+            return
+        self.tts_sovits_status.setText(stage_text(stage))
 
     def _on_preview_ready(self, path: str) -> None:
         if self._closing:
@@ -954,11 +1075,11 @@ class MainWindow(QMainWindow):
         voice = req.voice
         if isinstance(worker, VoicePreviewWorker) and any(
             getattr(worker, field) != getattr(req, field)
-            for field in ("provider", "voice", "lang", "endpoint", "ref_audio", "prompt_text", "prompt_lang")
+            for field in ("provider", "voice", "lang", "endpoint", "ref_audio", "prompt_text", "prompt_lang", "sample_text")
         ):
             self._set_preview_busy(False)
             return
-        if isinstance(worker, VoicePreviewWorker) and not worker.ref_audio and worker.video != self._video:
+        if isinstance(worker, VoicePreviewWorker) and worker.provider != 'qwen3-native' and not worker.ref_audio and worker.video != self._video:
             self._set_preview_busy(False)
             return
         audio = Path(path)
@@ -987,11 +1108,13 @@ class MainWindow(QMainWindow):
             return
         self._set_key_status(tr("tts_preview_fail").format(msg=safe))
         self._log_line(tr("tts_preview_fail").format(msg=safe))
+        show_error(self, safe, preview=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        from bilingual_sub.adapters.tts import qwen_runtime
         from bilingual_sub.adapters.tts.gptsovits_runtime import request_shutdown, stop_servers
 
-        workers = (self._worker, self._models_worker, self._preview_worker,
+        workers = (self._worker, self._models_worker, self._preview_worker, self._device_worker,
                    self._sovits_worker, self._sovits_probe_worker, self._dl_worker)
         if not self._closing:
             self._closing = True
@@ -1002,6 +1125,7 @@ class MainWindow(QMainWindow):
                 if worker is not None and hasattr(worker, "control"):
                     worker.control.stop()
             request_shutdown()
+            qwen_runtime.request_shutdown()
         if any(worker is not None and worker.isRunning() for worker in workers):
             # Keep QThreads alive until cooperative cancellation has completed.
             event.ignore()
@@ -1009,6 +1133,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self.close)
             return
         stop_servers()
+        qwen_runtime.stop_servers()
         super().closeEvent(event)
 
     def _job_busy(self) -> bool:
@@ -1018,12 +1143,37 @@ class MainWindow(QMainWindow):
         busy = bool(running or stopping)
         self.run_btn.setEnabled(not busy)
         self.pause_btn.setEnabled(bool(running) and not paused and not stopping)
-        self.resume_btn.setEnabled(bool(running) and paused and not stopping)
+        self.resume_btn.setEnabled((bool(running) and paused and not stopping)
+                                  or (not busy and not self._job_busy() and self._resume_config is not None))
+        self.resume_btn.setToolTip(tr("resume_translation") if self._resume_config is not None else tr("resume"))
         self.stop_btn.setEnabled(bool(running) and not stopping)
         self.run_btn.update()
         self._sync_download()
 
     def _release_job(self) -> None:
+        worker = self._worker
+        if isinstance(worker, QThread):
+            # finished is emitted before native thread-local cleanup completes.
+            # Keep Qt ownership until the native thread has fully terminated.
+            if worker.isRunning():
+                return
+            worker.wait()
+            worker.deleteLater()
+        if worker is not None and getattr(worker, "work_dir", None) is not None:
+            import json
+
+            try:
+                state = json.loads((worker.work_dir / "job_state.json").read_text(encoding="utf-8"))
+                completed = state.get("completed_stage", state.get("stage"))
+                translation = (state.get("artifact_contexts") or {}).get("translate") or {}
+                retry = self._retry_translation or bool(translation.get("missing"))
+                from bilingual_sub.pipeline import STAGES
+
+                if retry and completed in STAGES and STAGES.index(completed) >= STAGES.index("glossary"):
+                    self._resume_config = replace(worker.config, work_dir=worker.work_dir, resume_from="translate")
+                    self._log_line(tr("resume_translation"))
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
         self._worker = None
         self._control = None
         self._set_running_ui(False)
@@ -1051,6 +1201,18 @@ class MainWindow(QMainWindow):
         self._log_line(tr("pause"))
 
     def _resume(self) -> None:
+        if not self._job_busy() and self._resume_config is not None:
+            cfg = self._resume_config
+            if self.key_edit.text().strip():
+                set_api_key(self.key_edit.text().strip())
+            self._bar_floor = 60
+            self.progress.setValue(60)
+            self.pct_label.setText(format_pct(60))
+            self._last_log_stage = None
+            self._show_stage("translate")
+            self._log_line(tr("resume_translation_running"))
+            self._launch_job(cfg)
+            return
         if self._control is None or self._control.is_stopped():
             return
         self._control.resume()
@@ -1058,9 +1220,10 @@ class MainWindow(QMainWindow):
         self._log_line(tr("resume"))
 
     def _stop(self) -> None:
+        self._retry_translation = self._retry_translation or self._progress_stage == "translate"
         if self._control is not None:
             self._control.stop()
-        self.stage_label.setText(tr("stop"))
+        self._show_stage("stop")
         self._set_stage_failed(False)
         if tr("stop") not in self.log.toPlainText().splitlines()[-3:]:
             self._log_line(tr("stop"))
@@ -1089,9 +1252,10 @@ class MainWindow(QMainWindow):
             target_lang,
             subtitle_mode,
             enable_dub=must_dub or self.dub_check.isChecked(),
-            tts_provider="gptsovits",
+            tts_provider=self._tts_engine(),
         )
         if need_xl8 and not get_api_key() and not self.key_edit.text().strip():
+            self._reveal_settings(self.key_edit)
             QMessageBox.warning(self, PRODUCT_ZH, tr("need_token"))
             return
         if self.key_edit.text().strip():
@@ -1099,6 +1263,7 @@ class MainWindow(QMainWindow):
 
         model = self.model_combo.currentText().strip()
         if need_xl8 and not model:
+            self._reveal_settings(self.model_combo)
             QMessageBox.warning(self, PRODUCT_ZH, tr("need_model"))
             return
         if model:
@@ -1139,14 +1304,9 @@ class MainWindow(QMainWindow):
             subtitle_mode,
         )
         must_dub = should_dub(source_lang, source_lang, target_lang)
-        tts = "gptsovits" if must_dub or self.dub_check.isChecked() else "none"
-        if tts == "gptsovits":
+        tts = self._tts_engine() if must_dub or self.dub_check.isChecked() else "none"
+        if tts != "none":
             self._persist_sovits()
-            if not self._sovits_worker or not self._sovits_worker.isRunning():
-                from bilingual_sub.adapters.tts.gptsovits_runtime import probe_endpoint
-
-                if not probe_endpoint(self._sovits_endpoint()):
-                    self._start_sovits()
         cfg = JobConfig(
             input_video=self._video or Path(url),
             output_video=out_mp4 if self.burn_check.isChecked() else None,
@@ -1165,13 +1325,13 @@ class MainWindow(QMainWindow):
             glossary_generate=False,
             enable_dub=must_dub or (self.dub_check.isChecked() and tts != "none"),
             tts_provider=tts,  # type: ignore[arg-type]
-            tts_voice="",
-            tts_endpoint="" if tts != "gptsovits" else self._sovits_endpoint(),
-            tts_ref_audio="" if tts != "gptsovits" else self.tts_ref_edit.text().strip(),
-            tts_prompt_text="" if tts != "gptsovits" else self.tts_prompt_edit.text().strip(),
+            tts_voice=str(self.tts_voice_edit.currentData() or '') if tts == 'qwen3-native' else '',
+            tts_endpoint=self._sovits_endpoint() if tts != "none" else "",
+            tts_ref_audio="" if tts == "qwen3-native" else self.tts_ref_edit.text().strip(),
+            tts_prompt_text="" if tts == "qwen3-native" else self.tts_prompt_edit.text().strip(),
             tts_prompt_lang=(
                 ""
-                if tts != "gptsovits" or source_lang in {"", "auto"}
+                if tts == "qwen3-native" or source_lang in {"", "auto"}
                 else source_lang
             ),
             ui_locale=str(self.locale_combo.currentData() or "zh-Hans"),
@@ -1184,12 +1344,18 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.pct_label.setText(format_pct(0))
         self._bar_floor = 0
-        self.stage_label.setText(tr("starting"))
+        self._show_stage("starting")
+        self._launch_job(cfg)
+
+    def _launch_job(self, cfg: JobConfig) -> None:
+        self._resume_config = None
+        self._retry_translation = False
         self._set_stage_failed(False)
         self._control = JobControl()
         self._set_running_ui(True, paused=False)
-        self._worker = PipelineWorker(cfg, self._control)
-        self._running_signature = self._job_signature()
+        self._worker = PipelineWorker(cfg, self._control, parent=self)
+        if not cfg.resume_from:
+            self._running_signature = self._job_signature()
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_done)
         self._worker.failed.connect(self._on_fail)
@@ -1197,11 +1363,15 @@ class MainWindow(QMainWindow):
         self._worker.start()
 
     def _on_progress(self, stage: str, pct: float) -> None:
+        if self._closing or not self._is_current_worker() or (self._control and self._control.is_stopped()):
+            return
+        self._show_task_activity()
         label = stage_text(stage)
         shown = max(self._bar_floor, max(0, min(100, int(pct * 100))))
         self._bar_floor = shown
         self.progress.setValue(shown)
         self.pct_label.setText(format_pct(shown))
+        self._progress_stage = stage
         self.stage_label.setText(label)
         self._set_stage_failed(False)
         if should_log_stage(stage, self._last_log_stage):
@@ -1212,10 +1382,11 @@ class MainWindow(QMainWindow):
         if not self._is_current_worker():
             return
         assert isinstance(result, JobResult)
+        self._retry_translation = bool(result.missing_en)
         self._set_running_ui(False)
         self.progress.setValue(100)
         self.pct_label.setText(format_pct(100))
-        self.stage_label.setText(tr("done_stage").format(n=result.cue_count))
+        self._show_stage("done_stage", n=result.cue_count)
         self._set_stage_failed(False)
         folder = result.output_mp4 or result.output_srt
         self._last_output = folder
@@ -1230,6 +1401,8 @@ class MainWindow(QMainWindow):
             self._log_line(tr("missing_en_log").format(n=len(result.missing_en)))
 
     def _log_line(self, text: str) -> None:
+        if not self._task_started:
+            return
         self.log.appendPlainText(redact_api_key(text, get_api_key()))
 
     def _on_fail(self, msg: str) -> None:
@@ -1237,17 +1410,18 @@ class MainWindow(QMainWindow):
             return
         if not self._is_current_worker():
             return
+        self._retry_translation = self._retry_translation or self._progress_stage == "translate"
         self._set_running_ui(False)
         stopped = msg in {tr("stop"), "job stopped"} or bool(self._control and self._control.is_stopped())
         safe = redact_api_key(msg, get_api_key())
-        self.stage_label.setText(tr("stop") if stopped else tr("fail"))
+        self._show_stage("stop" if stopped else "fail")
         self._set_stage_failed(not stopped)
         if stopped:
             if tr("stop") not in self.log.toPlainText().splitlines()[-5:]:
                 self._log_line(tr("stop"))
         else:
             self._log_line(tr("error_prefix").format(msg=safe))
-            QMessageBox.critical(self, PRODUCT_ZH, safe)
+            show_error(self, safe)
 
     def _open_folder(self) -> None:
         if not self._last_output:
@@ -1272,6 +1446,7 @@ def _install_app_icon(app: QApplication) -> QIcon:
 def main() -> None:
     from PySide6.QtGui import QGuiApplication
 
+    from bilingual_sub.adapters.tts import qwen_runtime
     from bilingual_sub.adapters.tts.gptsovits_runtime import reset_boot_state, stop_servers
 
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -1279,7 +1454,9 @@ def main() -> None:
     )
     app = QApplication(sys.argv)
     reset_boot_state()
+    qwen_runtime.reset_boot_state()
     app.aboutToQuit.connect(stop_servers)
+    app.aboutToQuit.connect(qwen_runtime.stop_servers)
     app.setApplicationName(PRODUCT_EN)
     app.setOrganizationName(COMPANY_ZH)
     set_locale(DEFAULT_LOCALE)

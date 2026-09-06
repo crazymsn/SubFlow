@@ -182,7 +182,7 @@ def _artifact_context(stage: str, config: JobConfig, settings: AppSettings, work
         result["tts"] = _tts_fingerprint(config, detected_spoken=detected_spoken, cues=_original_cues(work, control))
         from bilingual_sub.adapters.tts.model_identity import current_model_revision
 
-        result["model_revision"] = current_model_revision(config.tts_endpoint)
+        result["model_revision"] = current_model_revision(_tts_endpoint(config, detected_spoken))
     return result
 
 
@@ -233,7 +233,9 @@ def _resolved_tts_provider(
     *,
     detected_spoken: str | None = None,
 ) -> str:
-    return effective_tts_provider(
+    from bilingual_sub.adapters.tts.routing import resolve_provider
+
+    provider = effective_tts_provider(
         config.source_lang,
         config.source_lang if detected_spoken is None else detected_spoken,
         config.target_lang,
@@ -241,6 +243,14 @@ def _resolved_tts_provider(
         enable_dub=config.enable_dub,
         tts_provider=config.tts_provider,
     )
+    return resolve_provider(provider, config.target_lang,
+                            config.tts_prompt_lang or detected_spoken or config.source_lang)
+
+
+def _tts_endpoint(config: JobConfig, detected_spoken: str | None = None) -> str:
+    from bilingual_sub.adapters.tts.routing import provider_endpoint
+
+    return provider_endpoint(_resolved_tts_provider(config, detected_spoken=detected_spoken), config.tts_endpoint)
 
 
 def _tts_fingerprint(config: JobConfig, *, detected_spoken: str | None = None, cues=None) -> str:
@@ -249,7 +259,7 @@ def _tts_fingerprint(config: JobConfig, *, detected_spoken: str | None = None, c
     return tts_job_fingerprint(
         _resolved_tts_provider(config, cues, detected_spoken=detected_spoken),
         voice=config.tts_voice,
-        endpoint=config.tts_endpoint,
+        endpoint=_tts_endpoint(config, detected_spoken),
         ref_audio=config.tts_ref_audio,
         prompt_text=config.tts_prompt_text,
         prompt_lang=config.tts_prompt_lang,
@@ -502,7 +512,7 @@ def _can_reexport_checked(config: JobConfig, work: Path, settings: AppSettings |
         _verify_cache(work, "dub", control)
         from bilingual_sub.adapters.tts.model_identity import current_model_revision
 
-        revision = current_model_revision(config.tts_endpoint)
+        revision = current_model_revision(_tts_endpoint(config, heard))
         if not revision or revision != report.get("tts_model_revision"):
             return False
         saved_tts = report.get("tts_fingerprint")
@@ -909,6 +919,7 @@ def run(
     *,
     on_progress: ProgressCb = None,
     control: JobControl | None = None,
+    on_work_ready: Callable[[Path], None] | None = None,
 ) -> JobResult:
     # A caller/UI edit must not redirect a running job outside its reservations.
     config = copy.deepcopy(config)
@@ -955,6 +966,8 @@ def run(
         writes.extend(work / name for name in WORK_FILES)
         with claim_resources(reads=reads, writes=writes, trees=[work],
                              checkpoint=lambda: _gate(control)):
+            if on_work_ready:
+                on_work_ready(work)
             return _run_in_work(config, settings, work, on_progress, control, t0)
     finally:
         lock.release()
@@ -977,7 +990,7 @@ def _run_in_work(config: JobConfig, settings: AppSettings, work: Path,
     resume_index = _stage_index(config.resume_from) if config.resume_from else 0
     if resume_index > _stage_index("ingest"):
         completed = state.get("completed_stage", state.get("stage"))
-        if completed not in STAGES or _stage_index(completed) < resume_index - 1:
+        if not isinstance(completed, str) or completed not in STAGES or _stage_index(completed) < resume_index - 1:
             raise ValueError("恢复阶段之前的步骤尚未完成或记录缺失；请从上次完成的阶段或 ingest 重新处理")
         # Rewinding invalidates downstream completion before any new work.
         _save_state(work, STAGES[resume_index - 1], {"job_id": job_id}, control=control)
@@ -1136,7 +1149,7 @@ def _run_job(
             backend = WhisperXBackend()
             if not backend.available(control=control):
                 logger.info("正在准备内置 WhisperX 环境…")
-                ensure_whisperx_runtime(control=control)
+                backend.python = ensure_whisperx_runtime(control=control)
             if backend.available(control=control):
                 result = backend.transcribe(
                     speech,
@@ -1151,6 +1164,7 @@ def _run_job(
                 used_x = True
             else:
                 logger.warning("识别 · 已回退 whisper（未找到 WhisperX 环境）")
+                prog("asr_fallback", 0.2)
         if not used_x:
             segments = transcribe(
                 speech,
@@ -1377,6 +1391,20 @@ def _run_job(
                 apply_han_to_cues(cues, han)
             cache_hits = tstats.cache_hits
             api_calls = tstats.api_calls
+        if cues and job_needs_dub(config.source_lang, detected_spoken, config.target_lang,
+                                  cues=asr_cues, enable_dub=config.enable_dub, tts_provider=config.tts_provider):
+            from bilingual_sub.adapters.meding import TranslationCache, create_client
+            from bilingual_sub.core.speech import prepare_dub_script
+            from bilingual_sub.secrets.store import get_api_key
+
+            key = get_api_key()
+            if key:
+                cues, extra_calls = prepare_dub_script(cues, target_lang=config.target_lang,
+                    source_lang=detected_spoken or config.source_lang,
+                    model=config.translate_model or settings.translate.model,
+                    client=create_client(key, control=control),
+                    cache=TranslationCache() if settings.translate.cache_enabled else None, control=control)
+                api_calls += extra_calls
         save_cues_json(cues, cues_bi_path)
         stages["translate_sec"] = time.time() - ts
         _save_state(work, "translate", {"job_id": job_id, "missing_en": len(missing)}, control=control,
@@ -1484,77 +1512,81 @@ def _run_job(
 
     if need_dub and _should_run(config.resume_from, "dub"):
         _gate(control)
-        prog("dub", 0.94)
+        prog("dub", 0.90)
         ts = time.time()
         from bilingual_sub.adapters.tts import select_tts
+        from bilingual_sub.adapters.tts.gptsovits_runtime import automatic_reference_transcript
 
         tts_name = _resolved_tts_provider(config, asr_cues, detected_spoken=detected_spoken)
         ref_audio = config.tts_ref_audio
         dub_tmp = work / "dubbed.mp4"
         dub_context = _artifact_context("dub", config, settings, work, control, detected_spoken)
-        try:
-            if config.burn:
-                _verify_artifact_context(work, "burn", config, settings, control)
-                video_for_dub = burned_mp4
-            else:
-                video_for_dub = source
-            if tts_name == "gptsovits":
-                from bilingual_sub.adapters.tts.gptsovits import to_sovits_lang
-                from bilingual_sub.adapters.tts.gptsovits_runtime import (
-                    ensure_ref_audio,
-                    ensure_running,
-                )
+        from bilingual_sub.adapters.tts.routing import engine_session
 
-                to_sovits_lang(config.target_lang)
-                ensure_running(config.tts_endpoint or None, wait_sec=300, control=control)
-                if not ref_audio:
-                    ref_audio = str(
-                        ensure_ref_audio(
-                            source,
-                            work / "sovits_ref.wav",
-                            cues=asr_cues,
-                            control=control,
-                        )
+        try:
+            with engine_session(tts_name, control):
+                if config.burn:
+                    _verify_artifact_context(work, "burn", config, settings, control)
+                    video_for_dub = burned_mp4
+                else:
+                    video_for_dub = source
+                if tts_name in {"gptsovits", "qwen3", "qwen3-native"}:
+                    from bilingual_sub.adapters.tts.gptsovits_runtime import (
+                        automatic_reference_transcript,
+                        ensure_ref_audio,
                     )
-            provider = select_tts(
-                tts_name,
-                endpoint=config.tts_endpoint,
-                ref_audio=ref_audio,
-                prompt_text=config.tts_prompt_text,
-                prompt_lang=config.tts_prompt_lang
-                or (
-                    detected_spoken
-                    if detected_spoken and detected_spoken != "auto"
-                    else config.source_lang
-                ),
-            )
-            # Subtitle fitting changes display timing and stores only the shown
-            # language. Synthesize complete translated sentences at their
-            # original intervals, including when resuming directly at dub.
-            if config.subtitle_mode == "netflix_single":
-                _verify_cache(work, "translate", control)
-            speech_cues = (load_cues_json(cues_bi_path)
-                           if config.subtitle_mode == "netflix_single" else cues)
-            if not any(spoken_line(cue, config.target_lang) for cue in speech_cues):
-                raise RuntimeError("没有目标语种台词，无法配音")
-            dubbed = dub_cues(
-                speech_cues,
-                video=video_for_dub,
-                work=work,
-                output=dub_tmp,
-                provider=provider,
-                lang=config.target_lang,
-                voice=config.tts_voice,
-                duration=duration,
-                control=control,
-            )
-            if dubbed is None or not Path(dubbed).is_file():
-                raise RuntimeError("配音失败，没有生成目标语种音轨")
-            # The audio operation may have restarted after automatic CPU fallback.
-            # Preserve the actual generation that produced all its clips.
-            dub_context["model_revision"] = getattr(provider, "cache_model_revision", dub_context["model_revision"])
-            if dub_context != _artifact_context("dub", config, settings, work, control, detected_spoken):
-                raise RuntimeError("配音期间字幕、参考音频或设置发生变化，请重试")
+                    from bilingual_sub.adapters.tts.routing import ensure_running
+                    from bilingual_sub.core.dub_progress import DubProgress
+
+                    with DubProgress(lambda stage, pct: prog(stage, 0.90)) as preparation:
+                        preparation.set("prepare", 0, 0, 0)
+                        ensure_running(tts_name, _tts_endpoint(config, detected_spoken),
+                                       wait_sec=300, control=control, progress=logger.info)
+                        if not ref_audio and tts_name != 'qwen3-native':
+                            preparation.set("reference", 0, 0, 0)
+                            ref_audio = str(
+                                ensure_ref_audio(source, work / "sovits_ref.wav", cues=asr_cues, control=control)
+                            )
+                provider = select_tts(
+                    tts_name,
+                    endpoint=_tts_endpoint(config, detected_spoken),
+                    ref_audio=ref_audio,
+                    prompt_text=config.tts_prompt_text if config.tts_ref_audio else automatic_reference_transcript(asr_cues),
+                    prompt_lang=config.tts_prompt_lang
+                    or (
+                        detected_spoken
+                        if detected_spoken and detected_spoken != "auto"
+                        else config.source_lang
+                    ),
+                )
+                # Subtitle fitting changes display timing and stores only the shown
+                # language. Synthesize complete translated sentences at their
+                # original intervals, including when resuming directly at dub.
+                if config.subtitle_mode == "netflix_single":
+                    _verify_cache(work, "translate", control)
+                speech_cues = (load_cues_json(cues_bi_path)
+                               if config.subtitle_mode == "netflix_single" else cues)
+                if not any(spoken_line(cue, config.target_lang) for cue in speech_cues):
+                    raise RuntimeError("没有目标语种台词，无法配音")
+                dubbed = dub_cues(
+                    speech_cues,
+                    video=video_for_dub,
+                    work=work,
+                    output=dub_tmp,
+                    provider=provider,
+                    lang=config.target_lang,
+                    voice=config.tts_voice,
+                    duration=duration,
+                    control=control,
+                    on_progress=lambda stage, pct: prog(stage, 0.90 + 0.09 * pct),
+                )
+                if dubbed is None or not Path(dubbed).is_file():
+                    raise RuntimeError("配音失败，没有生成目标语种音轨")
+                # The audio operation may have restarted after automatic CPU fallback.
+                # Preserve the actual generation that produced all its clips.
+                dub_context["model_revision"] = getattr(provider, "cache_model_revision", dub_context["model_revision"])
+                if dub_context != _artifact_context("dub", config, settings, work, control, detected_spoken):
+                    raise RuntimeError("配音期间字幕、参考音频或设置发生变化，请重试")
         except JobStopped:
             raise
         except Exception as exc:

@@ -3,57 +3,20 @@
 import re
 from jamo import h2j, j2hcj
 import ko_pron
-from g2pk2 import G2p
+from g2pk2 import G2p as _BaseG2p
 
-import importlib
-import os
 
-# 防止win下无法读取模型
-if os.name == "nt":
+class G2p(_BaseG2p):
+    """Use the bundled dictionary; never launch an installer during inference."""
+    def check_mecab(self):
+        try:
+            import mecab  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError('Korean dictionary missing: repair the complete voice runtime') from exc
 
-    class win_G2p(G2p):
-        def check_mecab(self):
-            super().check_mecab()
-            spam_spec = importlib.util.find_spec("eunjeon")
-            non_found = spam_spec is None
-            if non_found:
-                print("you have to install eunjeon. install it...")
-            else:
-                installpath = spam_spec.submodule_search_locations[0]
-                if not (re.match(r"^[A-Za-z0-9_/\\:.\-]*$", installpath)):
-                    import sys
-                    from eunjeon import Mecab as _Mecab
-
-                    class Mecab(_Mecab):
-                        def get_dicpath(installpath):
-                            if not (re.match(r"^[A-Za-z0-9_/\\:.\-]*$", installpath)):
-                                import shutil
-
-                                python_dir = os.getcwd()
-                                if installpath[: len(python_dir)].upper() == python_dir.upper():
-                                    dicpath = os.path.join(os.path.relpath(installpath, python_dir), "data", "mecabrc")
-                                else:
-                                    if not os.path.exists("TEMP"):
-                                        os.mkdir("TEMP")
-                                    if not os.path.exists(os.path.join("TEMP", "ko")):
-                                        os.mkdir(os.path.join("TEMP", "ko"))
-                                    if os.path.exists(os.path.join("TEMP", "ko", "ko_dict")):
-                                        shutil.rmtree(os.path.join("TEMP", "ko", "ko_dict"))
-
-                                    shutil.copytree(
-                                        os.path.join(installpath, "data"), os.path.join("TEMP", "ko", "ko_dict")
-                                    )
-                                    dicpath = os.path.join("TEMP", "ko", "ko_dict", "mecabrc")
-                            else:
-                                dicpath = os.path.abspath(os.path.join(installpath, "data/mecabrc"))
-                            return dicpath
-
-                        def __init__(self, dicpath=get_dicpath(installpath)):
-                            super().__init__(dicpath=dicpath)
-
-                    sys.modules["eunjeon"].Mecab = Mecab
-
-    G2p = win_G2p
+    def get_mecab(self):
+        from mecab import MeCab
+        return MeCab()
 
 
 from text.symbols2 import symbols

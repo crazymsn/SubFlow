@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +19,7 @@ from bilingual_sub.core.langs import (
 from bilingual_sub.core.persistence import write_json
 from bilingual_sub.models import Cue
 
-SUBTITLE_PACK = "han-layout-v3"
+SUBTITLE_PACK = "balanced-bilingual-blocks-v5"
 PAIR_ZH_CPL = 16
 PAIR_EN_CPL = 42
 PAIR_MAX_LINES = 1
@@ -334,11 +336,13 @@ def _ass_body(
     bold: bool,
     outline: float,
     color: str,
+    spacing: float | None = None,
 ) -> str:
     shrink = f"\\fscx{scale}\\fscy{scale}" if scale < 100 else ""
     joined = r"\N".join(ass_esc(line) for line in lines)
+    tracking = f"\\fsp{spacing}" if spacing is not None else ""
     return (
-        f"{{\\an2\\pos({cx},{y})\\q2\\b{1 if bold else 0}\\fs{fs}{shrink}"
+        f"{{\\an2\\pos({cx},{y})\\q2\\b{1 if bold else 0}\\fs{fs}{shrink}{tracking}"
         f"\\bord{outline}\\shad0\\c{color}}}"
         f"{joined}"
     )
@@ -373,6 +377,107 @@ def _single_line(
     return text
 
 
+def _page_parts(text: str, cfg: dict, width: float) -> list[str]:
+    """Balance complete words/characters across the minimum number of rows."""
+    text = ' '.join((text or '').split())
+    fs, bold = int(cfg['size']), bool(cfg.get('bold'))
+    spacing, outline = float(cfg.get('spacing', 0)), float(cfg.get('outline', 0))
+    greedy = wrap_to_width(text, fs, width, bold=bold, spacing=spacing, outline=outline,
+                           max_lines=max(1, len(text)))
+    rows = len(greedy)
+    if rows < 2 or len(text) > 2000:
+        return greedy
+    prefix = [0.0]
+    for ch in text:
+        prefix.append(prefix[-1] + _advance(ch, fs, bold=bold) + spacing)
+    def measured(a, b):
+        while a < b and text[a].isspace():
+            a += 1
+        while b > a and text[b-1].isspace():
+            b -= 1
+        return max(0, prefix[b] - prefix[a] - spacing) + 2 * outline
+    cuts = {0, len(text)}
+    closing, opening = '，。！？、；：,.!?;:)]}》」』】', '([{《「『【'
+    for j in range(1, len(text)):
+        left, right = text[j-1], text[j]
+        if (left.isspace() or right.isspace() or '\u3000' <= left <= '\u9fff' or '\u3000' <= right <= '\u9fff'):
+            if right not in closing and left not in opening:
+                cuts.add(j)
+    # Only split inside a Latin token if it cannot fit on an entire row.
+    for token in re.finditer(r'\S+', text):
+        if measured(token.start(), token.end()) > width:
+            cuts.update(j for j in range(token.start()+1, token.end())
+                        if text[j] not in closing and text[j-1] not in opening)
+    cuts = sorted(cuts)
+    target = measured(0, len(text)) / rows
+    states = {0: (0.0, [])}
+    orphan = {'a', 'an', 'the', 'of', 'to', 'and', 'or', 'in', 'with'}
+    for _ in range(rows):
+        following = {}
+        for a, (cost, lines) in states.items():
+            for b in cuts:
+                if b <= a:
+                    continue
+                painted = measured(a, b)
+                if painted > width + .01:
+                    break
+                line = text[a:b].strip()
+                if not line:
+                    continue
+                penalty = ((painted-target)/max(1,target))**2
+                if line.split()[-1].lower() in orphan:
+                    penalty += .3
+                # ASR phrase spaces and punctuation carry useful language
+                # boundaries. Prefer them over an equally balanced CJK cut.
+                if b < len(text):
+                    if ('\u3000' <= text[b-1] <= '\u9fff' and not text[b].isspace()
+                            and text[b-1] not in '，。！？；：、'):
+                        penalty += .6
+                    if line.split()[-1].endswith(("'s", '’s')):
+                        penalty += .4
+                if line[-1] in '.!?。！？;；':
+                    penalty -= .2
+                value = cost + penalty
+                if b not in following or value < following[b][0]:
+                    following[b] = (value, [*lines, line])
+        states = following
+    return states[len(text)][1] if len(text) in states else greedy
+
+
+def _display_pages(lines: list[str], rows: int) -> list[str]:
+    return ['\n'.join(lines[i:i+rows]) for i in range(0, len(lines), rows)]
+
+
+def fixed_type_pages(cues, geo, mode, han, target_lang, source_lang):
+    """Split display pages at fixed type size; never feed these fragments to TTS."""
+    result = []
+    for cue in cues:
+        if is_pair_mode(mode):
+            zh, en = pair_display_texts(cue)
+            zh_cfg, en_cfg = (geo['en'], geo['zh']) if mode == 'enzh' else (geo['zh'], geo['en'])
+            zh_parts = _display_pages(_page_parts(convert_han(zh, han) if han else zh, zh_cfg, geo['max_w']), PAIR_MAX_LINES)
+            en_parts = _display_pages(_page_parts(en, en_cfg, geo['max_w']), PAIR_MAX_LINES)
+            count = max(len(zh_parts), len(en_parts))
+            # Keep a shorter translation visible as context. Never cut it into
+            # arbitrary fragments or introduce empty counterpart pages.
+            zh_parts = [zh_parts[i * len(zh_parts) // count] for i in range(count)]
+            en_parts = [en_parts[i * len(en_parts) // count] for i in range(count)]
+        else:
+            text = _single_line(cue, mode, han, target_lang=target_lang, source_lang=source_lang)
+            zh_parts = _display_pages(_page_parts(text, geo['zh'], geo['max_w']), 1)
+            en_parts = zh_parts
+            count = len(zh_parts)
+        if cue.end - cue.start < count * .01:
+            raise ValueError('字幕文本过密，当前时间不足以显示固定字号的完整内容，请增加字幕时长')
+        for i, (zh, en) in enumerate(zip(zh_parts, en_parts)):
+            a = cue.start + (cue.end - cue.start) * i / count
+            b = cue.start + (cue.end - cue.start) * (i + 1) / count
+            texts = {'zh': zh, 'en': en} if is_pair_mode(mode) else {}
+            result.append(replace(cue, start=a, end=b, zh=zh, en=en, spoken=zh if not is_pair_mode(mode) else cue.spoken,
+                                  words=[], language_texts=texts))
+    return result
+
+
 def render_ass_srt(
     cues: list[Cue],
     preset: StylePreset,
@@ -388,7 +493,6 @@ def render_ass_srt(
     pw, ph = geo["pw"], geo["ph"]
     cx, cn_y = geo["cx"], geo["cn_y"]
     margin_lr = geo["margin_lr"]
-    max_w = geo["max_w"]
     zh_cfg = geo["zh"]
     en_cfg = geo["en"]
     pad = int(geo.get("pad") or max(24, ph // 40))
@@ -431,158 +535,37 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     gap = max(14, int(round(min(zh_fs, en_fs) * 0.42)))
     floor_y = ph - pad
     pair = is_pair_mode(mode)
-    for i, cue in enumerate(cues, 1):
-        if mode == "netflix_single" or single_subtitle_lang(mode):
-            line = _single_line(
-                cue, mode, han, target_lang=target_lang, source_lang=source_lang
-            )
-            lines, scale = fit_text(
-                line,
-                zh_fs,
-                max_w,
-                bold=zh_bold,
-                spacing=zh_spacing,
-                outline=zh_outline,
-                max_lines=1,
-            )
-            y = min(cn_y + zh_fs // 2, floor_y)
-            body = _ass_body(
-                lines,
-                cx=cx,
-                y=y,
-                fs=zh_fs,
-                scale=scale,
-                bold=zh_bold,
-                outline=zh_outline,
-                color=zh_color,
-            )
-            events.append(f"Dialogue: 0,{ass_time(cue.start)},{ass_time(cue.end)},CN,,0,0,0,,{body}")
-            srt_blocks.append(f"{i}\n{srt_time(cue.start)} --> {srt_time(cue.end)}\n" + "\n".join(lines) + "\n")
-            continue
-
-        if pair:
+    pages = fixed_type_pages(cues, geo, mode, han, target_lang, source_lang)
+    # Each language owns a fixed baseline, even if its counterpart is absent.
+    top_y = floor_y - _block_height([''], en_fs, 100) - gap
+    for i, cue in enumerate(pages, 1):
+        displayed = []
+        if not pair:
+            text = _single_line(cue, mode, han, target_lang=target_lang, source_lang=source_lang)
+            rows = [('CN', text, zh_cfg, zh_color, min(cn_y + zh_fs // 2, floor_y))]
+        else:
             zh_text, en_text = pair_display_texts(cue)
-        else:
-            zh_text = cue.zh or ""
-            en_text = cue.en or ""
-        if han and zh_text.strip():
-            zh_text = convert_han(zh_text, han)
-        if not zh_text.strip() and en_text.strip():
-            lines, scale = fit_text(
-                en_text,
-                zh_fs,
-                max_w,
-                bold=zh_bold,
-                spacing=zh_spacing,
-                outline=zh_outline,
-                max_lines=PAIR_MAX_LINES if pair else 4,
-            )
-            y = min(cn_y + zh_fs // 2, floor_y)
-            body = _ass_body(
-                lines,
-                cx=cx,
-                y=y,
-                fs=zh_fs,
-                scale=scale,
-                bold=zh_bold,
-                outline=zh_outline,
-                color=en_color,
-            )
-            events.append(f"Dialogue: 0,{ass_time(cue.start)},{ass_time(cue.end)},EN,,0,0,0,,{body}")
-            srt_blocks.append(f"{i}\n{srt_time(cue.start)} --> {srt_time(cue.end)}\n" + "\n".join(lines) + "\n")
-            continue
-        show_en = bool(en_text.strip()) and en_text.strip() != zh_text.strip()
-        en_first = mode == "enzh"
-        if en_first and show_en:
-            top_text, bot_text = en_text, zh_text
-            top_fs, bot_fs = zh_fs, en_fs
-            top_bold, bot_bold = zh_bold, en_bold
-            top_spacing, bot_spacing = zh_spacing, en_spacing
-            top_outline, bot_outline = zh_outline, en_outline
-            top_color, bot_color = en_color, zh_color
-            top_style, bot_style = "EN", "CN"
-        else:
-            top_text, bot_text = zh_text, en_text
-            top_fs, bot_fs = zh_fs, en_fs
-            top_bold, bot_bold = zh_bold, en_bold
-            top_spacing, bot_spacing = zh_spacing, en_spacing
-            top_outline, bot_outline = zh_outline, en_outline
-            top_color, bot_color = zh_color, en_color
-            top_style, bot_style = "CN", "EN"
-        # One language, one line. Use the full safe width, then scale if it still overflows.
-        top_limit = max_w
-        bot_limit = max_w
-        top_lines, top_scale = fit_text(
-            top_text,
-            top_fs,
-            top_limit,
-            bold=top_bold,
-            spacing=top_spacing,
-            outline=top_outline,
-            max_lines=PAIR_MAX_LINES if pair else 4,
-        )
-        bot_lines, bot_scale = (
-            fit_text(
-                bot_text,
-                bot_fs,
-                bot_limit,
-                bold=bot_bold,
-                spacing=bot_spacing,
-                outline=bot_outline,
-                max_lines=PAIR_MAX_LINES if pair else 4,
-            )
-            if show_en
-            else ([], 100)
-        )
-        if show_en:
-            bot_h = _block_height(bot_lines, bot_fs, bot_scale)
-            top_h = _block_height(top_lines, top_fs, top_scale)
-            bot_bottom = floor_y
-            bot_top = bot_bottom - bot_h
-            top_bottom = bot_top - gap
-            if top_bottom - top_h < pad:
-                top_bottom = pad + top_h
-                bot_bottom = min(floor_y, top_bottom + gap + bot_h)
-        else:
-            top_bottom = min(cn_y + top_fs // 2, floor_y)
-        top_body = _ass_body(
-            top_lines,
-            cx=cx,
-            y=top_bottom,
-            fs=top_fs,
-            scale=top_scale,
-            bold=top_bold,
-            outline=top_outline,
-            color=top_color,
-        )
-        events.append(
-            f"Dialogue: 1,{ass_time(cue.start)},{ass_time(cue.end)},{top_style},,0,0,0,,{top_body}"
-        )
-        if show_en:
-            bot_body = _ass_body(
-                bot_lines,
-                cx=cx,
-                y=bot_bottom,
-                fs=bot_fs,
-                scale=bot_scale,
-                bold=bot_bold,
-                outline=bot_outline,
-                color=bot_color,
-            )
-            events.append(
-                f"Dialogue: 0,{ass_time(cue.start)},{ass_time(cue.end)},{bot_style},,0,0,0,,{bot_body}"
-            )
-            srt_blocks.append(
-                f"{i}\n{srt_time(cue.start)} --> {srt_time(cue.end)}\n"
-                + "\n".join(top_lines)
-                + "\n"
-                + "\n".join(bot_lines)
-                + "\n"
-            )
-        else:
-            srt_blocks.append(
-                f"{i}\n{srt_time(cue.start)} --> {srt_time(cue.end)}\n" + "\n".join(top_lines) + "\n"
-            )
+            if han and zh_text:
+                zh_text = convert_han(zh_text, han)
+            if zh_text.strip() == en_text.strip():
+                en_text = ''
+            if mode == 'enzh':
+                rows = [('EN', en_text, zh_cfg, en_color, top_y),
+                        ('CN', zh_text, en_cfg, zh_color, floor_y)]
+            else:
+                rows = [('CN', zh_text, zh_cfg, zh_color, top_y),
+                        ('EN', en_text, en_cfg, en_color, floor_y)]
+        for layer, (name, text, cfg, color, y) in enumerate(rows):
+            if not text.strip():
+                continue
+            body = _ass_body([text], cx=cx, y=y, fs=int(cfg['size']), scale=100,
+                bold=bool(cfg.get('bold')), outline=float(cfg['outline']), color=color,
+                spacing=float(cfg.get('spacing', 0)))
+            events.append(f"Dialogue: {layer},{ass_time(cue.start)},{ass_time(cue.end)},{name},,0,0,0,,{body}")
+            displayed.append(text)
+        if displayed:
+            srt_blocks.append(f"{i}\n{srt_time(cue.start)} --> {srt_time(cue.end)}\n" +
+                              "\n".join(displayed) + "\n")
 
     return header + "\n".join(events) + "\n", "".join(srt_blocks)
 

@@ -38,7 +38,7 @@ def current_model_revision(endpoint: str = "") -> str | None:
 class ModelSnapshot:
     def __init__(self, provider: str, endpoint: str = ""):
         self.endpoint = endpoint
-        self.enabled = provider == "gptsovits"
+        self.enabled = provider in {"gptsovits", "qwen3", "qwen3-native"}
         self.revision = current_model_revision(endpoint) if self.enabled else ""
         # Unknown backends remain usable, but cannot certify persistent caches.
         self.cache_id = self.revision if self.revision is not None else "unknown:" + uuid.uuid4().hex

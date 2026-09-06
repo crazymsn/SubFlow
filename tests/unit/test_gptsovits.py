@@ -114,6 +114,14 @@ def test_error_detail_surfaces_upstream_exception():
     assert "onnxruntime" in _error_detail(FakeResp())
 
 
+def test_empty_server_error_has_recovery_details():
+    from bilingual_sub.adapters.tts.gptsovits import _error_detail
+
+    response = httpx.Response(400, json={"message": "tts failed", "Exception": ""})
+    assert "gptsovits.log" in _error_detail(response)
+    assert _error_detail(response) != "tts failed"
+
+
 def test_to_sovits_lang_maps_subflow_codes():
     assert to_sovits_lang("zh") == "zh"
     assert to_sovits_lang("zh-Hans") == "zh"

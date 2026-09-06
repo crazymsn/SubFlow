@@ -114,6 +114,7 @@ def test_default_pipeline_skips_ytdlp_refine_dub(tmp_path: Path, monkeypatch):
 
 
 def test_pipeline_uses_refine_when_enabled(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("bilingual_sub.core.speech.prepare_dub_script", lambda cues, **kw: (cues, 0))
     from bilingual_sub.core.translate import TranslateStats
     from bilingual_sub.models import Cue, Segment
     from bilingual_sub.pipeline import run
@@ -540,14 +541,14 @@ def test_detected_english_on_zh_target_selects_sovits(tmp_path: Path, monkeypatc
         subtitle_mode="bilingual",
     )
     result = run(cfg)
-    assert seen["engine"] == "gptsovits"
+    assert seen["engine"] == "qwen3-native"
     assert seen["dub"] == 1
     assert dest.read_bytes() == b"dubbed"
     assert result.output_mp4 == dest
     from bilingual_sub.pipeline import _tts_fingerprint
 
     report = json.loads((tmp_path / "work" / "report.json").read_text(encoding="utf-8"))
-    assert report["tts_provider"] == "gptsovits"
+    assert report["tts_provider"] == "qwen3-native"
     assert report["detected_spoken"] == "en"
     assert report["tts_fingerprint"] == _tts_fingerprint(
         cfg, detected_spoken="en"
@@ -904,7 +905,8 @@ def test_artifact_key_changes_with_language(tmp_path: Path):
         JobConfig(**base, source_lang="zh", target_lang="en", tts_provider="none", tts_ref_audio="b.wav")
     )
     assert cross_a != "none"
-    assert cross_a != cross_b
+    # The default standard voice does not condition on a reference recording.
+    assert cross_a == cross_b
 
 
 def test_artifact_key_url_ignores_placeholder_path(tmp_path: Path):
@@ -993,6 +995,10 @@ def test_pipeline_translates_screen_and_spoken_for_japanese(tmp_path: Path, monk
 
 
 def test_pipeline_prompt_lang_follows_detected_spoken(tmp_path: Path, monkeypatch):
+    import threading
+
+    from bilingual_sub.adapters.tts.routing import engine_session
+    from bilingual_sub.core.control import JobControl, JobStopped
     from bilingual_sub.core.translate import TranslateStats
     from bilingual_sub.models import Cue
     from bilingual_sub.pipeline import run
@@ -1027,10 +1033,31 @@ def test_pipeline_prompt_lang_follows_detected_spoken(tmp_path: Path, monkeypatc
 
     def fake_select(name, **kwargs):
         seen["prompt_lang"] = kwargs.get("prompt_lang")
+        assert kwargs["prompt_text"] == ""
         return object()
 
     monkeypatch.setattr("bilingual_sub.adapters.tts.select_tts", fake_select)
-    monkeypatch.setattr("bilingual_sub.pipeline.dub_cues", _fake_dub)
+    def protected_dub(cues, **kwargs):
+        control = JobControl()
+        acquired = threading.Event()
+        stopped = threading.Event()
+        def competing_preview():
+            try:
+                with engine_session("qwen3", control):
+                    acquired.set()
+            except JobStopped:
+                stopped.set()
+        thread = threading.Thread(target=competing_preview)
+        thread.start()
+        try:
+            assert not acquired.wait(.15), "preview evicted the active pipeline engine"
+        finally:
+            control.stop()
+            thread.join(2)
+        assert not thread.is_alive() and stopped.is_set()
+        return _fake_dub(cues, **kwargs)
+
+    monkeypatch.setattr("bilingual_sub.pipeline.dub_cues", protected_dub)
 
     cfg = JobConfig(
         input_video=video,
@@ -1043,6 +1070,7 @@ def test_pipeline_prompt_lang_follows_detected_spoken(tmp_path: Path, monkeypatc
         subtitle_mode="single:zh",
         enable_dub=True,
         tts_provider="gptsovits",
+        tts_prompt_text="您好，请问有什么能帮您？",
     )
     run(cfg)
     assert seen["prompt_lang"] == "ja"

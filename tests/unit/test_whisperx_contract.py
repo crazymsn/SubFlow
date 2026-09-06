@@ -10,12 +10,91 @@ from bilingual_sub.adapters.whisperx_backend import (
 from bilingual_sub.models import JobConfig, Segment
 
 
+def test_gpu_oom_reduces_batch_before_cpu(monkeypatch):
+    from types import SimpleNamespace
+
+    from bilingual_sub.adapters import whisperx_worker as worker
+    batches, devices = [], []
+    def transcribe(audio, **kwargs):
+        batches.append(kwargs['batch_size'])
+        if kwargs['batch_size'] > 2:
+            raise RuntimeError('CUDA out of memory')
+        return {'language': 'zh', 'segments': []}
+    def load(name, device, **kwargs):
+        devices.append(device)
+        return SimpleNamespace(transcribe=transcribe)
+    monkeypatch.setattr(worker, 'release_accelerator', lambda _: None)
+    result, device = worker.transcribe_audio(SimpleNamespace(load_model=load), 'medium', [], 'cuda', 'zh')
+    assert batches == [8, 4, 2] and devices == ['cuda'] and device == 'cuda'
+    assert result['language'] == 'zh'
+
+
+def test_gpu_load_failure_retries_cpu_but_network_failure_does_not(monkeypatch):
+    from types import SimpleNamespace
+
+    import pytest
+
+    from bilingual_sub.adapters import whisperx_worker as worker
+    devices = []
+    def load(name, device, **kwargs):
+        devices.append(device)
+        if device == 'cuda':
+            raise RuntimeError('CUDA out of memory')
+        return SimpleNamespace(transcribe=lambda *a, **kw: {'segments': []})
+    monkeypatch.setattr(worker, 'release_accelerator', lambda _: None)
+    assert worker.transcribe_audio(SimpleNamespace(load_model=load), 'medium', [], 'cuda', 'zh')[1] == 'cpu'
+    assert devices == ['cuda', 'cpu']
+    def network(*a, **kw):
+        raise OSError('model download connection failed')
+    with pytest.raises(OSError, match='connection'):
+        worker.transcribe_audio(SimpleNamespace(load_model=network), 'medium', [], 'cuda', 'zh')
+
+
 def test_backend_protocol_shape():
     assert hasattr(WhisperXBackend, "transcribe")
     assert hasattr(WhisperXBackend, "available")
     backend = WhisperXBackend()
     assert backend.name == "whisperx"
     assert hasattr(backend, "transcribe") and hasattr(backend, "available")
+
+
+def test_verified_interpreter_is_reused(tmp_path, monkeypatch):
+    import bilingual_sub.adapters.whisperx_backend as wx
+
+    calls = []
+    python = tmp_path / "python.exe"
+    def find(control=None):
+        calls.append(True)
+        return python if len(calls) == 1 else None
+    monkeypatch.setattr(wx, "find_whisperx_python", find)
+    monkeypatch.setattr(wx, "run_asr_worker", lambda *a, **k: {
+        "language": "en", "segments": [{"start": 0, "end": 1, "text": "hello", "words": []}]})
+    wav = tmp_path / "source.wav"
+    wav.write_bytes(b"fixture")
+    backend = wx.WhisperXBackend()
+    assert backend.available() and backend.available()
+    result = backend.transcribe(wav, model_name="small", language="en", device="auto", out_json=tmp_path / "asr.json")
+    assert result.segments[0].text == "hello" and len(calls) == 1
+
+
+def test_cold_import_has_time_and_keeps_cancellation(monkeypatch, tmp_path):
+    import subprocess
+
+    import pytest
+
+    from bilingual_sub.adapters import whisper_backend as wb
+    from bilingual_sub.core.control import JobControl, JobStopped
+
+    def probe(args, **kwargs):
+        assert kwargs["timeout"] >= 60
+        assert kwargs["control"] is control
+        return subprocess.CompletedProcess(args, 0, "", "")
+    control = JobControl()
+    monkeypatch.setattr(wb, "_run_probe", probe)
+    assert wb._python_has_module(tmp_path / "python.exe", "whisperx", control)
+    control.stop()
+    with pytest.raises(JobStopped):
+        wb._python_has_module(tmp_path / "python.exe", "whisperx", control)
 
 
 def test_asr_result_holds_segments():

@@ -50,12 +50,15 @@ def transcribe_with_fallback(model, device: str, audio: str, **options):
     try:
         return model.transcribe(audio, fp16=device == "cuda", **options), device
     except (RuntimeError, NotImplementedError) as exc:
-        if device != "mps":
+        if device not in {"mps", "cuda"}:
             raise
-        logger.warning("Whisper Apple GPU inference failed (%s); retrying on CPU", exc)
+        logger.warning("Whisper %s inference failed (%s); retrying on CPU", device, exc)
         model.to("cpu")
         gc.collect()
         import torch
 
-        torch.mps.empty_cache()
+        if device == "cuda":
+            torch.cuda.empty_cache()
+        else:
+            torch.mps.empty_cache()
         return model.transcribe(audio, fp16=False, **options), "cpu"

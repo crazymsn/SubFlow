@@ -12,7 +12,7 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=["asr", "gptsovits", "whisperx"])
+    parser.add_argument("kind", choices=["asr", "gptsovits", "whisperx", "qwentts"])
     parser.add_argument("--skip-models", action="store_true")
     parser.add_argument("--backend", choices=["cpu", "cuda", "mps"],
                         help="Override the installation backend for this invocation")

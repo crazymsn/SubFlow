@@ -174,11 +174,24 @@ def _automatic_mps_runtime() -> bool:
     )
 
 
+def _automatic_cuda_runtime() -> bool:
+    from bilingual_sub.adapters.runtime_bootstrap import auto_install_enabled, torch_backend
+
+    return (not os.environ.get("SUBFLOW_GPTSOVITS_HOME", "").strip()
+            and not os.environ.get("SUBFLOW_GPTSOVITS_PYTHON", "").strip()
+            and auto_install_enabled() and torch_backend() == "cuda")
+
+
 def discover_home() -> Path | None:
     env = (os.environ.get("SUBFLOW_GPTSOVITS_HOME") or "").strip()
     if env:
         forced = Path(env).expanduser()
         return forced.resolve() if _has_api(forced) else None
+    from bilingual_sub.adapters.offline_bundle import model_home
+
+    offline = model_home('gptsovits')
+    if offline:
+        return offline
     if _automatic_mps_runtime():
         # Old installations can be Intel/Rosetta or lack SubFlow's MPS fixes.
         # An incomplete project cache must be repaired instead of bypassed.
@@ -274,7 +287,13 @@ def find_sovits_python(home: Path | None = None) -> Path | None:
     if env:
         cand = Path(env).expanduser()
         return cand.resolve() if cand.is_file() else None
-    if _automatic_mps_runtime():
+    from bilingual_sub.adapters.offline_bundle import runtime
+    from bilingual_sub.adapters.runtime_bootstrap import torch_backend
+
+    offline = runtime('gptsovits', torch_backend())
+    if offline:
+        return offline[0]
+    if _automatic_mps_runtime() or _automatic_cuda_runtime():
         from bilingual_sub.adapters.runtime_bootstrap import managed_python
 
         native = managed_python("gptsovits")
@@ -402,7 +421,7 @@ def _python_candidates(home: Path | None = None) -> list[list[str]]:
     dedicated = find_sovits_python(home)
     if dedicated is not None:
         add([str(dedicated)])
-    if os.environ.get("SUBFLOW_GPTSOVITS_PYTHON", "").strip() or _automatic_mps_runtime():
+    if os.environ.get("SUBFLOW_GPTSOVITS_PYTHON", "").strip() or _automatic_mps_runtime() or _automatic_cuda_runtime():
         return out
     if not getattr(sys, "frozen", False):
         add([sys.executable])
@@ -482,9 +501,11 @@ def runtime_config(root: Path) -> dict:
 
     from bilingual_sub.adapters.runtime_bootstrap import torch_backend
 
-    device = os.environ.get("SUBFLOW_GPTSOVITS_DEVICE", torch_backend()).strip().lower()
+    device = os.environ.get("SUBFLOW_GPTSOVITS_DEVICE", "auto").strip().lower() or "auto"
+    if device == "auto":
+        device = torch_backend()
     if device not in {"cpu", "cuda", "mps"}:
-        raise TtsUnavailable("SUBFLOW_GPTSOVITS_DEVICE must be cpu, cuda or mps")
+        raise TtsUnavailable("SUBFLOW_GPTSOVITS_DEVICE must be auto, cpu, cuda or mps")
 
     override = os.environ.get("SUBFLOW_GPTSOVITS_CONFIG", "").strip()
     if override:
@@ -567,6 +588,12 @@ def start_server(
     from bilingual_sub.adapters.runtime_bootstrap import inference_env
 
     env = inference_env()
+    from bilingual_sub.adapters.offline_bundle import model_home
+
+    if not os.environ.get('SUBFLOW_GPTSOVITS_HOME', '').strip():
+        model_home('gptsovits', verify=True, control=control)
+    env.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1', PYTHONNOUSERSITE='1',
+               PYTHONDONTWRITEBYTECODE='1')
     env["NLTK_DATA"] = str(root / "nltk_data") + os.pathsep + env.get("NLTK_DATA", "")
     log = _log_path().open("wb")
     kwargs: dict = {
@@ -639,6 +666,23 @@ def stop_servers() -> None:
             logger.exception("failed to stop GPT-SoVITS")
 
 
+def release_idle_servers() -> None:
+    """Free this client's idle model when switching to the multilingual engine."""
+    with _spawn_lock:
+        for endpoint, proc in list(_children.items()):
+            if proc not in _server_owners:
+                continue
+            try:
+                with httpx.Client(trust_env=False, timeout=2) as client:
+                    data = client.get(endpoint + "/subflow/runtime").json()
+                if data.get("busy") is not False:
+                    continue
+            except (httpx.HTTPError, ValueError, AttributeError):
+                continue
+            _children.pop(endpoint, None)
+            _stop_server(proc)
+
+
 atexit.register(stop_servers)
 
 
@@ -672,11 +716,16 @@ def ensure_running(endpoint: str | None = None, *, wait_sec: float = 180.0, cont
             from bilingual_sub.adapters.runtime_bootstrap import (
                 assets_update_needed,
                 auto_install_enabled,
+                ensure_python_env,
                 ensure_sovits_runtime,
                 source_update_needed,
             )
 
             root = discover_home()
+            if _automatic_cuda_runtime():
+                # Keep the portable model files; only provision the GPU interpreter.
+                # A bundled CPU Python must not shadow a capable NVIDIA device.
+                ensure_python_env("gptsovits", control=control, progress=progress)
             if _automatic_mps_runtime() or root is None or missing_pretrained(root) or find_sovits_python(root) is None or source_update_needed(root) or assets_update_needed(root):
                 if auto_install_enabled():
                     root = ensure_sovits_runtime(control=control, progress=progress)
@@ -719,7 +768,7 @@ def extract_ref_audio(
     video: Path,
     dest: Path,
     *,
-    start: float = 0.4,
+    start: float = 0.0,
     duration: float = 5.0,
     control=None,
 ) -> Path:
@@ -760,11 +809,11 @@ def ensure_ref_audio(video: Path, dest: Path, cues=None, *, control=None) -> Pat
 
     dest = Path(dest)
     validate_outputs({"参考音频": dest, "参考记录": dest.with_suffix(dest.suffix + ".json")}, [video])
-    start = 0.4
+    start = 0.0
     duration = 5.0
     if cues:
         for cue in cues:
-            text = f"{getattr(cue, 'zh', '')}{getattr(cue, 'en', '')}".strip()
+            text = f"{getattr(cue, 'zh', '') or ''}{getattr(cue, 'en', '') or ''}".strip()
             span = float(getattr(cue, "end", 0) or 0) - float(getattr(cue, "start", 0) or 0)
             if text and span >= 2.0:
                 start = max(0.0, float(cue.start))
@@ -772,7 +821,7 @@ def ensure_ref_audio(video: Path, dest: Path, cues=None, *, control=None) -> Pat
                 break
     checkpoint = control.wait_if_paused if control else None
     source_digest = file_digest(video, checkpoint=checkpoint)
-    key = hashlib.sha256(json.dumps(["reference-v2", source_digest, start, duration]).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps(["reference-v3", source_digest, start, duration]).encode()).hexdigest()
     if cache_digest(dest, key, control):
         return dest
     def extract(pending):
@@ -781,6 +830,16 @@ def ensure_ref_audio(video: Path, dest: Path, cues=None, *, control=None) -> Pat
             raise RuntimeError("参考音频提取期间源视频发生变化，请重试")
     produce_audio(dest, key, extract, control)
     return dest
+
+
+def automatic_reference_transcript(cues) -> str:
+    """Only use text when extraction includes that complete ASR interval exactly."""
+    for cue in cues or []:
+        text = f"{getattr(cue, 'zh', '') or ''}{getattr(cue, 'en', '') or ''}".strip()
+        span = float(cue.end) - float(cue.start)
+        if text and span >= 2:
+            return text if 3 <= span <= 8 else ''
+    return ''
 
 
 def copy_runtime_tree(src: Path, dest: Path) -> Path:

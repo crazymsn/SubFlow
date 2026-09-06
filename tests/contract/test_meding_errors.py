@@ -99,6 +99,13 @@ def test_numbering_supports_large_batches(sdk):
         ["原文"] * 100, model="m", max_en_chars=120) == ["line"] * 100
 
 
+def test_translation_character_budget_never_truncates_facts(sdk):
+    text = 'Keep all facts, including the final number 12345 and the complete ending.'
+    sdk.chat.completions.create.return_value = completion(text)
+    assert meding.OpenAIMedingClient('test').translate_batch(
+        ['原文'], model='m', max_en_chars=12) == [text]
+
+
 @pytest.mark.parametrize("error", [meding.MedingAuthError, meding.MedingServiceError, JobStopped])
 @pytest.mark.parametrize("stage", ["translate", "reflect", "adapt", "glossary"])
 def test_refinement_and_glossary_do_not_swallow_terminal_errors(error, stage):

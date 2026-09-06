@@ -9,33 +9,36 @@ from pathlib import Path
 
 from bilingual_sub.adapters.tts.base import TtsRequest, select_tts
 from bilingual_sub.adapters.tts.model_identity import ModelSnapshot, retry_model_change
+from bilingual_sub.adapters.tts.routing import preview_engine_session
 from bilingual_sub.config import user_config_dir
 from bilingual_sub.core.audio_cache import cache_digest, produce_audio
 from bilingual_sub.core.control import JobControl
+from bilingual_sub.core.dub_progress import DubProgress, Progress
 from bilingual_sub.core.output_guard import validate_outputs
 from bilingual_sub.core.resource_claims import claim_resources
 
 PREVIEW_SAMPLES = {
-    "zh": "你好，这是配音音色试听。",
-    "zh-Hans": "你好，这是配音音色试听。",
-    "zh-Hant": "你好，這是配音音色試聽。",
-    "en": "Hello, this is a voice preview.",
-    "ja": "こんにちは。これは音声の試聴です。",
-    "es": "Hola, esta es una vista previa de voz.",
-    "ru": "Здравствуйте, это пробное прослушивание голоса.",
-    "fr": "Bonjour, ceci est un aperçu de la voix.",
-    "de": "Hallo, das ist eine Stimmprobe.",
+    "zh": "您好，请问有什么能帮您？",
+    "zh-Hans": "您好，请问有什么能帮您？",
+    "zh-Hant": "您好，請問有什麼能幫您？",
+    "en": "Hello, how can I help you?",
+    "ja": "こんにちは。何かお手伝いできることはありますか？",
+    "es": "Hola, ¿en qué puedo ayudarle?",
+    "ru": "Здравствуйте, чем я могу вам помочь?",
+    "fr": "Bonjour, comment puis-je vous aider ?",
+    "de": "Guten Tag, wie kann ich Ihnen helfen?",
+    "ko": "안녕하세요. 무엇을 도와드릴까요?",
+    "yue": "您好，請問有咩可以幫到您？",
 }
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def preview_sample(lang: str) -> str:
-    code = (lang or "zh").strip() or "zh"
-    if code in PREVIEW_SAMPLES:
-        return PREVIEW_SAMPLES[code]
+    code = (lang or "zh").strip().replace("_", "-").lower() or "zh"
     if code.startswith("zh"):
-        return PREVIEW_SAMPLES["zh-Hant"] if "Hant" in code else PREVIEW_SAMPLES["zh"]
+        traditional = any(part in {"hant", "tw", "hk", "mo"} for part in code.split("-"))
+        return PREVIEW_SAMPLES["zh-Hant"] if traditional else PREVIEW_SAMPLES["zh"]
     return PREVIEW_SAMPLES.get(code.split("-", 1)[0], PREVIEW_SAMPLES["en"])
 
 
@@ -52,6 +55,7 @@ def preview_cache_path(voice: str, lang: str, provider: str = "gptsovits", extra
 
 
 @retry_model_change
+@preview_engine_session
 def synth_voice_preview(
     *,
     provider: str,
@@ -62,17 +66,28 @@ def synth_voice_preview(
     ref_audio: str = "",
     prompt_text: str = "",
     prompt_lang: str = "",
+    sample_text: str = "",
     control: JobControl | None = None,
+    on_progress: Progress = None,
 ) -> Path:
     from bilingual_sub.adapters.tts.gptsovits import tts_job_fingerprint
+    from bilingual_sub.adapters.tts.routing import (
+        ensure_running,
+        provider_endpoint,
+        resolve_provider,
+    )
 
     if control:
         control.check()
     lang, voice = lang or "zh", voice or ""
-    text = preview_sample(lang)
+    text = sample_text.strip() or preview_sample(lang)
     engine = (provider or "gptsovits").strip().lower()
     if engine in {"openai", "azure"}:
         engine = "gptsovits"
+    requested_engine = engine
+    engine = resolve_provider(engine, lang, prompt_lang)
+    endpoint = (endpoint if requested_engine == engine and engine.startswith("qwen3") and endpoint
+                else provider_endpoint(engine, endpoint))
     tts = select_tts(
         engine,
         endpoint=endpoint,
@@ -81,12 +96,15 @@ def synth_voice_preview(
         prompt_lang=prompt_lang,
     )
     effective_ref = str(getattr(tts, "ref_audio", ref_audio) or "")
+    validate_reference = getattr(tts, "_ref_path", None)
+    if callable(validate_reference):
+        validate_reference()
     model = ModelSnapshot(engine, str(getattr(tts, "endpoint", endpoint) or ""))
     booted = False
-    if engine == "gptsovits" and model.revision is None:
-        from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
-
-        ensure_running(model.endpoint or None, wait_sec=300, control=control)
+    if engine in {"gptsovits", "qwen3", "qwen3-native"} and model.revision is None:
+        with DubProgress(on_progress) as preparation:
+            preparation.set("prepare", 0, 0, 0)
+            ensure_running(engine, model.endpoint, wait_sec=300, control=control)
         model = ModelSnapshot(engine, model.endpoint)
         booted = True
     def identity():
@@ -108,10 +126,8 @@ def synth_voice_preview(
         if cached and identity() == initial:
             model.check()
             return dest
-        if engine == "gptsovits" and not booted:
-            from bilingual_sub.adapters.tts.gptsovits_runtime import ensure_running
-
-            ensure_running(str(getattr(tts, "endpoint", endpoint) or "") or None, wait_sec=300, control=control)
+        if engine in {"gptsovits", "qwen3", "qwen3-native"} and not booted:
+            ensure_running(engine, str(getattr(tts, "endpoint", endpoint) or ""), wait_sec=300, control=control)
         def synth(pending):
             model.check()
             tts.synth(TtsRequest(text=text, lang=lang, voice=voice, dest=pending,
@@ -119,5 +135,7 @@ def synth_voice_preview(
             model.check()
             if identity() != initial:
                 raise RuntimeError("试听合成期间参考音频或设置发生变化，请重试")
-        produce_audio(dest, key, synth, control)
+        with DubProgress(on_progress) as progress:
+            progress.set("synth", 1, 1, 0)
+            produce_audio(dest, key, synth, control)
     return dest

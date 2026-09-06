@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import psutil
 import pytest
-from PySide6.QtCore import QObject, QProcess, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QProcess, Signal
 from PySide6.QtWidgets import QApplication
 
 from bilingual_sub.gui import audio_player as player_module
@@ -25,6 +25,7 @@ def playback(tmp_path, pcm_wav):
     yield app, player, path, events
     player.stop()
     app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def wait_for(app, predicate):

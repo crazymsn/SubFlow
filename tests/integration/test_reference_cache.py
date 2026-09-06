@@ -56,6 +56,15 @@ def test_short_reference_extraction_keeps_previous_audio(tmp_path, pcm_wav):
     assert not list(tmp_path.glob(".subflow-output-*"))
 
 
+def test_three_second_source_is_not_shortened_by_an_arbitrary_offset(tmp_path, pcm_wav):
+    from bilingual_sub.core.audio_cache import pcm_duration
+
+    source, dest = tmp_path / "short-valid.wav", tmp_path / "reference.wav"
+    source.write_bytes(pcm_wav(3.1))
+    rt.ensure_ref_audio(source, dest)
+    assert 3 <= pcm_duration(dest) <= 3.11
+
+
 def test_cancelled_reference_extraction_keeps_previous_audio(tmp_path, monkeypatch, pcm_wav):
     source, dest = tmp_path / "source.wav", tmp_path / "reference.wav"
     source.write_bytes(pcm_wav(5))

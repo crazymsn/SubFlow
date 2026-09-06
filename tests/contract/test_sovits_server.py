@@ -54,6 +54,28 @@ def payload(**kwargs):
     return dict(text="hello", text_lang="en", ref_audio_path="ref.wav", prompt_lang="auto", **kwargs)
 
 
+@pytest.mark.parametrize("failure", ["empty_exception", "empty_generator"])
+def test_synthesis_failure_always_reports_a_meaningful_cause(api, monkeypatch, failure):
+    def run(req):
+        if failure == "empty_exception":
+            raise AssertionError()
+        yield from ()
+    monkeypatch.setattr(api.tts_pipeline, "run", run)
+    response = asyncio.run(api.tts_handle(payload()))
+    data = json.loads(response.body)
+    assert response.status_code == 400
+    assert data["Exception"].strip()
+    assert data["error_type"] in {"AssertionError", "RuntimeError"}
+    if failure == "empty_generator":
+        assert "no audio" in data["Exception"]
+
+
+def test_decoder_without_error_text_identifies_invalid_reference(api):
+    error = type("NoBackendError", (Exception,), {})()
+    response = api.synthesis_error(error)
+    assert "Reference audio could not be decoded" in json.loads(response.body)["Exception"]
+
+
 @pytest.mark.parametrize("method", ["get", "post"])
 @pytest.mark.parametrize("field,value", [
     ("text", "\n  "), ("batch_size", 0), ("top_k", -1), ("top_p", 1.1), ("top_p", -0.1),
@@ -366,22 +388,23 @@ def test_get_auxiliary_references_are_query_parameters(api, monkeypatch):
     assert seen == ["one.wav", "two.wav"]
 
 
-def test_preprocessing_failure_retries_once_on_cpu_and_closes_generators(api, monkeypatch):
+@pytest.mark.parametrize("gpu", ["mps", "cuda", "cuda:0"])
+def test_preprocessing_failure_retries_once_on_cpu_and_closes_generators(api, monkeypatch, gpu):
     calls, closed = [], []
-    api.tts_pipeline.configs.device = "mps"
+    api.tts_pipeline.configs.device = gpu
     def generate(req):
         device = api.tts_pipeline.configs.device
         calls.append(device)
         try:
-            if device == "mps":
-                raise NotImplementedError("MPS operation unavailable")
+            if device == gpu:
+                raise NotImplementedError("GPU operation unavailable")
             yield 16000, b"cpu audio"
         finally:
             closed.append(device)
     monkeypatch.setattr(api.tts_pipeline, "run", generate)
     response = asyncio.run(api.tts_handle(payload()))
     assert response.body == b"cpu audio"
-    assert calls == closed == ["mps", "cpu"]
+    assert calls == closed == [gpu, "cpu"]
     assert api.tts_pipeline.configs.is_half is False
 
 
@@ -392,6 +415,18 @@ def test_language_validation_uses_current_model_configuration(api):
     response = asyncio.run(api.tts_handle(request))
     assert response.status_code == 400
     assert "version v1" in json.loads(response.body)["message"]
+
+
+@pytest.mark.parametrize('message', ['dictionary missing', 'OFFLINE_CHECK_BLOCKED_DNS: raw.githubusercontent.com'])
+def test_resource_errors_do_not_switch_gpu_to_cpu(api, monkeypatch, message):
+    api.tts_pipeline.configs.device = 'cuda:0'
+    def fail(req):
+        raise RuntimeError(message)
+    monkeypatch.setattr(api.tts_pipeline, 'run', fail)
+    monkeypatch.setattr(api.tts_pipeline, 'reset_models', lambda **kw: pytest.fail('resource failure reloaded GPU'))
+    response = asyncio.run(api.tts_handle(payload()))
+    assert response.status_code == 400
+    assert api.tts_pipeline.configs.device == 'cuda:0'
 
 
 def test_failed_cpu_recovery_does_not_mutate_serving_config(api, monkeypatch):

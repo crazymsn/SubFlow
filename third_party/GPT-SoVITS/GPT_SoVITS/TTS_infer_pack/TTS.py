@@ -33,7 +33,7 @@ from transformers import AutoModelForMaskedLM, AutoTokenizer
 from tools.audio_sr import AP_BWE
 from tools.subflow_audio import InvalidAudioError, float_to_pcm16, validate_sample_rate
 from tools.subflow_model_transaction import atomic_config_write, model_update
-from tools.subflow_validation import NoSpeechError, SynthesisStopped, require_speech_segments, validate_request
+from tools.subflow_validation import NoSpeechError, SynthesisStopped, accelerator_error, require_speech_segments, validate_request
 from tools.i18n.i18n import I18nAuto, scan_language_list
 from TTS_infer_pack.text_segmentation_method import splits
 from TTS_infer_pack.TextPreprocessor import TextPreprocessor
@@ -1474,9 +1474,9 @@ class TTS:
             raise
         except Exception as e:
             traceback.print_exc()
-            if (str(self.configs.device) == "mps" and isinstance(e, (RuntimeError, NotImplementedError))
+            if (str(self.configs.device).split(":")[0] in {"mps", "cuda"} and accelerator_error(e)
                     and not streaming_mode and not return_fragment):
-                print("Apple GPU inference failed; retrying this request once on CPU.")
+                print("GPU inference failed; retrying this request once on CPU.")
                 self.reset_models(device="cpu", is_half=False)
                 yield from self.run(inputs)
                 return

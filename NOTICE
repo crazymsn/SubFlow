@@ -9,6 +9,21 @@ This product includes or is inspired by the following open-source projects:
   and Excel logs were not copied.
 - Whisper / openai-whisper — MIT
 - WhisperX — BSD-4-Clause
+- Qwen3-TTS / qwen-tts — Apache-2.0
+  https://github.com/QwenLM/Qwen3-TTS
+  Local standard voices: Qwen3-TTS-12Hz-0.6B-CustomVoice.
+  Local voice cloning: Qwen3-TTS-12Hz-0.6B-Base.
+  SubFlow synthetic voice references were generated using official Apache-2.0
+  Qwen3-TTS-12Hz-1.7B-VoiceDesign (revision in voices/voices.json).
+  These designed voices are not official Qwen named speaker presets.
+  Complete desktop builds include pinned official models and their Apache-2.0 license.
+  Slim/source builds download the same assets on first use.
+- GPT-SoVITS — MIT; patched upstream source and pretrained v2 inference assets.
+  https://github.com/RVC-Boss/GPT-SoVITS
+  SubFlow modifications include device fallback, request lifecycle, reference
+  validation and writable user caches for portable desktop installations.
 - yt-dlp — Unlicense
 - json_repair — MIT
-- FFmpeg — LGPL/GPL (external binary, not bundled)
+- FFmpeg — LGPL/GPL depending on build (bundled with desktop releases).
+  https://ffmpeg.org/legal.html
+  Distribution-specific licenses remain with the Python packages and binaries.

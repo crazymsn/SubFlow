@@ -118,6 +118,8 @@ def test_run_dub_loads_saved_gptsovits_settings(monkeypatch, tmp_path: Path):
             str(video),
             "--no-burn",
             "--dub",
+            "--tts-provider",
+            "gptsovits",
             "--source-lang",
             "zh",
             "--target-lang",

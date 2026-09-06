@@ -28,6 +28,8 @@ wordsegment
 rotary-embedding-torch
 ToJyutping
 g2pk2
+python-mecab-ko==1.3.7
+python-mecab-ko-dic==2.1.1.post2
 ko-pron
 opencc-python-reimplemented
 x-transformers

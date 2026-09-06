@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -19,7 +18,8 @@ from bilingual_sub.adapters.whisper_backend import default_whisper_model
 from bilingual_sub.core.langs import SINGLE_SUB_MODES, SOURCE_LANGS, SUB_LANGS
 from bilingual_sub.gui.widgets.brand_check import BrandCheck
 from bilingual_sub.gui.widgets.color_chip import ColorChip
-from bilingual_sub.gui.widgets.field import FitScroll, expanding, field_col
+from bilingual_sub.gui.widgets.field import expanding, field_col
+from bilingual_sub.gui.widgets.section import section_head
 from bilingual_sub.i18n import tr
 
 
@@ -42,22 +42,12 @@ def build_deck(win) -> QWidget:
     shell.setContentsMargins(0, 0, 0, 0)
     shell.setSpacing(0)
 
-    scroll = FitScroll()
-    scroll.setObjectName("formScroll")
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-    viewport = scroll.viewport()
-    viewport.setObjectName("formViewport")
-    viewport.setAutoFillBackground(False)
-
     inner = QWidget()
     inner.setObjectName("formInner")
     layout = QVBoxLayout(inner)
-    layout.setContentsMargins(18, 16, 18, 12)
+    layout.setContentsMargins(16, 14, 16, 14)
     layout.setSpacing(10)
+    layout.addWidget(section_head(win, "ui_subtitles", "02", "ui_subtitles_hint"))
 
     win.lbl_source = win._field_label(tr("source"))
     win.lbl_target = win._field_label(tr("target"))
@@ -98,28 +88,12 @@ def build_deck(win) -> QWidget:
     win._slot_mode = field_col(win.lbl_mode, expanding(win.mode_combo))
     win._slot_asr = field_col(win.lbl_asr, expanding(win.asr_backend_combo))
     win._slot_model = field_col(win.rec_lab, expanding(win.whisper_combo))
-    burn_wrap = QWidget()
-    burn_wrap.setObjectName("fieldCol")
-    burn_col = QVBoxLayout(burn_wrap)
-    burn_col.setContentsMargins(0, 0, 0, 0)
-    burn_col.setSpacing(0)
-    burn_col.addStretch(1)
-    burn_col.addWidget(win.burn_check, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
-    win._slot_burn = burn_wrap
-    win._deck_slots = [
-        win._slot_source,
-        win._slot_target,
-        win._slot_mode,
-        win._slot_asr,
-        win._slot_model,
-        win._slot_burn,
-    ]
-
     win.deck_grid = QGridLayout()
     win.deck_grid.setHorizontalSpacing(8)
     win.deck_grid.setVerticalSpacing(8)
-    win._deck_wide = True
-    apply_deck_width(win, True)
+    for index, slot in enumerate((win._slot_source, win._slot_target, win._slot_mode)):
+        win.deck_grid.addWidget(slot, 0, index)
+        win.deck_grid.setColumnStretch(index, 1)
     layout.addLayout(win.deck_grid)
 
     win.lbl_api = win._field_label(tr("api"))
@@ -157,78 +131,71 @@ def build_deck(win) -> QWidget:
     win.lbl_model = win._field_label(tr("models"))
     win._section_labels["models"] = win.lbl_model
 
-    key_row = QHBoxLayout()
-    key_row.setSpacing(8)
-    key_row.addWidget(field_col(win.lbl_api, expanding(win.key_edit)), 3)
-    key_row.addWidget(win.save_btn, 0, Qt.AlignmentFlag.AlignBottom)
-    key_row.addWidget(win.clear_key_btn, 0, Qt.AlignmentFlag.AlignBottom)
-    key_row.addWidget(win.api_portal_btn, 0, Qt.AlignmentFlag.AlignBottom)
-    key_row.addWidget(field_col(win.lbl_model, expanding(win.model_combo)), 3)
-    key_row.addWidget(win.fetch_models_btn, 0, Qt.AlignmentFlag.AlignBottom)
-    layout.addLayout(key_row)
+    settings = QFrame()
+    settings.setObjectName("moreBox")
+    advanced = QVBoxLayout(settings)
+    advanced.setContentsMargins(0, 10, 0, 4)
+    advanced.setSpacing(12)
+    recognition = QHBoxLayout()
+    recognition.setSpacing(12)
+    recognition.addWidget(win._slot_asr, 1)
+    recognition.addWidget(win._slot_model, 1)
+    advanced.addLayout(recognition)
+    advanced.addWidget(field_col(win.lbl_api, expanding(win.key_edit)))
+    key_actions = QHBoxLayout()
+    key_actions.setSpacing(8)
+    for button in (win.save_btn, win.clear_key_btn, win.api_portal_btn):
+        key_actions.addWidget(button)
+    key_actions.addStretch(1)
+    advanced.addLayout(key_actions)
+    model_row = QHBoxLayout()
+    model_row.setSpacing(8)
+    model_row.addWidget(field_col(win.lbl_model, expanding(win.model_combo)), 1)
+    model_row.addWidget(win.fetch_models_btn, 0, Qt.AlignmentFlag.AlignBottom)
+    advanced.addLayout(model_row)
 
     win.key_status = QLabel("")
     win.key_status.setObjectName("hint")
     win.key_status.setWordWrap(True)
     win.key_status.setVisible(False)
-    layout.addWidget(win.key_status)
+    advanced.addWidget(win.key_status)
 
     win.asr_help = QLabel(tr("asr_help"))
     win.asr_help.setObjectName("help")
     win.asr_help.hide()
 
-    win.more_btn = QToolButton()
-    win.more_btn.setObjectName("moreToggle")
-    win.more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    win.more_btn.setCheckable(True)
-    win.more_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-    win.more_btn.setArrowType(Qt.ArrowType.RightArrow)
-    win.more_btn.setText(tr("more"))
-    win.more_btn.toggled.connect(win._toggle_more)
-    layout.addWidget(win.more_btn, 0, Qt.AlignmentFlag.AlignLeft)
-    layout.addWidget(build_more_drawer(win))
-
-    scroll.setWidget(inner)
-    shell.addWidget(scroll, 1)
-    win.form_scroll = scroll
+    voice_card = build_voice_card(win)
+    checks = QHBoxLayout()
+    checks.setSpacing(16)
+    checks.addWidget(win.burn_check)
+    checks.addWidget(win.color_check)
+    checks.addWidget(win.refine_check)
+    checks.addStretch(1)
+    layout.addLayout(checks)
+    layout.addWidget(win.color_box)
+    shell.addWidget(inner)
+    win.voice_card = voice_card
+    win.more_box = settings
+    # Essential recognition and translation controls are always available.
+    win.settings_card = QFrame()
+    win.settings_card.setObjectName("settingsCard")
+    settings_shell = QVBoxLayout(win.settings_card)
+    settings_shell.setContentsMargins(18, 8, 18, 10)
+    settings_shell.setSpacing(2)
+    settings_shell.addWidget(section_head(win, "ui_settings", "04"))
+    settings_shell.addWidget(settings)
     return frame
 
 
-def apply_deck_width(win, wide: bool) -> None:
-    if getattr(win, "_deck_wide", None) == wide and win.deck_grid.count():
-        return
-    win._deck_wide = wide
-    while win.deck_grid.count():
-        win.deck_grid.takeAt(0)
-    slots = win._deck_slots
-    if wide:
-        for index, slot in enumerate(slots):
-            win.deck_grid.addWidget(slot, 0, index)
-            win.deck_grid.setColumnStretch(index, 1)
-        for index in range(6, win.deck_grid.columnCount()):
-            win.deck_grid.setColumnStretch(index, 0)
-    else:
-        for index, slot in enumerate(slots[:3]):
-            win.deck_grid.addWidget(slot, 0, index)
-        for index, slot in enumerate(slots[3:]):
-            win.deck_grid.addWidget(slot, 1, index)
-        for index in range(3):
-            win.deck_grid.setColumnStretch(index, 1)
-        for index in range(3, 6):
-            win.deck_grid.setColumnStretch(index, 0)
-
-
-def build_more_drawer(win) -> QFrame:
+def build_voice_card(win) -> QFrame:
     drawer = QFrame()
-    drawer.setObjectName("moreBox")
+    drawer.setObjectName("voiceCard")
     more = QGridLayout(drawer)
-    more.setContentsMargins(0, 4, 0, 4)
+    more.setContentsMargins(16, 14, 16, 14)
     more.setHorizontalSpacing(12)
     more.setVerticalSpacing(10)
-    rule = QFrame()
-    rule.setObjectName("rule")
-    rule.setFixedHeight(1)
-    more.addWidget(rule, 0, 0, 1, 6)
+    heading = section_head(win, "ui_voice", "03")
+    more.addWidget(heading, 0, 0, 1, 6)
 
     win.color_check = BrandCheck(tr("sub_color"))
     win.color_check.setChecked(False)
@@ -238,14 +205,7 @@ def build_more_drawer(win) -> QFrame:
     win.dub_check.toggled.connect(win._toggle_dub)
     win.refine_check = BrandCheck(tr("refine"))
     win.refine_check.setChecked(False)
-    checks = QHBoxLayout()
-    checks.setContentsMargins(0, 0, 0, 0)
-    checks.setSpacing(20)
-    checks.addWidget(win.color_check, 0)
-    checks.addWidget(win.dub_check, 0)
-    checks.addWidget(win.refine_check, 0)
-    checks.addStretch(1)
-    more.addLayout(checks, 1, 0, 1, 6)
+    heading.layout().addWidget(win.dub_check, 0, Qt.AlignmentFlag.AlignVCenter)
 
     win.color_box = QWidget()
     win.color_box.setObjectName("moreTrack")
@@ -261,17 +221,16 @@ def build_more_drawer(win) -> QFrame:
     color_row.addWidget(field_col(win.lbl_zh_color, expanding(win.zh_color_btn)), 1)
     color_row.addWidget(field_col(win.lbl_en_color, expanding(win.en_color_btn)), 1)
     win.color_box.setVisible(False)
-    more.addWidget(win.color_box, 2, 0, 1, 6)
+    win.voice_note = QLabel(tr("ui_original_voice"))
+    win.voice_note.setObjectName("voiceNote")
+    win.voice_note.setWordWrap(True)
+    more.addWidget(win.voice_note, 2, 0, 1, 6)
 
     win.dub_box = QWidget()
     win.dub_box.setObjectName("moreTrack")
     dub = QVBoxLayout(win.dub_box)
-    dub.setContentsMargins(0, 2, 0, 0)
+    dub.setContentsMargins(0, 0, 0, 0)
     dub.setSpacing(8)
-    rule = QFrame()
-    rule.setObjectName("rule")
-    rule.setFixedHeight(1)
-    dub.addWidget(rule)
     win.lbl_tts = win._field_label(tr("tts_provider"))
     win.lbl_voice = win._field_label(tr("tts_voice"))
     win.lbl_endpoint = win._field_label(tr("tts_endpoint"))
@@ -279,6 +238,8 @@ def build_more_drawer(win) -> QFrame:
     win.lbl_prompt = win._field_label(tr("tts_prompt"))
     win.lbl_preview = win._field_label(tr("tts_preview"))
     win.tts_combo = QComboBox()
+    win.tts_combo.addItem("Qwen3-TTS · 标准音色", "qwen3-native")
+    win.tts_combo.addItem("Qwen3-TTS · 克隆原声", "qwen3")
     win.tts_combo.addItem("GPT-SoVITS", "gptsovits")
     win.tts_combo.currentIndexChanged.connect(win._sync_tts_fields)
     win.tts_voice_edit = QComboBox()
@@ -315,8 +276,14 @@ def build_more_drawer(win) -> QFrame:
     win.tts_prompt_edit.setObjectName("ttsPromptEdit")
     win.tts_prompt_edit.setPlaceholderText(tr("tts_prompt_ph"))
     win.tts_prompt_edit.editingFinished.connect(win._persist_sovits)
+    win.lbl_sample = win._field_label(tr("tts_sample"))
+    win.tts_sample_edit = QLineEdit()
+    win.tts_sample_edit.setObjectName("ttsSampleEdit")
+    win.tts_sample_edit.setToolTip(tr("tts_sample_tip"))
     win.tts_sovits_status = QLabel("")
-    win.tts_sovits_status.setObjectName("help")
+    win.tts_sovits_status.setObjectName("serviceStatus")
+    win.tts_sovits_status.setTextFormat(Qt.TextFormat.PlainText)
+    win.tts_sovits_status.setWordWrap(True)
     win.tts_sovits_probe_btn = QPushButton(tr("tts_sovits_probe"))
     win.tts_sovits_probe_btn.setObjectName("ghost")
     win.tts_sovits_probe_btn.setFixedHeight(36)
@@ -338,13 +305,17 @@ def build_more_drawer(win) -> QFrame:
     track.addWidget(win._slot_tts, 2)
     track.addWidget(win._slot_voice, 3)
     track.addWidget(win._slot_endpoint, 3)
-    track.addWidget(win._slot_preview, 0)
     dub.addLayout(track)
     win.sovits_box = QWidget()
     win.sovits_box.setObjectName("moreTrack")
     sovits = QVBoxLayout(win.sovits_box)
     sovits.setContentsMargins(0, 8, 0, 0)
     sovits.setSpacing(8)
+    sample_row = QHBoxLayout()
+    sample_row.setSpacing(12)
+    sample_row.addWidget(field_col(win.lbl_sample, expanding(win.tts_sample_edit)), 1)
+    sample_row.addWidget(win._slot_preview, 0)
+    sovits.addLayout(sample_row)
     ref_track = QHBoxLayout()
     ref_track.setContentsMargins(0, 0, 0, 0)
     ref_track.setSpacing(12)
@@ -358,7 +329,8 @@ def build_more_drawer(win) -> QFrame:
     actions.setSpacing(8)
     actions.addWidget(win.tts_sovits_probe_btn, 0)
     actions.addWidget(win.tts_sovits_start_btn, 0)
-    actions.addWidget(win.tts_sovits_status, 1)
+    actions.addStretch(1)
+    sovits.addWidget(win.tts_sovits_status)
     sovits.addLayout(actions)
     dub.addWidget(win.sovits_box)
     win.dub_box.setVisible(False)
@@ -366,6 +338,4 @@ def build_more_drawer(win) -> QFrame:
     for col in range(6):
         more.setColumnStretch(col, 1)
     drawer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    drawer.hide()
-    win.more_box = drawer
     return drawer

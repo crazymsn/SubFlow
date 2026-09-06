@@ -1,26 +1,28 @@
 # 安装与运行环境
 
-[返回文档索引](README.md) · 适用于 **SubFlow 语幕 1.3.46**
+1.3.52 起，桌面构建脚本默认预装全部三个配音引擎的模型和运行环境；构建机负责首次下载，用户无需为配音再下载。完整包的空间需求、CPU/GPU 回退、分卷发布及离线验收见[完整配音包指南](offline-voices.md)。
+
+[返回文档索引](README.md) · 适用于 **SubFlow 语幕 1.3.60**
 
 ## Windows / macOS 客户端
 
-从 [1.3.46 Release](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.46) 下载正式客户端。下载、校验和第一次处理见 [桌面指南](desktop.md)。Actions 中的开发工件不等同于新的正式发布。
+从 [1.3.60 Release](https://github.com/crazymsn/SubFlow/releases/tag/v1.3.60) 下载正式客户端。下载、校验和第一次处理见 [桌面指南](desktop.md)。Actions 中的开发工件不等同于新的正式发布。
 
-- Windows x64：`SubFlow-Windows-x64.zip`，整夹解压并运行 `SubFlow/SubFlow.exe`。
-- Apple Silicon：`SubFlow-macOS-arm64.zip`。
-- Intel Mac：`SubFlow-macOS-x64.zip`。
+- Windows x64：`SubFlow-Windows-x64.7z.*`，整夹解压并运行 `SubFlow/SubFlow.exe`。
+- Apple Silicon：`SubFlow-macOS-arm64.7z.*`。
+- Intel Mac：`SubFlow-macOS-x64.7z.*`。
 
 Mac 解压后将 SubFlow.app 放入应用程序目录。当前构建没有 Apple 开发者公证，首次可能需要在系统安全设置允许打开。支持范围以构建所用 macOS 为准（Apple Silicon 14+、Intel 15+）。Windows 建议 Windows 10/11 x64。
 
-客户端内置 FFmpeg 和 uv 安装器。首次启动自动准备用户私有的 Python 3.11、匹配设备的推理依赖及 GPT-SoVITS 模型，首次识别下载 Whisper 权重。无需用户预装 Python、CUDA、Git 或编译器；首次需要联网。请预留约 15–20 GB 空间（下载缓存和模型各占空间）。断网前应完成所需模型准备；翻译接口仍需网络。
+完整客户端内置 FFmpeg、三种配音模式的模型和四套 Python 运行环境。配音不需要首次下载；识别与对齐模型按需准备，翻译仍需联网。下载同一平台全部分卷并从 `.001` 解压，为客户端、压缩包、识别模型与媒体另留足够空间。
 
 无独立显卡也能运行。CPU 建议先用 tiny/base/small 和短片确认速度，较大模型与长视频可能耗时较长。GPU 为可选项；默认环境不会安装 CUDA 驱动。
 
 ## Apple M 系列 GPU
 
-下载原生 `SubFlow-macOS-arm64.zip`，不要使用 Intel 包或 Rosetta 启动。客户端会自动安装原生 arm64 Python 和带 MPS 的 PyTorch / torchaudio，默认让 Whisper 识别与 GPT-SoVITS 配音使用 Apple GPU，无需安装 CUDA。MPS 使用 float32；频谱预处理中的不兼容运算在 CPU 完成，神经网络仍在 GPU 执行。
+下载原生 `SubFlow-macOS-arm64.7z.*`，不要使用 Intel 包或 Rosetta 启动。完整客户端已内置原生 arm64 Python 和带 MPS 的 PyTorch / torchaudio，默认让 Whisper 识别、Qwen 和 GPT-SoVITS 配音优先使用 Apple GPU，无需安装 CUDA。MPS 使用 float32；频谱预处理中的不兼容运算在 CPU 完成，神经网络仍在 GPU 执行。
 
-首次安装及旧版缓存升级自动完成。GPU 不可用时回退 CPU；Whisper 或非流式配音遇到 GPU 运算失败时会记录原因并重试 CPU。日志中的 `device=mps` 及本地配音 API `/subflow/runtime` 可查看实际设备，避免把回退 CPU 当成 GPU 验收。
+源码 / 精简包首次安装及旧版缓存升级自动完成；完整包优先使用随包环境。GPU 不可用时回退 CPU；Whisper 或非流式配音遇到 GPU 运算失败时会记录原因并重试 CPU。日志中的 `device=mps` 及本地配音 API `/subflow/runtime` 可查看实际设备，避免把回退 CPU 当成 GPU 验收。
 
 默认自动 MPS 配音使用项目源码和受管理的原生解释器。新建服务前检查缓存环境，旧 venv 或电脑上的其他 GPT-SoVITS 不会代替它；环境检查或修复失败会显示错误。显式设置 `SUBFLOW_GPTSOVITS_HOME` / `SUBFLOW_GPTSOVITS_PYTHON`，或关闭自动安装时，仍按手动整合包设置处理。已经运行的兼容 API 服务仍可连接，实际计算设备需查看服务报告。
 
@@ -38,7 +40,7 @@ python scripts/check-apple-gpu.py --require-gpu
 
 ## Docker Compose
 
-默认使用已发布的 `crazymsn/subflow:1.3.46`，支持 Linux amd64 / arm64 CPU。宿主机只需 Docker 和 Compose，首次模型下载后复用持久化卷。完整部署、PowerShell 命令、无令牌中文示例、模型卷、更新与源码镜像构建见 [Docker 指南](docker.md)。
+默认使用 `crazymsn/subflow:latest`，支持 Linux amd64 / arm64 CPU。宿主机只需 Docker 和 Compose，首次模型下载后复用持久化卷。完整部署、PowerShell 命令、无令牌中文示例、模型卷、更新与源码镜像构建见 [Docker 指南](docker.md)。
 
 ## 源码运行
 
@@ -58,7 +60,12 @@ subflow gui
 # 可提前准备环境
 python scripts/prepare-runtime.py asr
 python scripts/prepare-runtime.py gptsovits
+python scripts/prepare-runtime.py qwentts
 ```
+
+`qwentts` 准备 Qwen3-TTS 的独立依赖环境，模型按所选模式在首次配音时自动下载并校验，每个模型约 2.5 GB。标准音色（默认）的缓存目录为受管理环境根目录下的 `qwen3-native-0.6b`，服务地址为 `http://127.0.0.1:19882`，可通过 `SUBFLOW_QWEN_NATIVE_URL` 指定已启动的兼容标准音色服务。原声克隆的缓存目录为 `qwen3-tts-0.6b`，服务地址为 `http://127.0.0.1:9881`，对应变量为 `SUBFLOW_QWEN_TTS_URL`。两者共用独立依赖环境，模型和音频缓存分开。
+
+环境遵循 `SUBFLOW_TORCH_BACKEND=auto/cuda/mps/cpu`；自动优先 CUDA / Apple MPS，无可用 GPU 时使用 CPU。CPU 可运行但速度取决于硬件和文本长度，Qwen3-TTS 路径尚未完成 Apple M1 实机验收。GPT-SoVITS 的地址配置单独保留。CLI 可用 `--tts-provider qwen3-native --tts-voice Aiden` 选择标准音色，或用 `qwen3` 选择克隆模式。
 
 主程序、Whisper、GPT-SoVITS、可选 WhisperX 使用隔离环境，避免依赖互相覆盖。WhisperX 不可用时可回退标准 Whisper。
 
@@ -77,13 +84,17 @@ python scripts/prepare-runtime.py gptsovits
 
 ## 自动安装设置
 
+当前源码与本地修复客户端默认使用 `auto`：Windows / Linux x64 检测可用的 NVIDIA CUDA 驱动后安装 CUDA 版 PyTorch；Apple Silicon 原生客户端安装 MPS 环境；其他设备使用 CPU。CUDA 环境独立于旧 CPU 环境，已有配音模型继续复用。驱动需要由系统正确安装，无须另装 CUDA Toolkit。完整包已预装目标平台依赖，以上自动安装规则主要适用于源码与精简包。
+
+Windows 的 GPU 加速目前指 NVIDIA CUDA；AMD / Intel 显卡使用 CPU。GPU 内存不足或算子不兼容时，标准 Whisper 和非流式 GPT-SoVITS 会记录错误并重试 CPU。Mac 的 WhisperX 和 Docker 仍使用 CPU；Apple GPU 请用原生客户端的标准 Whisper。
+
 | 环境变量 | 用途 |
 | --- | --- |
 | SUBFLOW_AUTO_INSTALL=0 | 禁止自动安装；须提前准备完整运行环境 |
 | SUBFLOW_RUNTIME_DIR | Python、依赖和安装日志缓存目录 |
 | SUBFLOW_GPTSOVITS_HOME | GPT-SoVITS 源码、模型及语言数据目录 |
-| SUBFLOW_TORCH_BACKEND | 原生 Apple Silicon 默认 mps，其余默认 cpu；可设 cpu 禁用自动 GPU，Win/Linux x64 可选 cuda |
-| SUBFLOW_GPTSOVITS_DEVICE | 可设 mps / cpu / cuda，默认跟随平台的推理后端 |
+| SUBFLOW_TORCH_BACKEND | 默认 auto：可用 NVIDIA CUDA → cuda，Apple Silicon → mps，其余 → cpu；设 cpu 可禁用自动 GPU |
+| SUBFLOW_GPTSOVITS_DEVICE | auto / mps / cpu / cuda，默认跟随自动选择的推理后端 |
 | SUBFLOW_SOVITS_AUTOSTART=0 | 禁用桌面启动时配音预热；需要配音时仍会按需准备 |
 | SUBFLOW_GPTSOVITS_TIMEOUT | 配音请求超时秒数，默认 1800；使用正数 |
 | SUBFLOW_PYTHON / SUBFLOW_WHISPER_PYTHON | 显式选择识别解释器，前者非空时优先；无效路径会报错 |
@@ -100,19 +111,23 @@ python -m pip install -e ".[gui,dev,packaging]"
 ```
 
 ```powershell
-# Windows 社区包：用户首次自动安装
-./scripts/build-windows.ps1 -SourceOnly
+# Windows 完整包：收集三种配音模式和四套运行环境
+./scripts/build-windows.ps1
 ```
 
-上述准备命令缓存到用户目录，不会自动把缓存收进客户端包。Windows 不加 `-SourceOnly` 时仅收集仓库内 GPT-SoVITS 目录已有的可分发文件，不能据此认定新用户可以完全离线运行；社区发布使用 `-SourceOnly` 和首次联网自动安装。
+当前完整包构建会准备并收集 Qwen 标准/设计音色、Qwen 原声克隆、GPT-SoVITS 模型，以及 Qwen、GPT-SoVITS、Whisper、WhisperX 四套运行环境。识别模型按需下载；网络翻译仍需服务连接。`-SourceOnly` 仅用于不内置环境和模型的 Windows 开发包，不能作为离线完整包发布。
 
 ```bash
-# macOS 社区包（构建机需 brew install ffmpeg-full）
+# macOS 原生完整包（构建机需 Python 3.11+、brew install ffmpeg-full）
 bash scripts/build-macos.sh
 ```
 
-推送 main 自动运行 Windows x64、macOS arm64/x64 的测试、对应 CPU/MPS 环境安装、打包与真实启动检查，以及 Docker 构建检查。Apple GPU 探测报告单独记录依赖是否支持 MPS、GPU 是否可分配内存以及计算检查结果；托管虚拟机不能使用 GPU 时不会标记为 GPU 验收通过。真实 Mac 的严格验收应运行 `python scripts/check-apple-gpu.py --require-gpu`，再进行实际视频识别和配音。推送 v* 标签且所有检查成功后自动上传 ZIP 到 Releases。社区包不携带用户配置、API Key、Cookie 或预下载的模型权重。
+Mac 构建脚本创建隔离的构建环境，要求构建机、Python 和目标架构一致，禁止通过 Rosetta 生成 arm64 包。Apple M 包使用支持 MPS/CPU 的环境，Intel 包使用 CPU 环境；WhisperX 的 CTranslate2 在 Mac 使用 CPU。
+
+`release-clients.yml` 由手动运行或推送 `v*` 标签触发，检查 Windows x64、macOS arm64/x64 客户端及 Docker。普通推送 main 不触发这个发布流程。成功的标签发布上传完整包的 `.7z.*` 分卷，须下载同一平台全部分卷后解压。完整包携带分发所需模型，但不能携带用户配置、API Key 或 Cookie。
+
+构建成功与托管虚拟机上的组件检查不代表真实 Apple GPU 验收通过。请按 [Mac 实机验收文档](mac-self-test.md) 在 M1 等真实设备运行内置环境检查、实际视频识别及三种配音模式，并保留设备信息和报告。
 
 ## 开发与验收
 
-源码检查及 PR 流程见 [贡献指南](../CONTRIBUTING.md)。当前发布结果见 [1.3.46 验收](release-1.3.46.md)，真实 Apple GPU 检查按 [M1 清单](mac-self-test.md) 执行。仅文档更新不会改变既有客户端包或版本标签。
+源码检查及 PR 流程见 [贡献指南](../CONTRIBUTING.md)。当前发布结果见 [1.3.60 验收](release-1.3.60.md)，真实 Apple GPU 检查按 [M1 清单](mac-self-test.md) 执行。仅文档更新不会改变既有客户端包或版本标签。

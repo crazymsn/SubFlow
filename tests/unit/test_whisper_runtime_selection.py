@@ -38,8 +38,10 @@ def runtime(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("host_importable", [False, True])
-def test_automatic_mps_always_validates_native_runtime(runtime, monkeypatch, host_importable):
+@pytest.mark.parametrize("backend", ["mps", "cuda"])
+def test_automatic_gpu_always_validates_native_runtime(runtime, monkeypatch, host_importable, backend):
     wav, managed, events = runtime
+    monkeypatch.setattr(rt, "torch_backend", lambda: backend)
     if not host_importable:
         monkeypatch.setitem(sys.modules, "whisper", None)
     assert wb.transcribe(wav) == ["external result"]

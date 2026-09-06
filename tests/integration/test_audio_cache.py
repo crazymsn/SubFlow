@@ -185,13 +185,17 @@ def test_fitted_audio_changed_later_in_job_is_rejected_before_mix(tmp_path, monk
     class Provider:
         name = "fake"
         def synth(self, req, **kwargs):
-            nonlocal calls
-            calls += 1
             req.dest.write_bytes(pcm_wav(0.6))
-            if calls == 2:
-                first = next((tmp_path / "tts").glob("*.fit.wav"))
-                first.write_bytes(pcm_wav(0.2))
             return req.dest
+    original = d.fit_clip
+    def fit(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        original(*args, **kwargs)
+        if calls == 2:
+            first = next((tmp_path / "tts").glob("*.fit.wav"))
+            first.write_bytes(pcm_wav(0.2))
+    monkeypatch.setattr(d, 'fit_clip', fit)
     monkeypatch.setattr(d, "mix_timeline", lambda *a, **kw: pytest.fail("must reject before mix"))
     with pytest.raises(RuntimeError, match="混音前配音音频"):
         d.dub_cues([Cue(0, 1, "你好", "Hello"), Cue(1, 2, "再见", "Goodbye")],

@@ -95,7 +95,8 @@ def test_pair_keeps_one_line_per_language():
     geo = resolve_play_layout(preset.style, play)
     ass, srt = render_ass_srt([Cue(0.0, 2.0, zh, en)], preset, play_res=play, mode="bilingual")
     payloads = _dialogue_payloads(ass)
-    assert ass.count("Dialogue:") == 2
+    assert ass.count("Dialogue:") >= 2
+    assert "\\fsc" not in ass
     for payload in payloads:
         assert r"\N" not in payload
         is_zh = "\\b1" in payload
@@ -155,7 +156,7 @@ def test_long_cues_stay_inside_every_common_frame():
     for play in frames:
         geo = resolve_play_layout(preset.style, play)
         ass, srt = render_ass_srt(cues, preset, play_res=play)
-        assert r"\N" in ass or "\\fscx" in ass
+        assert ass.count("Dialogue:") > 2 and "\\fsc" not in ass
         assert "\n" in srt.split("-->", 1)[1]
         for payload in _dialogue_payloads(ass):
             is_zh = "\\b1" in payload

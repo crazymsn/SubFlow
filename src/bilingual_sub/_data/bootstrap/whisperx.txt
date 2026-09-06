@@ -1,4 +1,5 @@
 whisperx==3.3.1
+setuptools<81
 numpy<2
 transformers==4.51.3
 huggingface-hub<1

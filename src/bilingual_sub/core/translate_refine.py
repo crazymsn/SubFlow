@@ -31,7 +31,7 @@ class RefineStats(TranslateStats):
 
 
 def refine_cache_key(source_lang: str, target_lang: str, text: str, *, glossary_block: str = "") -> str:
-    return "refine-v2|" + translation_cache_key(source_lang, target_lang, text,
+    return "refine-v3|" + translation_cache_key(source_lang, target_lang, text,
         glossary_block=glossary_block, max_en_chars=cpl_limit(target_lang))
 
 

@@ -185,13 +185,13 @@ def test_single_subtitle_modes():
     assert job_needs_dub("zh", "zh", "zh", enable_dub=True, tts_provider="gptsovits") is False
     assert job_needs_dub("zh", "zh", "zh", enable_dub=False, tts_provider="gptsovits") is False
     assert job_needs_dub("zh", "zh", "en", enable_dub=False, tts_provider="none") is True
-    assert effective_tts_provider("zh", "zh", "en") == "gptsovits"
+    assert effective_tts_provider("zh", "zh", "en") == "qwen3-native"
     assert effective_tts_provider("zh", "zh", "en", tts_provider="openai") == "gptsovits"
     assert effective_tts_provider("zh", "zh", "zh") == "none"
     assert effective_tts_provider("zh", "zh", "zh", enable_dub=True, tts_provider="gptsovits") == "none"
-    assert effective_tts_provider("zh", "en", "zh") == "gptsovits"
+    assert effective_tts_provider("zh", "en", "zh") == "qwen3-native"
     assert effective_tts_provider("zh", "zh", "zh", enable_dub=True, tts_provider="none") == "none"
-    assert coerce_requested_tts("none", enable_dub=True) == "gptsovits"
+    assert coerce_requested_tts("none", enable_dub=True) == "qwen3-native"
     assert coerce_requested_tts("openai", enable_dub=False) == "gptsovits"
     assert coerce_requested_tts("none", enable_dub=False) == "none"
     assert (

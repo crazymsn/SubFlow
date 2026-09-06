@@ -62,6 +62,36 @@ def test_failed_new_input_cannot_resume_from_old_transcript(job, monkeypatch):
     assert "version 2" in cfg.output_srt.read_text()
 
 
+def test_translation_retry_reuses_recognition_and_saved_work(job, monkeypatch):
+    from dataclasses import replace
+
+    from bilingual_sub.core.translate import TranslateStats
+    from bilingual_sub.models import Cue
+
+    cfg, settings, calls, _, _ = job
+    cfg.target_lang, cfg.subtitle_mode = "fr", "bilingual"
+    # Avoid speech synthesis in this translation checkpoint contract.
+    monkeypatch.setattr(p, "job_needs_dub", lambda *a, **k: False)
+    attempts = []
+    def translate(cues, **kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise RuntimeError("translation service disconnected")
+        text = "你好" if kwargs.get("target_lang") == "zh" else "Bonjour"
+        return [Cue(c.start, c.end, c.zh, text) for c in cues], TranslateStats(), []
+    monkeypatch.setattr(p, "translate_cues", translate)
+    ready = []
+    with pytest.raises(RuntimeError, match="disconnected"):
+        p.run(cfg, settings, on_work_ready=ready.append)
+    original = (cfg.work_dir / "transcript.json").read_bytes()
+    result = p.run(replace(cfg, resume_from="translate", work_dir=ready[0]), settings)
+    assert calls == {"asr": 1, "silence": 1}
+    # A bilingual job may translate both caption and spoken-target languages.
+    assert len(attempts) >= 2 and not result.missing_en
+    assert (cfg.work_dir / "transcript.json").read_bytes() == original
+    assert "你好" in cfg.output_srt.read_text(encoding="utf-8")
+
+
 def test_cancelled_rewind_cannot_skip_the_failed_stage(job, monkeypatch):
     cfg, settings, calls, _, extract = job
     p.run(cfg, settings)
