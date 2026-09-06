@@ -1,6 +1,6 @@
 # SubFlow 语幕
 
-本地语音识别、字幕翻译、视频烧录与多语种配音。支持 Windows、Apple M 系列 / Intel Mac，以及 Docker Compose。
+本地语音识别、字幕翻译、视频烧录与多语种配音。支持 Windows、M 系列 / Intel Mac 以及 Docker 等多种方式。
 
 **版本 1.3.60** · [下载完整客户端](https://github.com/crazymsn/SubFlow/releases/latest) · [Docker Hub](https://hub.docker.com/r/crazymsn/subflow) · [使用文档](docs/README.md) · [更新记录](CHANGELOG.md)
 
