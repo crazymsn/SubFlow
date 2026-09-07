@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/merge-macos-dmg.sh"
-NAME = "SubFlow-1.3.65-Apple-M-arm64.dmg"
+NAME = "SubFlow-1.3.60-Apple-M-arm64.dmg"
 
 
 def prepare(root):

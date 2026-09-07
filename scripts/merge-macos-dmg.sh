@@ -5,7 +5,7 @@ export LC_ALL=C
 
 ARCH="${1:-$(uname -m)}"
 DIR="${2:-$(cd "$(dirname "$0")" && pwd)}"
-VERSION="${3:-1.3.65}"
+VERSION="${3:-1.3.60}"
 case "$ARCH" in
   arm64) FLAVOR="Apple-M-arm64" ;;
   x86_64) FLAVOR="Intel-x86_64" ;;
