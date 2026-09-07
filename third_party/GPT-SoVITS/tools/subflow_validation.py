@@ -50,3 +50,22 @@ def accelerator_error(error):
         token in str(error).lower()
         for token in ('cuda', 'cublas', 'cudnn', 'mps', 'metal', 'gpu', 'out of memory', 'not implemented')
     )
+
+
+def configure_mps_audio(module, device):
+    """Use SubFlow's shared exact convolution tiling on older Apple GPUs."""
+    if str(device).split(':')[0] != 'mps':
+        return
+    import importlib.util
+    import os
+    from pathlib import Path
+
+    source = os.environ.get('SUBFLOW_BOOTSTRAP_DIR')
+    root = Path(source) if source else Path(__file__).resolve().parents[3] / 'src/bilingual_sub/_data/bootstrap'
+    path = root / 'qwen_mps.py'
+    if not path.is_file():
+        raise RuntimeError('SubFlow MPS audio compatibility module is missing')
+    spec = importlib.util.spec_from_file_location('subflow_mps_audio', path)
+    compat = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compat)
+    compat.install_convolutions(module)

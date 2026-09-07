@@ -1,9 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 # 语幕 SubFlow desktop client — slim, no Torch/UPX/ICU (they break Qt6Core on Windows)
 from pathlib import Path
+import os
 import shutil
 import sys
 import platform
+import subprocess
 import tomllib
 
 ROOT = Path(SPECPATH).resolve().parent
@@ -114,6 +116,16 @@ try:
 except Exception:
     pass
 
+# YouTube challenge scripts must work without downloading code on first use.
+# Fail the build if this required dependency is absent.
+from PyInstaller.utils.hooks import collect_all
+import yt_dlp_ejs
+
+ejs_datas, ejs_bins, ejs_hidden = collect_all("yt_dlp_ejs")
+datas += ejs_datas
+occ_bins += ejs_bins
+hidden += ejs_hidden
+
 excludes = [
     "tkinter",
     "matplotlib",
@@ -146,11 +158,24 @@ from bilingual_sub.adapters.installer import find_uv
 
 external_bins = [(str(find_uv()), ".")]
 if sys.platform == "darwin":
+    node = os.environ.get("SUBFLOW_NODE_BINARY") or shutil.which("node")
+    if not node:
+        raise RuntimeError("Missing Node.js >=22; set SUBFLOW_NODE_BINARY for the target architecture")
+    node_version = subprocess.check_output([node, "--version"], text=True).strip()
+    if int(node_version.lstrip("v").split(".")[0]) < 22:
+        raise RuntimeError(f"YouTube requires Node.js >=22, got {node_version}")
+    external_bins.append((str(Path(node).resolve()), "."))
+    node_license = Path(node).resolve().parents[1] / "LICENSE"
+    if not node_license.is_file():
+        raise RuntimeError("Node.js distribution LICENSE is required alongside its bin directory")
+    datas.append((str(node_license), "licenses/node"))
     for name in ("ffmpeg", "ffprobe"):
         binary = shutil.which(name)
         if not binary:
             raise RuntimeError(f"Missing {name}; brew install ffmpeg-full before building")
         external_bins.append((str(Path(binary).resolve()), "."))
+    for binary, _ in external_bins:
+        subprocess.run(["lipo", binary, "-verify_arch", platform.machine()], check=True)
 
 a = Analysis(
     [str(ROOT / "packaging" / "gui_entry.py")],

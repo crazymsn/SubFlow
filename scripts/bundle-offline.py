@@ -122,6 +122,30 @@ def inventory(home):
     return result
 
 
+def refresh_sovits_sources(root, data):
+    """Reuse weights/interpreters, but ship this checkout's inference fixes."""
+    source = ROOT / 'third_party/GPT-SoVITS'
+    home = (root / data['models']['gptsovits']['path']).resolve()
+    if not home.is_relative_to(root.resolve()):
+        raise RuntimeError('Reusable GPT-SoVITS path escapes its directory')
+    tracked = subprocess.run(['git', 'ls-files', '-z', 'third_party/GPT-SoVITS'], cwd=ROOT,
+        capture_output=True, check=True).stdout.decode('utf-8').split('\0')
+    if not any(p.endswith('/api_v2.py') for p in tracked):
+        raise RuntimeError('The vendored GPT-SoVITS source must be tracked in Git')
+    for relative in filter(None, tracked):
+        item = ROOT / relative
+        name = item.relative_to(source)
+        target = home / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # A reused hardlink must not rewrite the source bundle.
+        target.unlink(missing_ok=True)
+        shutil.copy2(item, target)
+        content = target.read_bytes()
+        data['models']['gptsovits']['files'][name.as_posix()] = {
+            'size': len(content), 'sha256': hashlib.sha256(content).hexdigest(),
+        }
+
+
 def nltk_compatibility(home):
     # g2p-en checks the .zip names at import time, even when NLTK can read the
     # extracted directories. Ship valid archives as well to avoid its downloader.
@@ -238,5 +262,14 @@ if __name__ == '__main__':
             parser.error('Source and destination must be separate trees')
         validate_reusable_bundle(source, args.backend)
         copy_tree(source, target, hardlink=args.hardlink)
+        from bilingual_sub.__version__ import __version__
+
+        manifest_path = target / 'bundle.json'
+        data = json.loads(manifest_path.read_text(encoding='utf-8'))
+        refresh_sovits_sources(target, data)
+        data['version'] = __version__
+        # Large future manifests may also have been copied as hardlinks.
+        manifest_path.unlink()
+        manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
     else:
         bundle(args.dest, hardlink=args.hardlink)

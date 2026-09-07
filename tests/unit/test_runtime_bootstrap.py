@@ -62,11 +62,14 @@ def test_lock_released_on_failure(tmp_path):
 def test_external_audio_env_uses_bundled_ffmpeg(monkeypatch, tmp_path):
     monkeypatch.setenv('PYTHONPATH', 'foreign-python')
     monkeypatch.setenv('PYTHONHOME', 'foreign-home')
+    monkeypatch.setenv('ORT_DISABLE_TELEMETRY', '0')
     binary = tmp_path / 'ffmpeg'
     monkeypatch.setattr('bilingual_sub.adapters.ffmpeg.find_ffmpeg', lambda: str(binary))
     env = rt.inference_env()
     assert 'PYTHONPATH' not in env and 'PYTHONHOME' not in env
     assert env['PATH'].startswith(str(tmp_path))
+    assert env['ORT_DISABLE_TELEMETRY'] == '1'
+    assert rt.install_env()['ORT_DISABLE_TELEMETRY'] == '1'
 
 
 def test_assets_reject_zip_traversal(tmp_path):

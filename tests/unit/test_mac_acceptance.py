@@ -61,6 +61,19 @@ def test_cpu_check_does_not_claim_gpu_or_overwrite_evidence(app_bundle, tmp_path
     assert not report['ok'] and not report['gpu_components_verified']
 
 
+def test_cold_start_timeout_preserves_partial_diagnostics(app_bundle, tmp_path, monkeypatch):
+    def run(args, **kwargs):
+        assert kwargs['timeout'] == 321
+        raise audit.subprocess.TimeoutExpired(args, 321, output=b'loading model', stderr=b'cold import')
+    monkeypatch.setattr(audit.subprocess, 'run', run)
+    output = tmp_path / 'evidence'
+    report = audit.run_checks(app_bundle[0], output, 'mps', timeout=321)
+    assert not report['ok']
+    assert report['worker_timeout_seconds'] == 321
+    assert (output / 'qwentts.log').read_text() == 'loading model\ncold import'
+    assert all('321s' in item['error'] for item in report['runtimes'])
+
+
 def test_app_and_external_paths_are_protected(app_bundle, tmp_path, monkeypatch):
     app, root, data = app_bundle
     with pytest.raises(ValueError, match='outside'):
@@ -138,3 +151,33 @@ def test_reusing_bundle_rejects_wrong_architecture_and_legacy_missing_asr(app_bu
     write()
     with pytest.raises(RuntimeError, match='whisperx'):
         module['validate_reusable_bundle'](root, 'mps')
+
+
+def test_reused_payload_refreshes_source_and_hashes_without_modifying_original(tmp_path, monkeypatch):
+    import hashlib
+    import os
+
+    module = runpy.run_path(str(ROOT / 'scripts/bundle-offline.py'))
+    checkout = tmp_path / 'checkout'
+    source = checkout / 'third_party/GPT-SoVITS/api_v2.py'
+    source.parent.mkdir(parents=True)
+    source.write_text('new inference fix')
+    original = tmp_path / 'original.py'
+    original.write_text('old code')
+    root = tmp_path / 'bundle'
+    home = root / 'models/GPT-SoVITS'
+    home.mkdir(parents=True)
+    os.link(original, home / 'api_v2.py')
+    weights = home / 'weights.pth'
+    weights.write_bytes(b'weights')
+    data = {'models': {'gptsovits': {'path': 'models/GPT-SoVITS', 'files': {'weights.pth': {'unchanged': True}}}}}
+    refresh = module['refresh_sovits_sources']
+    monkeypatch.setitem(refresh.__globals__, 'ROOT', checkout)
+    monkeypatch.setattr(module['subprocess'], 'run', lambda *a, **k: SimpleNamespace(
+        stdout=b'third_party/GPT-SoVITS/api_v2.py\0'))
+    refresh(root, data)
+    assert original.read_text() == 'old code'
+    assert (home / 'api_v2.py').read_text() == 'new inference fix'
+    assert weights.read_bytes() == b'weights'
+    assert data['models']['gptsovits']['files']['api_v2.py']['sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert data['models']['gptsovits']['files']['weights.pth'] == {'unchanged': True}

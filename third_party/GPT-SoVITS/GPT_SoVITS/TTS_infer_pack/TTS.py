@@ -33,7 +33,7 @@ from transformers import AutoModelForMaskedLM, AutoTokenizer
 from tools.audio_sr import AP_BWE
 from tools.subflow_audio import InvalidAudioError, float_to_pcm16, validate_sample_rate
 from tools.subflow_model_transaction import atomic_config_write, model_update
-from tools.subflow_validation import NoSpeechError, SynthesisStopped, accelerator_error, require_speech_segments, validate_request
+from tools.subflow_validation import NoSpeechError, SynthesisStopped, accelerator_error, configure_mps_audio, require_speech_segments, validate_request
 from tools.i18n.i18n import I18nAuto, scan_language_list
 from TTS_infer_pack.text_segmentation_method import splits
 from TTS_infer_pack.TextPreprocessor import TextPreprocessor
@@ -598,6 +598,7 @@ class TTS:
 
         vits_model = vits_model.to(self.configs.device)
         vits_model = vits_model.eval()
+        configure_mps_audio(vits_model, self.configs.device)
 
         self.vits_model = vits_model
         if self.configs.is_half and str(self.configs.device) != "cpu":

@@ -14,6 +14,9 @@ from bilingual_sub.adapters.owned_process import owned_process
 from bilingual_sub.core.control import JobControl, JobStopped, wait_for_process
 
 UV_VERSION = "0.11.8"
+# macOS may inspect a newly mounted executable before its first instruction,
+# particularly through Rosetta. Keep cancellation active during this allowance.
+UV_VERSION_TIMEOUT = 60.0 if sys.platform == "darwin" else 5.0
 
 
 def _package_uv() -> Path | None:
@@ -28,7 +31,7 @@ def _package_uv() -> Path | None:
 def _uv_version(path: Path, control: JobControl | None = None) -> str:
     if control:
         control.wait_if_paused()
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + UV_VERSION_TIMEOUT
     def check_timeout() -> None:
         if time.monotonic() >= deadline:
             raise RuntimeError("uv 版本检查超时")

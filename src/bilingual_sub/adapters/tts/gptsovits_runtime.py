@@ -122,9 +122,16 @@ def _frozen_roots() -> list[Path]:
 
 
 def bundled_src() -> Path | None:
+    from bilingual_sub.adapters.offline_bundle import model_home
+
+    offline = model_home("gptsovits")
+    if offline is not None:
+        return offline if (offline / "api_v2.py").is_file() else None
     for path in _frozen_roots():
         if (path / "api_v2.py").is_file():
             return path
+    if getattr(sys, "frozen", False):
+        return None  # A release must never pass by finding the build checkout.
     repo = _repo_root() / "third_party" / "GPT-SoVITS"
     if (repo / "api_v2.py").is_file():
         return repo

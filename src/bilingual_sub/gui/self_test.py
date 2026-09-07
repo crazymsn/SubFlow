@@ -20,7 +20,8 @@ def run(report: Path) -> None:
         env.update({name: "" for name in ("SUBFLOW_API_KEY", "MEDING_API_KEY", "SUBFLOW_GPTSOVITS_REF",
                                          "SUBFLOW_GPTSOVITS_PROMPT", "SUBFLOW_GPTSOVITS_PROMPT_LANG")})
         with patch.dict(os.environ, env), patch.object(keyring, "get_password", return_value=None), \
-                patch.object(keyring, "set_password"), patch.object(keyring, "delete_password"):
+                patch.object(keyring, "set_password"), patch.object(keyring, "delete_password"), \
+                patch("bilingual_sub.secrets.store._macos_get_password", return_value=None):
             _run(report, profile)
 
 
@@ -28,17 +29,38 @@ def _run(report: Path, profile: Path) -> None:
     os.environ["SUBFLOW_SOVITS_AUTOSTART"] = "0"
     os.environ["SUBFLOW_AUTO_INSTALL"] = "0"
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QThread
     from PySide6.QtWidgets import QApplication
 
+    from bilingual_sub.gui.app import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    win = MainWindow()
+    try:
+        checks = _check_window(app, win, profile)
+        report.write_text(json.dumps({"ok": True, "checks": checks}, indent=2), encoding="utf-8")
+    except Exception as exc:
+        report.write_text(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                                    indent=2), encoding="utf-8")
+        raise
+    finally:
+        # An assertion can fire before the hardware probe finishes. Follow the
+        # normal cooperative shutdown, then retain Qt ownership until it ends.
+        win.close()
+        for worker in win.findChildren(QThread):
+            worker.wait()
+        app.processEvents()
+        win.close()
+        app.processEvents()
+
+
+def _check_window(app, win, profile: Path) -> dict:
     from bilingual_sub.adapters.ffmpeg import find_ffmpeg, find_ffprobe, run_cmd
     from bilingual_sub.adapters.runtime_bootstrap import bootstrap_assets, find_uv
     from bilingual_sub.adapters.tts.gptsovits_runtime import bundled_src
     from bilingual_sub.config import user_config_dir
-    from bilingual_sub.gui.app import MainWindow
     from bilingual_sub.gui.error_dialog import ErrorDialog
 
-    app = QApplication([])
-    win = MainWindow()
     win.source_lang_combo.setCurrentIndex(win.source_lang_combo.findData("zh"))
     win.target_lang_combo.setCurrentIndex(win.target_lang_combo.findData("zh-Hant"))
     assert not win.dub_check.isChecked()
@@ -61,7 +83,7 @@ def _run(report: Path, profile: Path) -> None:
     assert "3/8" in stage_text("dub|synth|3|8|67")
     assert "01:07" in stage_text("dub|synth|3|8|67")
     assert all((bootstrap_assets() / name).is_file() for name in
-               ("qwentts.txt", "qwen-model.json", "qwen-native-model.json", "download_qwen.py", "qwen_server.py"))
+               ("qwentts.txt", "qwen-model.json", "qwen-native-model.json", "download_qwen.py", "qwen_server.py", "qwen_mps.py"))
     import hashlib
 
     from bilingual_sub.adapters.tts.qwen import DESIGNED_VOICES
@@ -116,6 +138,25 @@ def _run(report: Path, profile: Path) -> None:
     checks["asr_worker_scripts"] = [str(path) for path in workers]
     for name, binary in (("ffmpeg", find_ffmpeg()), ("ffprobe", find_ffprobe()), ("uv", str(find_uv()))):
         checks[name] = run_cmd([binary, "--version" if name == "uv" else "-version"]).stdout.splitlines()[0]
+    from importlib.resources import files
+
+    from yt_dlp import YoutubeDL
+    from yt_dlp.postprocessor.ffmpeg import FFmpegPostProcessor
+
+    from bilingual_sub.adapters.ytdlp import js_runtime_map, ydl_options
+
+    runtime = js_runtime_map().get("node", {}).get("path")
+    assert runtime, "YouTube Node.js runtime is missing"
+    checks["youtube_js_runtime"] = run_cmd([runtime, "--version"]).stdout.strip()
+    for name in ("core.min.js", "lib.min.js"):
+        assert files("yt_dlp_ejs").joinpath("yt", "solver", name).read_bytes()
+    checks["youtube_ejs"] = "bundled core and library present"
+    opts = ydl_options(profile / "download-tools", "https://www.youtube.com/", impersonate=False)
+    with YoutubeDL(opts) as downloader:
+        merger = FFmpegPostProcessor(downloader)
+        assert merger.available, "yt-dlp cannot execute its configured FFmpeg"
+        assert merger.executable == find_ffmpeg()
+    checks["download_merger"] = "yt-dlp executes bundled FFmpeg"
     from bilingual_sub.adapters.download_worker import run_download_worker
     from bilingual_sub.adapters.ytdlp import DownloadError
     from bilingual_sub.core.control import JobControl
@@ -136,6 +177,4 @@ def _run(report: Path, profile: Path) -> None:
         finally:
             deadline.cancel()
         checks["download_worker"] = "isolated worker started and returned a structured error"
-    win.close()
-    app.processEvents()
-    report.write_text(json.dumps({"ok": True, "checks": checks}, indent=2), encoding="utf-8")
+    return checks

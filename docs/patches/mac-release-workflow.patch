@@ -1,0 +1,49 @@
+diff --git a/.github/workflows/release-clients.yml b/.github/workflows/release-clients.yml
+index 4b05b37..34ed04d 100644
+--- a/.github/workflows/release-clients.yml
++++ b/.github/workflows/release-clients.yml
+@@ -54,6 +54,11 @@ jobs:
+         run: |
+           brew install ffmpeg-full sevenzip
+           echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
++      - name: Install macOS YouTube JavaScript runtime
++        if: runner.os == 'macOS'
++        uses: actions/setup-node@v4
++        with:
++          node-version: '24.15.0'
+       - name: Install build and test tools
+         run: python -m pip install -e '.[gui,dev,packaging]'
+       - name: Tests
+@@ -121,8 +126,20 @@ jobs:
+       - name: Archive macOS
+         if: runner.os == 'macOS'
+         run: |
+-          7zz a -t7z -mx=1 -ms=off -mmt=2 -v1900m SubFlow-${{ matrix.label }}.7z ./dist/SubFlow.app
++          python scripts/check-macos-links.py dist/SubFlow.app
++          7zz a -t7z -mx=1 -ms=off -mmt=2 -snl -v1900m SubFlow-${{ matrix.label }}.7z ./dist/SubFlow.app
+           7zz t SubFlow-${{ matrix.label }}.7z.001
++          QA_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/subflow-release.XXXXXX")"
++          trap 'rm -rf "$QA_DIR"' EXIT
++          # PyInstaller links Resources to ../Frameworks within the app;
++          # modern 7-Zip requires explicit permission for these parent links.
++          7zz x -snld20 -y "-o$QA_DIR" SubFlow-${{ matrix.label }}.7z.001
++          python scripts/check-macos-links.py "$QA_DIR/SubFlow.app"
++          codesign --verify --deep --strict "$QA_DIR/SubFlow.app"
++          # Run the actual extracted artifact outside the checkout. Build-host
++          # sources and pre-archive symlinks must not hide release defects.
++          REPORT="$PWD/release-smoke.json"
++          (cd "$QA_DIR" && ./SubFlow.app/Contents/MacOS/SubFlow --self-test "$REPORT")
+       - uses: actions/upload-artifact@v4
+         with:
+           name: SubFlow-${{ matrix.label }}
+@@ -133,7 +150,9 @@ jobs:
+         if: always()
+         with:
+           name: smoke-${{ matrix.label }}
+-          path: client-smoke.json
++          path: |
++            client-smoke.json
++            release-smoke.json
+           if-no-files-found: ignore
+   linux-process-lifecycle:
+     runs-on: ubuntu-latest

@@ -103,9 +103,20 @@ def test_bad_reference_does_not_trigger_gpu_fallback(server, monkeypatch):
         assert response.status_code == 500 and "参考音频不存在" in response.json()["detail"]
 
 
-def test_standard_voice_http_needs_no_reference(server):
+@pytest.mark.parametrize('target', ['cpu', 'mps', 'cuda:0'])
+def test_standard_voice_http_needs_no_reference(server, monkeypatch, target):
+    from contextlib import contextmanager
+
     module, _ = server
     module.native_voice = True
+    module.device = target
+    sampling = []
+    @contextmanager
+    def stable_sampling():
+        sampling.append('enter')
+        yield
+        sampling.append('exit')
+    monkeypatch.setitem(sys.modules, 'qwen_mps', SimpleNamespace(stable_mps_sampling=stable_sampling))
     calls = []
     def generate(**kwargs):
         calls.append(kwargs)
@@ -119,6 +130,7 @@ def test_standard_voice_http_needs_no_reference(server):
         assert len(sf.read(io.BytesIO(response.content))[0]) == 2400
     assert module.model.prompts == 0
     assert calls[0]['speaker'] == 'Aiden' and calls[0]['language'] == 'English'
+    assert sampling == (['enter', 'exit'] if target == 'mps' else [])
 
 
 def test_designed_voice_switches_model_and_preserves_service_revision(server, monkeypatch, tmp_path):
@@ -190,7 +202,7 @@ def test_accelerator_priority(server, monkeypatch, requested, cuda, mps, expecte
 
 
 @pytest.mark.parametrize('target', ['cuda:0', 'mps', 'cpu'])
-def test_loader_places_model_on_selected_device(server, tmp_path, target):
+def test_loader_places_model_on_selected_device(server, tmp_path, target, monkeypatch):
     module, _ = server
     module.model_home = tmp_path
     module.torch.cuda = SimpleNamespace(is_available=lambda: True, empty_cache=lambda: None, is_bf16_supported=lambda: True)
@@ -198,8 +210,12 @@ def test_loader_places_model_on_selected_device(server, tmp_path, target):
     module.torch.float32, module.torch.float16, module.torch.bfloat16 = 'fp32', 'fp16', 'bf16'
     seen = []
     module.Qwen3TTSModel = SimpleNamespace(from_pretrained=lambda *a, **kw: seen.append(kw) or object())
+    installed = []
+    monkeypatch.setitem(sys.modules, "qwen_mps", SimpleNamespace(
+        install_audio_convolutions=lambda model: installed.append(model)))
     module.load_model(target)
+    assert bool(installed) == (target == "mps")
+    assert seen[0]["attn_implementation"] == ("eager" if target == "mps" else "sdpa")
     assert module.device == target
     assert seen[0]['device_map'] == target
     assert seen[0]['dtype'] == ('bf16' if target == 'cuda:0' else 'fp32')
-    assert seen[0]['attn_implementation'] == 'sdpa'

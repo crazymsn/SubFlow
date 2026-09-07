@@ -70,6 +70,8 @@ def _isolate_user_state(tmp_path, monkeypatch):
     monkeypatch.setattr(keyring, "get_password", lambda service, user: credentials.get((service, user)))
     monkeypatch.setattr(keyring, "set_password", lambda service, user, value: credentials.__setitem__((service, user), value))
     monkeypatch.setattr(keyring, "delete_password", lambda service, user: credentials.pop((service, user), None))
+    monkeypatch.setattr("bilingual_sub.secrets.store._macos_get_password",
+                        lambda service, user: keyring.get_password(service, user))
 
 
 @pytest.fixture(autouse=True)

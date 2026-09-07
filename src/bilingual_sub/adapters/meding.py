@@ -10,8 +10,9 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Protocol
 
-from openai import APIConnectionError, APIStatusError, OpenAI
+from openai import APIConnectionError, APIStatusError, DefaultHttpxClient, OpenAI
 
+from bilingual_sub.adapters.system_proxy import macos_proxy
 from bilingual_sub.core.control import JobControl
 
 try:
@@ -150,7 +151,9 @@ SYSTEM_PROMPT = """You translate {source_name} spoken subtitles to {target_name}
 class OpenAIMedingClient:
     def __init__(self, api_key: str, *, control: JobControl | None = None) -> None:
         # SDK paths are relative to .../v1 (see docs/api-meding.md)
+        proxy = macos_proxy(MEDING_BASE_URL)
         self._client = OpenAI(api_key=api_key, base_url=f"{MEDING_BASE_URL}/v1",
+                              **({'http_client': DefaultHttpxClient(proxy=proxy)} if proxy else {}),
                               timeout=60.0, max_retries=0)
         self._control = control
 

@@ -1,16 +1,16 @@
 # Mac 实机验收手册
 
-[返回文档索引](README.md) · 1.3.60 源码与完整包构建 · Apple M / Intel
+[返回文档索引](README.md) · 1.3.61 本地修复构建（尚未发布到 GitHub） · Apple M / Intel
 
 本手册重点面向你的 **M1 MacBook Air**，也提供 Intel Mac 的 CPU 分支。Windows 测试、源码测试、CI 成功都不能替代 Mac 实机验收。请按本手册记录实际结果；尚未执行的项目填“未测”，不要填“通过”。
 
 ## 1. 先确认拿到的是哪个版本
 
-- 使用 1.3.60 完整 Mac 包及随包工具 `mac_acceptance.py`，不要使用旧版本验证本轮修复。
+- 使用 1.3.61 完整 Mac 包及随包工具 `mac_acceptance.py`，不要使用旧版本验证本轮修复。
 - M1 / M2 / M3 等 Apple M 设备使用 **arm64** 包；Intel 使用 **x64** 包。M1 不要使用 Intel 包或 Rosetta 启动。
 - 完整包包含三个配音模式的模型、四套独立 Python 环境、FFmpeg 和 ffprobe。最终使用者无需安装 Python、Homebrew、pip 或 CUDA Toolkit。
 - Whisper / WhisperX 所选识别模型和各语种对齐模型仍会按需下载；云端翻译需要网络与有效令牌。不要把“配音模型内置”理解为所有功能都可离线。
-- 本轮尚未提供新构建的 Mac 二进制附件；需要取得当前源码构建的 Mac 包。文末给出维护者构建步骤。已有 Windows 包不能复制到 Mac 执行。
+- 2026-09-07 已在 M1 / macOS 14.5 构建本地 1.3.61 arm64 完整包；实测范围、证据和剩余限制见 [本轮验收记录](qa-1.3.61-m1.md)。此版本尚未上传 GitHub；已有 Windows 包不能复制到 Mac 执行。
 
 ## 2. 测试前准备
 
@@ -40,7 +40,7 @@ codesign --verify --deep --strict --verbose=2 "$APP" 2> "$QA_DIR/codesign.txt"
 
 ## 3. 随包环境与计算检查
 
-先退出 SubFlow。这一步不下载模型、不调用翻译接口、不改用户配置，也不执行真实配音；它检查包中四套解释器及代表性计算操作。
+先退出 SubFlow。这一步不下载模型、不调用翻译接口、不改用户配置，也不执行真实配音；它检查包中四套解释器及代表性计算操作，包括不等头数注意力和超过 65536 采样点的音频卷积。
 
 ```bash
 QA_PY="$APP/Contents/Resources/offline/runtimes/qwentts/bin/python3"
@@ -233,3 +233,30 @@ python scripts/check-offline-voices.py dist/SubFlow.app/Contents/Resources/offli
 ```
 
 Intel 只运行 CPU 命令。输出目录应由本次测试专用，重试时使用新名字。`--voice-bank` 可追加全部设计音色，耗时更长。明确 `--backend mps` 或 `--require-gpu` 时回退 CPU 会判定失败。自动脚本仅检查合成成功与实际设备，听感仍按第 6 节人工评估。
+
+
+### 复用完整包并保留其他平台产物
+
+已有同架构完整离线包时，可复用模型和解释器；脚本仍会刷新当前源码中的 GPT-SoVITS 修复及资源摘要：
+
+```bash
+SUBFLOW_BUILD_PYTHON=/path/to/native/python3 \
+SUBFLOW_REUSE_OFFLINE=/Applications/SubFlow.app/Contents/Resources/offline \
+SUBFLOW_DIST_DIR="$PWD/dist-macos" \
+bash scripts/build-macos.sh
+```
+
+Mac 归档必须保留 Qt framework 的符号链接。发布前验证实际解压后的应用，不能仅验证压缩前目录：
+
+```bash
+cd dist-macos
+7zz a -t7z -mx=1 -ms=off -mmt=2 -snl -v1900m SubFlow-macos-arm64.7z ./SubFlow.app
+7zz t SubFlow-macos-arm64.7z.001
+7zz x -snld20 -o/tmp/SubFlow-extracted SubFlow-macos-arm64.7z.001
+# 解压后执行第 2、3 节，并运行：
+/path/to/extracted/SubFlow.app/Contents/MacOS/SubFlow --self-test /tmp/release-smoke.json
+```
+
+本次使用的 7-Zip 26.03 默认链接保护会忽略 PyInstaller 从 Resources 指向 `../Frameworks` 的应用内部链接。对已校验的本项目完整分卷使用 `-snld20` 才能完整还原。发布 CI 在打包前和解压后用 `scripts/check-macos-links.py` 检查所有链接：禁止绝对路径、应用外目标、悬空链接及循环链接。
+
+父目录链接和间接链接需要 `-snld20`，这是 [7-Zip 作者给出的参数](https://sourceforge.net/p/sevenzip/bugs/2593/)。只对来源及摘要已核实的本项目包使用，并在解压后运行链接检查和签名验证。

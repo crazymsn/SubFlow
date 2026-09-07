@@ -38,6 +38,7 @@ def offline(event, args):
         raise RuntimeError('OFFLINE_CHECK_BLOCKED_DNS: ' + str(args[0]))
 sys.addaudithook(offline)
 script = sys.argv[1]
+sys.path.insert(0, str(Path(script).resolve().parent))
 sys.argv = sys.argv[1:]
 runpy.run_path(script, run_name='__main__')
 '''
@@ -159,6 +160,11 @@ def main():
                         raise RuntimeError('Run qwen-native first to create the neutral test reference')
                     payload.update(ref_audio_path=str(reference), prompt_text=text, prompt_lang='en',
                                    text_split_method='cut5', media_type='wav', streaming_mode=False)
+                if engine == 'gptsovits':
+                    # Short punctuation-delimited phrases miss the pre-macOS
+                    # 15.1 convolution limit. Force a single longer waveform.
+                    payload['text'] = ('This longer sentence checks that local speech synthesis preserves every word '
+                                       'and produces complete audio even when the output is more than a few seconds long.')
                 response = client.post(endpoint + '/tts', json=payload)
                 response.raise_for_status()
                 with wave.open(io.BytesIO(response.content)) as audio:

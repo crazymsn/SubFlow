@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -127,6 +128,17 @@ def load_github_mark(logical_px: int, host: QWidget | None = None, theme: str = 
 
 def load_app_icon(host: QWidget | None = None) -> QIcon:
     """Taskbar / window icon: official lockup on a white plate."""
+    if sys.platform == "darwin":
+        mac_icon = brand_dir() / "subflow-macos.png"
+        if mac_icon.is_file():
+            compact = brand_dir() / "subflow-macos-small.png"
+            icon = QIcon()
+            for size in (16, 32, 64, 128, 256, 512, 1024):
+                source = compact if size <= 64 and compact.is_file() else mac_icon
+                pix = QPixmap(str(source)).scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                                                  Qt.TransformationMode.SmoothTransformation)
+                icon.addPixmap(pix)
+            return icon
     icon = QIcon()
     ico = icon_path()
     if ico.suffix.lower() == ".ico" and ico.is_file():

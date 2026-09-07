@@ -350,6 +350,8 @@ def _cookie_field_names(path: Path) -> set[str]:
     except OSError:
         return names
     for line in text.splitlines():
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_"):]
         if not line or line.startswith("#"):
             continue
         parts = line.split("\t")
@@ -652,17 +654,21 @@ def _runtime_bin_dir() -> Path:
 
 
 def _which_js_runtime(name: str) -> str | None:
+    suffix = ".exe" if os.name == "nt" else ""
+    if getattr(sys, "frozen", False):
+        roots = [Path(sys.executable).resolve().parent]
+        if getattr(sys, "_MEIPASS", None):
+            roots.append(Path(sys._MEIPASS))
+        for root in roots:
+            bundled = root / f"{name}{suffix}"
+            if bundled.is_file():
+                return str(bundled)
     exe = shutil.which(name)
     if exe:
         return exe
-    suffix = ".exe" if os.name == "nt" else ""
     local = _runtime_bin_dir() / f"{name}{suffix}"
     if local.is_file():
         return str(local)
-    if getattr(sys, "frozen", False):
-        bundled = Path(sys.executable).resolve().parent / f"{name}{suffix}"
-        if bundled.is_file():
-            return str(bundled)
     return None
 
 
@@ -960,6 +966,19 @@ def ydl_options(
         "js_runtimes": runtimes,
         "remote_components": ["ejs:github", "ejs:npm"],
     }
+    from bilingual_sub.adapters.ffmpeg import FfmpegError, find_ffmpeg
+    from bilingual_sub.adapters.system_proxy import is_loopback_url
+
+    # Finder does not inherit shell PATH entries. The merger must use the same
+    # bundled FFmpeg as the rest of the app, including inside its child worker.
+    try:
+        opts["ffmpeg_location"] = find_ffmpeg()
+    except FfmpegError:
+        pass
+
+    # A system proxy can otherwise intercept local media and return a 503.
+    if is_loopback_url(url):
+        opts["proxy"] = ""
     if is_youtube_url(url):
         opts["extractor_args"] = {
             "youtube": {
@@ -1055,12 +1074,26 @@ def download_attempts(url: str) -> Iterator[dict]:
     yield emit({"impersonate": True})
 
 
+def _cookie_location_hint() -> str:
+    if sys.platform == "darwin":
+        return "~/.config/subflow/Cookies/（Finder 按 ⌘⇧G 可打开）"
+    if os.name == "nt":
+        return "%APPDATA%\\SubFlow\\Cookies"
+    from bilingual_sub.config import user_config_dir
+
+    return str(user_config_dir() / "Cookies")
+
+
 def explain_download_error(exc: BaseException) -> str:
     text = str(exc).strip()
     if text.startswith(("下载失败", "YouTube ", "B 站", "无法解析", "未安装", "无法下载", "禁止")):
         return text
     low = text.lower()
     first = text.split("See https://", 1)[0].split("Also see https://", 1)[0].strip()
+    if "ffmpeg is not installed" in low or "ffmpeg not found" in low:
+        return "下载组件未能找到 FFmpeg，无法合并音视频。请修复或更新客户端后重试。"
+    if "challenge solving failed" in low:
+        return "YouTube 视频解析组件运行失败。请修复或更新客户端内的 JavaScript 组件后重试。"
     if "cookies are no longer valid" in low:
         return "YouTube Cookie 已失效。请重新导出 youtube-cookies.txt 放到 Cookies 文件夹后再试。"
     if "could not copy chrome cookie" in low or "failed to decrypt with dpapi" in low:
@@ -1068,12 +1101,12 @@ def explain_download_error(exc: BaseException) -> str:
         return (
             "Chrome / Edge 的 Cookie 库已锁定或使用 v20 加密，无法直接读取。"
             "请把已登录的 Netscape 格式 youtube-cookies.txt / bilibili-cookies.txt "
-            "放到 exe 同级、项目根或 %APPDATA%\\SubFlow\\Cookies；"
+            f"放到 {_cookie_location_hint()}；"
             "或完全退出浏览器后再点下载。"
             + (f" {extra}" if extra else "")
         )
     if "page needs to be reloaded" in low or "requested format is not available" in low:
-        return "YouTube 没有返回可下载地址。请再试一次；若仍失败，请更新 Cookies 文件夹里的 youtube-cookies.txt。"
+        return "YouTube 没有返回可下载地址。可能是视频解析组件、登录状态或网站限制，请查看下载日志。"
     if "412" in low and any(token in low for token in ("bilibili", "b23.tv", "precondition")):
         return (
             "B 站拦截了网页请求。已尝试读取本机浏览器登录 Cookie；"
@@ -1082,8 +1115,9 @@ def explain_download_error(exc: BaseException) -> str:
     if "not a bot" in low or "sign in to confirm" in low or "确认你不是聊天机器人" in text or "确认你不是机器人" in text:
         extra = harvest_hint()
         return (
-            "YouTube 拦截了下载。请重新从已登录浏览器导出 youtube-cookies.txt "
-            "（有 LOGIN_INFO 也可能已被轮换）；放到 exe 同级 / 项目 / %APPDATA%\\SubFlow\\Cookies。"
+            "YouTube 要求登录验证。请确认 youtube-cookies.txt 是 Netscape 格式的纯文本文件，"
+            f"已放到 {_cookie_location_hint()}，不是 .rtf 文件。"
+            "若正确放置后仍失败，再从可播放该视频的登录会话重新导出。"
             + (f" {extra}" if extra else "")
         )
     if any(token in low for token in ("bilibili", "b23.tv")) and any(

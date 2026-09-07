@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import stat
+import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -13,6 +15,20 @@ SERVICE_NAME = "subflow"
 LEGACY_SERVICE_NAME = "bilingual-sub"
 CREDENTIAL_KEY = "meding_api_key"
 ENV_KEY_NAMES = ("SUBFLOW_API_KEY", "MEDING_API_KEY")
+
+
+def _macos_get_password(service: str, username: str) -> str | None:
+    from bilingual_sub.secrets.macos_keychain import get_password
+
+    return get_password(service, username)
+
+
+def _keyring_access():
+    if sys.platform == "darwin":
+        from bilingual_sub.secrets.macos_keychain import KEYCHAIN_LOCK
+
+        return KEYCHAIN_LOCK
+    return nullcontext()
 
 
 def _os_user() -> str:
@@ -93,7 +109,8 @@ def _keyring_get(username: str) -> str | None:
         import keyring
 
         for service in (SERVICE_NAME, LEGACY_SERVICE_NAME):
-            val = keyring.get_password(service, username)
+            reader = _macos_get_password if sys.platform == "darwin" else keyring.get_password
+            val = reader(service, username)
             if val:
                 return val
     except Exception:
@@ -105,7 +122,8 @@ def _keyring_set(username: str, key: str) -> bool:
     try:
         import keyring
 
-        keyring.set_password(SERVICE_NAME, username, key)
+        with _keyring_access():
+            keyring.set_password(SERVICE_NAME, username, key)
         return True
     except Exception as exc:
         logger.debug("keyring unavailable: %s", exc)
@@ -116,11 +134,12 @@ def _keyring_delete(username: str) -> None:
     try:
         import keyring
 
-        for service in (SERVICE_NAME, LEGACY_SERVICE_NAME):
-            try:
-                keyring.delete_password(service, username)
-            except Exception:
-                pass
+        with _keyring_access():
+            for service in (SERVICE_NAME, LEGACY_SERVICE_NAME):
+                try:
+                    keyring.delete_password(service, username)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -149,8 +168,11 @@ def get_api_key() -> str | None:
 
     legacy = _keyring_get(CREDENTIAL_KEY)
     if legacy:
-        _keyring_set(_credential_username(), legacy)
-        _keyring_delete(CREDENTIAL_KEY)
+        # Startup also reads credentials. Migration writes/deletes may prompt on
+        # macOS even when the read succeeded silently; leave existing items intact.
+        if sys.platform != "darwin":
+            _keyring_set(_credential_username(), legacy)
+            _keyring_delete(CREDENTIAL_KEY)
         return legacy
 
     scoped_file = _read_fallback(_user_fallback_path())
@@ -160,6 +182,8 @@ def get_api_key() -> str | None:
     for path in _legacy_fallback_paths():
         found = _read_fallback(path)
         if found:
+            if sys.platform == "darwin":
+                return found
             if _keyring_set(_credential_username(), found):
                 path.unlink(missing_ok=True)
             else:

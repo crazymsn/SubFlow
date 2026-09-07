@@ -11,6 +11,20 @@ from bilingual_sub.adapters.runtime_bootstrap import _run
 from bilingual_sub.core.control import JobControl, JobStopped
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS cold-start allowance")
+def test_mac_installer_cold_start_may_exceed_five_seconds(tmp_path, monkeypatch):
+    script = tmp_path / "cold.py"
+    script.write_text("import time; time.sleep(6); print('uv 0.11.8')")
+
+    @contextmanager
+    def launch_probe(args, **kwargs):
+        with owned_process([sys.executable, str(script)], **kwargs) as proc:
+            yield proc
+
+    monkeypatch.setattr(installer, "owned_process", launch_probe)
+    assert installer._uv_version(tmp_path / "uv", JobControl()) == "0.11.8"
+
+
 @pytest.mark.parametrize("mode", ["success", "malformed", "crash", "timeout", "cancel"])
 def test_installer_version_probe_owns_and_cleans_descendants(tmp_path, monkeypatch, mode):
     pid_file = tmp_path / "probe-child.pid"
@@ -46,6 +60,7 @@ pending.replace({str(pid_file)!r})
             yield proc
 
     monkeypatch.setattr(installer, "owned_process", launch_probe)
+    monkeypatch.setattr(installer, "UV_VERSION_TIMEOUT", 3)
     if mode == "success":
         assert installer._uv_version(binary, control) == "0.11.8"
     elif mode == "cancel":

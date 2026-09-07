@@ -94,6 +94,9 @@ def install_env() -> dict[str, str]:
                UV_PYTHON_INSTALL_DIR=str(runtime_root() / "python"),
                UV_CACHE_DIR=str(runtime_root() / "download-cache"))
     env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    # ORT's macOS telemetry uploader can race native teardown and abort an
+    # otherwise successful probe. Disable it before the interpreter imports ORT.
+    env["ORT_DISABLE_TELEMETRY"] = "1"
     env.update(PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1',
                SUBFLOW_GPTSOVITS_CACHE=str(runtime_root() / 'gptsovits-cache'),
                NUMBA_CACHE_DIR=str(runtime_root() / 'numba-cache'),
@@ -112,6 +115,7 @@ def inference_env() -> dict[str, str]:
     env = install_env()
     env["PATH"] = str(Path(find_ffmpeg()).parent) + os.pathsep + env.get("PATH", "")
     env["PYTHONUNBUFFERED"] = "1"
+    env["SUBFLOW_BOOTSTRAP_DIR"] = str(bootstrap_assets())
     return env
 
 

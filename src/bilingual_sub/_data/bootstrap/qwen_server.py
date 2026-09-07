@@ -11,6 +11,7 @@ import os
 import subprocess
 import threading
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -58,12 +59,21 @@ def load_model(target: str, home: Path | None = None, *, preserve_revision=False
         torch.mps.empty_cache()
     dtype = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if target.startswith("cuda") else torch.float32
     active_home = home or active_home or model_home
+    # Torch 2.5 MPS aborts in native SDPA when Transformers enables GQA with
+    # unequal query/key heads (pytorch/pytorch#149132). Qwen's eager attention
+    # explicitly repeats KV heads and keeps the complete inference on MPS.
+    # A native abort cannot be caught by the Python CPU-fallback handler.
+    attention = "eager" if target == "mps" else "sdpa"
     model = Qwen3TTSModel.from_pretrained(str(active_home), device_map=target, dtype=dtype,
-                                         attn_implementation="sdpa", local_files_only=True)
+                                         attn_implementation=attention, local_files_only=True)
+    if target == "mps":
+        from qwen_mps import install_audio_convolutions
+
+        install_audio_convolutions(model)
     device = target
     if not preserve_revision:
         revision = uuid.uuid4().hex
-    logger.warning("Qwen3-TTS loaded on %s (%s)", device, dtype)
+    logger.warning("Qwen3-TTS loaded on %s (%s, attention=%s)", device, dtype, attention)
 
 
 def accelerator_error(exc: Exception, target: str) -> bool:
@@ -166,6 +176,11 @@ def synthesize(payload: Payload, cancelled: threading.Event) -> bytes:
 
 def generate_audio(payload: Payload, cancelled: threading.Event) -> bytes:
     assert model is not None
+    sampling = nullcontext()
+    if device == 'mps' and native_voice and not designed_voice:
+        from qwen_mps import stable_mps_sampling
+
+        sampling = stable_mps_sampling()
     # qwen-tts 0.1.1 drops unknown generation kwargs in its outer model.
     # Install cancellation on the actual autoregressive talker for this request.
     talker = model.model.talker
@@ -176,13 +191,14 @@ def generate_audio(payload: Payload, cancelled: threading.Event) -> bytes:
         return generate(*args, **kwargs)
     talker.generate = cancellable_generate
     try:
-        torch.manual_seed(42)
-        if native_voice and not designed_voice:
-            wavs, rate = model.generate_custom_voice(text=payload.text, language=payload.text_lang,
-                speaker=payload.speaker, max_new_tokens=2048)
-        else:
-            wavs, rate = model.generate_voice_clone(text=payload.text, language=payload.text_lang,
-                voice_clone_prompt=prompt_cache, max_new_tokens=2048)
+        with sampling:
+            torch.manual_seed(42)
+            if native_voice and not designed_voice:
+                wavs, rate = model.generate_custom_voice(text=payload.text, language=payload.text_lang,
+                    speaker=payload.speaker, max_new_tokens=2048)
+            else:
+                wavs, rate = model.generate_voice_clone(text=payload.text, language=payload.text_lang,
+                    voice_clone_prompt=prompt_cache, max_new_tokens=2048)
     finally:
         talker.generate = generate
     if cancelled.is_set():
@@ -197,6 +213,7 @@ def generate_audio(payload: Payload, cancelled: threading.Event) -> bytes:
 @app.get("/subflow/runtime")
 async def runtime():
     return {"engine": "qwen3-native" if native_voice else "qwen3", "device": device,
+            "sampling_device": "cpu" if device == "mps" and native_voice and not designed_voice else device,
             "model_revision": revision, "busy": lock.locked()}
 
 
