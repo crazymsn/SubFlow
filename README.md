@@ -98,6 +98,10 @@ Windows 已完成本地客户端自检、真实 CUDA 识别与配音验证；跨
 
 SubFlow 采用 [MIT License](LICENSE)。请自觉遵循相应许可。
 
+## 社区支持
+
+感谢 [LINUX DO](https://linux.do/) 社区对开源项目的支持。
+
 ## 联系我们
 
 ![联系深度云创科技：企业微信二维码](docs/images/contact-wecom.jpg)
